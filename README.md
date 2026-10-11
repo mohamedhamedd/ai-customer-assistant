@@ -70,6 +70,7 @@ src/
     agent/        System prompt, tool definitions, agent loop
   instrumentation.ts  Fails fast at boot on bad configuration
 supabase/         Local Supabase config, migrations, seed
+data/sample-clinic/  Demo business documents and the demo question/answer map
 scripts/          CLI scripts (document ingestion, retrieval eval)
 docs/             User stories, UI design brief, delivery plan
 ```
