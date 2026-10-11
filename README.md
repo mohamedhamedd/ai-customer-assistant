@@ -39,6 +39,7 @@ The server validates its configuration at startup. If anything is missing or inv
 | `npm run db:start` / `db:stop` | Start / stop local Supabase |
 | `npm run db:reset` | Recreate the local database from migrations + seed |
 | `npm run db:status` | Show local Supabase URLs and keys |
+| `npm test` / `npm run test:db` | Unit tests (Node) / database tests (pgTAP in `supabase/tests/`, needs Supabase running) |
 | `npm run db:types` | Regenerate `src/lib/db/database.types.ts` from the local schema (run after every migration) |
 
 ## Database
@@ -72,6 +73,16 @@ Supported: `.txt`, `.md`, text-based `.pdf`. Scanned PDFs and images are rejecte
 4. **Commit** (`ingest.ts` + `commit_document_chunks()` in SQL): all chunks are inserted and the document marked `ready` in one transaction. A failure leaves zero chunks and a `failed` document with the reason. Re-uploading identical content is a no-op; a failed or crashed (`processing` for over 10 minutes) attempt is replaced on retry.
 
 Chunker unit tests: `npm test`.
+
+## Retrieval
+
+`retrieve(businessId, question)` in `src/lib/rag/retrieve.ts` embeds the question and calls `hybrid_search()`: the top vector matches and the top full-text matches, fused by reciprocal rank. It returns the chunks plus a `found` flag and self-contained citation snapshots (`sources`).
+
+**Why hybrid, and why no plain similarity threshold.** Measured on the sample clinic (`npm run eval:retrieval`), the weakest correct answer scored 0.27 cosine similarity while the best *wrong* chunk for an out-of-scope question scored 0.41. No single threshold can separate those; it would either refuse real questions or admit noise. Keywords can: an exact topic word either occurs in the knowledge base or it doesn't. So a result counts as found when the top candidate matches a topic keyword and clears a low noise floor (0.2), or when similarity alone is unambiguous (≥ 0.55). "Topic keyword" excludes question-frame verbs (*offer, provide, have…*), which otherwise match FAQ headings like "Do you offer sedation?", and prefers words that are specific to the corpus (not in more than 25% of the business's chunks, with a floor of 3 chunks so small knowledge bases keep their keywords). A broad question made only of common words ("What treatments do you have?") falls back to those words, since the corpus evidently covers the topic. Search also refuses to run if the configured embedding model differs from the one the knowledge base was indexed with.
+
+This gate filters noise. The system prompt remains the main defence: the model answers only from the retrieved text and says so when that text doesn't cover the question.
+
+The evaluation set is `data/sample-clinic/eval.json` (15 answerable questions with their expected section, 6 out-of-scope ones). The keyword rules themselves, including the small-knowledge-base and broad-question cases the clinic data can't show, are covered by pgTAP tests in `supabase/tests/keyword_query.test.sql` (`npm run test:db`). The script reports top-1 / top-3 hit rates for vector-only and hybrid retrieval, whether the found rule agrees, and the similarity margin.
 
 ## Project structure
 

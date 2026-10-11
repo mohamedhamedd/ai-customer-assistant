@@ -346,6 +346,7 @@ Indexes are derived from the queries the app actually runs.
 - **Index:** HNSW with default parameters (`m = 16`, `ef_construction = 64`). It needs no training step (unlike IVFFlat, which needs data present before building), and it has better recall/latency at small-to-medium scale.
 - **Filtered search:** HNSW finds nearest neighbours *first* and applies `WHERE business_id = …` *after*. With many tenants this can return fewer than k rows. The search function enables pgvector's **iterative scan** (`hnsw.iterative_scan = relaxed_order`), so the index keeps scanning until enough rows pass the filter.
 - **Threshold:** the search function takes `p_min_similarity`. Below it, results are dropped, and `search_knowledge` returns `found: false` (prevents "loosely related" context reaching the model, US-3.3). The value is tuned with the retrieval eval script (PR-05), not guessed.
+- **Outcome of that tuning (PR-05):** no single similarity threshold separates answerable from out-of-scope questions on real data (weakest correct 0.27 vs strongest wrong 0.41), so retrieval is **hybrid**: `hybrid_search()` fuses vector and full-text ranks (RRF), and the found decision requires a *topic keyword* hit plus a low noise floor, or an unambiguous similarity. `chunks.fts` is a generated `tsvector` with a GIN index; `keyword_query()` drops corpus-generic words (> 25% of chunks) and question-frame verbs. See README "Retrieval".
 
 ```sql
 match_chunks(p_business_id uuid, p_query_embedding vector(1536),
