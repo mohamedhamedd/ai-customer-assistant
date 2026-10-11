@@ -39,6 +39,23 @@ The server validates its configuration at startup. If anything is missing or inv
 | `npm run db:start` / `db:stop` | Start / stop local Supabase |
 | `npm run db:reset` | Recreate the local database from migrations + seed |
 | `npm run db:status` | Show local Supabase URLs and keys |
+| `npm run db:types` | Regenerate `src/lib/db/database.types.ts` from the local schema (run after every migration) |
+
+## Database
+
+Schema lives in `supabase/migrations/` as plain SQL; `supabase/seed.sql` inserts the demo business. The design, every constraint and the reasoning behind them are in [docs/database-design.md](docs/database-design.md).
+
+Eight tables in three groups:
+
+| Group | Tables |
+|---|---|
+| Knowledge | `businesses`, `documents`, `chunks` (pgvector embeddings, HNSW index) |
+| Conversation & memory | `conversations`, `messages`, `tool_calls` |
+| Agent actions | `leads`, `consultation_requests` |
+
+Business rules the database enforces itself: no duplicate leads per email/phone, no duplicate consultation requests per conversation, no duplicate messages on retry, one live document per title, a lead must have an email or a phone. Row-Level Security is enabled on every table with no policies, so only the server (service role) can read or write.
+
+After changing a migration: `npm run db:reset && npm run db:types`.
 
 ## Project structure
 
