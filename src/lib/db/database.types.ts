@@ -198,6 +198,9 @@ isOneToOne: false
             "commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
                            },
+"create_consultation_request":
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_notes"?: string,"p_preferred_at": string,"p_service": string }; Returns: Json
+                           },
 "hybrid_search":
 { Args: { "p_business_id": string,"p_candidates"?: number,"p_match_count"?: number,"p_query_embedding": string,"p_query_text": string }; Returns: {
               "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"keyword_rank": number,"score": number,"similarity": number
@@ -210,6 +213,9 @@ isOneToOne: false
 { Args: { "p_business_id": string,"p_match_count": number,"p_min_similarity": number,"p_query_embedding": string }; Returns: {
               "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"similarity": number
             }[]
+                           },
+"save_lead":
+{ Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
                            }
           }
           Enums: {

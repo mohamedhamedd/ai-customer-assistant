@@ -1,0 +1,154 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { z } from "zod";
+import { executeTool, type AuditRow, UNAVAILABLE } from "./execute";
+import {
+  consultationSchema,
+  resolvePreferredTime,
+  saveLeadSchema,
+  searchKnowledgeSchema,
+  TOOLS,
+  toolDefinitions,
+  type Tool,
+  type ToolContext,
+} from "./tools";
+
+const LA = "America/Los_Angeles";
+const NOW = new Date("2026-10-11T23:30:00Z"); // Sun Oct 11, 4:30 PM PDT
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+test("save_lead: normalises valid input", () => {
+  const r = saveLeadSchema.safeParse({ name: "  Sara   Ali ", email: " Sara@Example.COM ", phone: "(503) 555-0142", interest: "" });
+  assert.ok(r.success);
+  assert.deepEqual(r.data, { name: "Sara Ali", email: "sara@example.com", phone: "5035550142", interest: undefined });
+  const intl = saveLeadSchema.safeParse({ name: "Ali", phone: "+44 20 7946 0958" });
+  assert.ok(intl.success && intl.data.phone === "+442079460958");
+});
+
+test("save_lead: rejects bad email, bad phone, missing contact and missing name, with relayable messages", () => {
+  const cases: Array<[unknown, RegExp]> = [
+    [{ name: "Sara", email: "sara@gmail" }, /email.*doesn't look valid/],
+    [{ name: "Sara", phone: "12ab" }, /phone.*doesn't look valid/],
+    [{ name: "Sara", phone: "123" }, /phone.*doesn't look valid/],
+    [{ name: "Sara" }, /email or a phone number is required/],
+    [{ name: "Sara", email: null, phone: "" }, /email or a phone number is required/],
+    [{ name: "   ", email: "s@x.com" }, /name is required/],
+    [{ email: "s@x.com" }, /name/],
+  ];
+  for (const [input, expected] of cases) {
+    const r = saveLeadSchema.safeParse(input);
+    assert.equal(r.success, false, JSON.stringify(input));
+    if (!r.success) assert.match(r.error.issues.map((i) => i.message).join("; "), expected, JSON.stringify(input));
+  }
+});
+
+test("search_knowledge and consultation schemas", () => {
+  assert.equal(searchKnowledgeSchema.safeParse({ query: "x" }).success, false);
+  assert.equal(searchKnowledgeSchema.safeParse({ query: "whitening price" }).success, true);
+  assert.equal(consultationSchema.safeParse({ service: "whitening", preferred_datetime: "2026-10-20T15:00" }).success, true);
+  assert.equal(consultationSchema.safeParse({ preferred_datetime: "2026-10-20T15:00" }).success, false);
+});
+
+test("preferred time: future, within 6 months, valid local format", () => {
+  const ok = resolvePreferredTime("2026-10-20T15:00", LA, NOW);
+  assert.ok(ok.ok && ok.at.toISOString() === "2026-10-20T22:00:00.000Z");
+
+  const past = resolvePreferredTime("2026-10-11T09:00", LA, NOW);
+  assert.ok(!past.ok && /in the past/.test(past.message));
+  const far = resolvePreferredTime("2027-06-01T10:00", LA, NOW);
+  assert.ok(!far.ok && /more than 6 months/.test(far.message));
+  const fmt = resolvePreferredTime("Tuesday 3pm", LA, NOW);
+  assert.ok(!fmt.ok && /YYYY-MM-DDTHH:mm/.test(fmt.message));
+  const gap = resolvePreferredTime("2027-03-14T02:30", LA, new Date("2027-03-01T00:00:00Z"));
+  assert.ok(!gap.ok && /does not exist/.test(gap.message));
+});
+
+test("tool definitions match the validation schemas (no drift)", () => {
+  for (const def of toolDefinitions()) {
+    const schema = TOOLS[def.name].schema as z.ZodObject;
+    const props = Object.keys((def.parameters as { properties: object }).properties).sort();
+    assert.deepEqual(props, Object.keys(schema.shape).sort(), def.name);
+  }
+  assert.deepEqual(toolDefinitions().map((d) => d.name).sort(), ["create_consultation_request", "save_lead", "search_knowledge"]);
+});
+
+// ---------------------------------------------------------------------------
+// Executor: never throws, always audits
+// ---------------------------------------------------------------------------
+
+const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW };
+
+function harness(run: Tool["run"], schema: z.ZodType = z.object({ x: z.number() })) {
+  const audits: AuditRow[] = [];
+  const logs: string[] = [];
+  const tool: Tool = { name: "probe", description: "", parameters: {}, schema, run };
+  return {
+    audits,
+    logs,
+    exec: (args: string, extra: { audit?: (r: AuditRow) => Promise<void>; timeoutMs?: number } = {}) =>
+      executeTool("probe", args, ctx, {
+        tools: { probe: tool },
+        audit: extra.audit ?? (async (r) => void audits.push(r)),
+        log: (m) => void logs.push(m),
+        timeoutMs: extra.timeoutMs ?? 1000,
+      }),
+  };
+}
+
+test("success: the tool's output and sources are returned and audited", async () => {
+  const h = harness(async () => ({ output: { ok: true, value: 1 }, sources: [{ documentId: "d", title: "T", heading: "H", excerpt: "e", similarity: 0.5 }] }));
+  const out = await h.exec('{"x": 1}');
+  assert.deepEqual(out.output, { ok: true, value: 1 });
+  assert.equal(out.sources.length, 1);
+  assert.equal(h.audits.length, 1);
+  assert.equal(h.audits[0].ok, true);
+  assert.deepEqual(h.audits[0].arguments, { x: 1 });
+});
+
+test("invalid input never reaches the tool; the reason is returned and audited", async () => {
+  let ran = false;
+  const h = harness(async () => ((ran = true), { output: { ok: true } }));
+  const out = await h.exec('{"x": "one"}');
+  assert.equal(ran, false);
+  assert.equal(out.ok, false);
+  assert.ok(!out.output.ok && out.output.error === "invalid_input" && /x:/.test(out.output.message));
+  assert.equal(h.audits[0].ok, false);
+});
+
+test("unparseable JSON and unknown tool names are reported, not thrown", async () => {
+  const h = harness(async () => ({ output: { ok: true } }));
+  const bad = await h.exec("{not json");
+  assert.ok(!bad.output.ok && bad.output.error === "invalid_input");
+  assert.deepEqual(h.audits[0].arguments, { _unparseable: "{not json" });
+
+  const unknown = await executeTool("nope", "{}", ctx, { tools: {}, audit: async () => {}, log: () => {} });
+  assert.ok(!unknown.output.ok && unknown.output.error === "unknown_tool");
+});
+
+test("a tool that throws (e.g. database down) becomes temporarily_unavailable, never a success", async () => {
+  const h = harness(async () => {
+    throw new Error("connection refused");
+  });
+  const out = await h.exec('{"x": 1}');
+  assert.deepEqual(out.output, UNAVAILABLE);
+  assert.equal(h.audits[0].ok, false);
+  assert.match(h.logs[0], /probe failed/);
+});
+
+test("a tool that hangs is cut off by the timeout", async () => {
+  const h = harness(() => new Promise(() => {}));
+  const started = Date.now();
+  const out = await h.exec('{"x": 1}', { timeoutMs: 50 });
+  assert.ok(Date.now() - started < 1000);
+  assert.deepEqual(out.output, UNAVAILABLE);
+});
+
+test("an audit failure is logged but does not change the result", async () => {
+  const h = harness(async () => ({ output: { ok: true } }));
+  const out = await h.exec('{"x": 1}', { audit: async () => Promise.reject(new Error("db down")) });
+  assert.equal(out.ok, true);
+  assert.match(h.logs[0], /audit write failed/);
+});

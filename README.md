@@ -82,6 +82,21 @@ Chunker unit tests: `npm test`.
 
 This gate filters noise. The system prompt remains the main defence: the model answers only from the retrieved text and says so when that text doesn't cover the question.
 
+## Agent: prompt and tools
+
+`src/lib/agent/` holds everything the model is given, shared by text chat and voice:
+
+- **`prompt.ts`**: the system prompt. It contains the business name and description, the current time in the business's timezone with a 14-day calendar (so "next Tuesday" is a lookup, not arithmetic), and the rules. It contains **no business facts**: prices, hours and services only reach the model through `search_knowledge`, so every factual answer has a retrieved source.
+- **`tools.ts`**: three tools, each a JSON schema for the model plus a zod schema that validates and normalises the arguments (lowercase email, digits-only phone, local date → UTC in the business timezone).
+  - `search_knowledge`: hybrid retrieval; returns the matching sections, or `found: false`.
+  - `save_lead`: records what the customer said on the conversation, then matches or creates the lead. An existing lead is never overwritten (anyone can type any email).
+  - `create_consultation_request`: a *request* (status `pending`), deduplicated per conversation, with a snapshot of the requester's contact details.
+- **`execute.ts`**: runs a tool call. It never throws: invalid input, a database outage or a timeout all come back to the model as `{ ok: false, error, message }`, so the model can ask for a correction or apologise, and can never mistake a failure for a success. Every call is written to `tool_calls`.
+
+The two write tools are single SQL functions (`save_lead()`, `create_consultation_request()`), so their matching and dedupe rules run atomically. Tool results only contain ids, statuses and values the customer gave in this conversation, never stored lead data, because the model can repeat anything it is shown.
+
+Tests: `npm test` (unit: dates across DST, prompt, validation, the executor's error contract) and `npm run test:db` (pgTAP: lead matching, no-overwrite, collisions, consultation dedupe and snapshot).
+
 The evaluation set is `data/sample-clinic/eval.json` (15 answerable questions with their expected section, 6 out-of-scope ones). The keyword rules themselves, including the small-knowledge-base and broad-question cases the clinic data can't show, are covered by pgTAP tests in `supabase/tests/keyword_query.test.sql` (`npm run test:db`). The script reports top-1 / top-3 hit rates for vector-only and hybrid retrieval, whether the found rule agrees, and the similarity margin.
 
 ## Project structure
