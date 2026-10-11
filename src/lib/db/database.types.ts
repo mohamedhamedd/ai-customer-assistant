@@ -145,14 +145,14 @@ isOneToOne: false
                   ]
                 },"messages": {
                   Row: {
-                    "channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
+                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
                   }
                   ComputedFields: never
                   Insert: {
-                    "channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
                   }
                   Update: {
-                    "channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
                   }
                   Relationships: [
                     {

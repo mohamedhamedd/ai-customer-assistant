@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(22);
+select plan(23);
 
 insert into businesses (id, slug, name) values ('00000000-0000-0000-0000-0000000000b1', 'test-tools', 'Tools');
 insert into conversations (id, business_id, session_id) values
@@ -78,6 +78,9 @@ select is((select contact_name || '|' || coalesce(contact_phone, '') from consul
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
                                        'teeth whitening', '2026-10-20 22:00+00'))->>'created',
           'false', 'the same request again (different case) returns the existing one');
+select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
+                                       'whitening consultation', '2026-10-20 22:00+00'))->>'service',
+          'Teeth Whitening', 'the same slot with different service wording is the same request, reported as first named');
 
 -- Staff cancel it; asking for the same slot again creates a NEW request.
 update consultation_requests set status = 'cancelled' where conversation_id = '00000000-0000-0000-0000-0000000000c2';
