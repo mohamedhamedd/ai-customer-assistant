@@ -85,6 +85,15 @@ begin
 end;
 $$;
 
+-- The dedupe index from the initial migration matched cancelled requests too,
+-- so re-requesting a slot staff had cancelled returned the cancelled row.
+-- Cancelled requests no longer count. (The initial migration is already
+-- applied, and migrations are forward-only, so the change happens here.)
+drop index public.consultation_requests_dedupe_idx;
+create unique index consultation_requests_dedupe_idx
+  on public.consultation_requests (conversation_id, lower(service), preferred_at)
+  where status <> 'cancelled';
+
 -- create_consultation_request: a request, never a booking (§6.2).
 --
 -- The contact snapshot comes from customer_facts, i.e. what this visitor
@@ -125,7 +134,7 @@ begin
     (p_business_id, v_conv.lead_id, p_conversation_id,
      v_conv.customer_facts->>'name', v_conv.customer_facts->>'email', v_conv.customer_facts->>'phone',
      p_service, p_preferred_at, p_notes)
-  on conflict (conversation_id, lower(service), preferred_at) do nothing
+  on conflict (conversation_id, lower(service), preferred_at) where status <> 'cancelled' do nothing
   returning id, status into v_id, v_status;
 
   if v_id is null then
@@ -134,7 +143,8 @@ begin
       from public.consultation_requests
      where conversation_id = p_conversation_id
        and lower(service) = lower(p_service)
-       and preferred_at = p_preferred_at;
+       and preferred_at = p_preferred_at
+       and status <> 'cancelled';
   end if;
 
   return jsonb_build_object('request_id', v_id, 'status', v_status, 'created', v_created);

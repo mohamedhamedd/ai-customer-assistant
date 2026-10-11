@@ -46,3 +46,18 @@ test("voice gets spoken-style instructions instead of text style", () => {
   assert.match(voice, /spell it back letter by letter/);
   assert.doesNotMatch(voice, /2 to 5 sentences/);
 });
+
+test("the rules form a stable prefix: only the end of the prompt changes with time and customer", () => {
+  const a = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  const b = buildSystemPrompt({ business, now: new Date(now.getTime() + 37 * 60_000), channel: "text", customerFacts: { name: "Sara" } });
+  const clockAt = a.indexOf("# Date and time");
+  assert.ok(clockAt > a.indexOf("# Boundaries"), "clock comes after the static rules");
+  assert.equal(a.slice(0, clockAt), b.slice(0, clockAt), "everything before the clock is identical");
+  assert.ok(clockAt / a.length > 0.6, "the cacheable prefix is most of the prompt");
+});
+
+test("consultations: opening hours are checked, and an unknown outcome is retried once", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /check the opening hours with search_knowledge/);
+  assert.match(p, /outcome_unknown. Call the same tool again once/);
+});

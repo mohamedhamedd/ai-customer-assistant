@@ -1,6 +1,8 @@
 import "server-only";
 import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { db } from "@/lib/db/supabase";
+import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
@@ -18,6 +20,8 @@ export interface ToolContext {
   channel: Channel;
   timeZone: string;
   now: () => Date;
+  // Defaults to the service-role client; tests pass a stub.
+  client?: SupabaseClient<Database>;
 }
 
 // What the model sees. Always an object with ok.
@@ -40,11 +44,14 @@ export interface ToolDefinition {
 }
 
 export interface Tool extends ToolDefinition {
+  // Writes data. A write that times out may still commit, so its outcome is
+  // reported as unknown rather than failed (execute.ts).
+  writes: boolean;
   schema: z.ZodType;
   run(args: unknown, ctx: ToolContext): Promise<ToolRunResult>;
 }
 
-function defineTool<S extends z.ZodType>(spec: ToolDefinition & { schema: S; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> }): Tool {
+function defineTool<S extends z.ZodType>(spec: ToolDefinition & { writes: boolean; schema: S; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> }): Tool {
   return spec as unknown as Tool;
 }
 
@@ -87,6 +94,7 @@ export const searchKnowledgeSchema = z.object({
 
 const searchKnowledge = defineTool({
   name: "search_knowledge",
+  writes: false,
   description:
     "Search the business's documents (services, prices, opening hours, location, insurance, payment, policies). Call this before answering any question about the business.",
   parameters: {
@@ -131,6 +139,7 @@ export const saveLeadSchema = z
 
 const saveLead = defineTool({
   name: "save_lead",
+  writes: true,
   description:
     "Save the customer's contact details so the team can follow up. Requires a name and at least one of email or phone. Read the details back to the customer and get confirmation before calling.",
   parameters: {
@@ -146,7 +155,7 @@ const saveLead = defineTool({
   },
   schema: saveLeadSchema,
   async run(args, ctx) {
-    const { error } = await db().rpc("save_lead", {
+    const { error } = await (ctx.client ?? db()).rpc("save_lead", {
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
       p_channel: ctx.channel,
@@ -198,6 +207,7 @@ export function resolvePreferredTime(local: string, timeZone: string, now: Date)
 
 const createConsultationRequest = defineTool({
   name: "create_consultation_request",
+  writes: true,
   description:
     "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. Read the service and exact date and time back to the customer before calling.",
   parameters: {
@@ -218,7 +228,7 @@ const createConsultationRequest = defineTool({
     const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);
 
-    const { data, error } = await db().rpc("create_consultation_request", {
+    const { data, error } = await (ctx.client ?? db()).rpc("create_consultation_request", {
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
       p_service: args.service,

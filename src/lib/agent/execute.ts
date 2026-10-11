@@ -46,6 +46,19 @@ export const UNAVAILABLE: ToolOutput = {
     "The system couldn't complete this right now. Tell the customer it didn't go through, and suggest trying again in a moment or contacting the business directly.",
 };
 
+// A write that timed out may still commit after we stop waiting (the
+// database call can't be cancelled). Both write tools are idempotent, so the
+// honest answer is "unknown, safe to retry": a retry returns the existing
+// lead or request instead of creating a second one.
+export const OUTCOME_UNKNOWN: ToolOutput = {
+  ok: false,
+  error: "outcome_unknown",
+  message:
+    "It is not certain whether this went through. Call the tool again once with the same details: if it already succeeded, the result will say so. Do not tell the customer it failed unless the retry also fails.",
+};
+
+class ToolTimeout extends Error {}
+
 async function auditToDb(row: AuditRow): Promise<void> {
   const { error } = await db()
     .from("tool_calls")
@@ -90,7 +103,7 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
         sources = result.sources ?? [];
       } catch (err) {
         d.log(`${name} failed (conversation ${ctx.conversationId})`, err);
-        output = UNAVAILABLE;
+        output = err instanceof ToolTimeout && tool.writes ? OUTCOME_UNKNOWN : UNAVAILABLE;
       }
     }
   }
@@ -122,7 +135,7 @@ function describeIssues(error: z.ZodError): string {
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms);
+    timer = setTimeout(() => reject(new ToolTimeout(`timed out after ${ms} ms`)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

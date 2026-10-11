@@ -285,7 +285,7 @@ Unique index: `(conversation_id, lower(service), preferred_at)`. The same reques
 | I1 | A lead has an email or a phone | `CHECK` on `leads` | US-4.1 |
 | I2 | One lead per email / per phone per business | `UNIQUE (business_id, email)`, `UNIQUE (business_id, phone)` | US-4.3 |
 | I3 | Emails are compared case-insensitively | Stored lowercase + `CHECK (email = lower(email))` | US-4.2 |
-| I4 | A consultation request is not duplicated | Unique index `(conversation_id, lower(service), preferred_at)` | US-5.3 |
+| I4 | A consultation request is not duplicated | Partial unique index `(conversation_id, lower(service), preferred_at) WHERE status <> 'cancelled'`: a slot staff cancelled can be requested again | US-5.3 |
 | I5 | A consultation request always belongs to a lead | `lead_id NOT NULL` + FK | US-5.1 |
 | I6 | The same document content isn't indexed twice | `UNIQUE (business_id, content_hash)` | US-7.2 |
 | I7 | Chunk order is unambiguous | `UNIQUE (document_id, chunk_index)` | — |
@@ -524,3 +524,4 @@ The reverse order would not work: deleting the lead first sets `conversations.le
 | L10 | **Replace-target vs title check happens at the end** | If the admin picks a different "Replaces" target than the document with the same title, the swap fails only after embedding | The UI pre-selects the matching document | Validate I13 before ingestion starts |
 | L11 | **Erasure finds conversations via `lead_id`** | May delete strangers' conversations linked to the lead, or miss one linked elsewhere by the email-wins rule | Staff review the list before deleting | Also match on `customer_facts` and `contact_*` values |
 | L12 | **"Removed document" label needs a lookup** | Rendering from the snapshot alone can't know a document was deleted | One batched existence check per history load; preview still renders from the snapshot | — |
+| L13 | **A retracted contact detail stays in `customer_facts`** | `save_lead` merges new values into the facts, so a field the customer takes back ("don't use that phone, just email") is kept, shown to the model as known, and copied into a consultation's contact snapshot | Rare; staff see both the snapshot and the lead | Let `save_lead` replace the contact fields it was given, or take an explicit "remove" from the model |

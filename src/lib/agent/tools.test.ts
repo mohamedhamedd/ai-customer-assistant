@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { executeTool, type AuditRow, UNAVAILABLE } from "./execute";
+import { executeTool, OUTCOME_UNKNOWN, type AuditRow, UNAVAILABLE } from "./execute";
 import {
   consultationSchema,
   resolvePreferredTime,
@@ -81,10 +81,10 @@ test("tool definitions match the validation schemas (no drift)", () => {
 
 const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW };
 
-function harness(run: Tool["run"], schema: z.ZodType = z.object({ x: z.number() })) {
+function harness(run: Tool["run"], schema: z.ZodType = z.object({ x: z.number() }), writes = false) {
   const audits: AuditRow[] = [];
   const logs: string[] = [];
-  const tool: Tool = { name: "probe", description: "", parameters: {}, schema, run };
+  const tool: Tool = { name: "probe", description: "", parameters: {}, writes, schema, run };
   return {
     audits,
     logs,
@@ -138,11 +138,26 @@ test("a tool that throws (e.g. database down) becomes temporarily_unavailable, n
   assert.match(h.logs[0], /probe failed/);
 });
 
-test("a tool that hangs is cut off by the timeout", async () => {
+test("a read tool that hangs is cut off by the timeout and reported unavailable", async () => {
   const h = harness(() => new Promise(() => {}));
   const started = Date.now();
   const out = await h.exec('{"x": 1}', { timeoutMs: 50 });
   assert.ok(Date.now() - started < 1000);
+  assert.deepEqual(out.output, UNAVAILABLE);
+});
+
+test("a WRITE tool that times out is reported as outcome unknown, not failed (it may still commit)", async () => {
+  const h = harness(() => new Promise(() => {}), undefined, true);
+  const out = await h.exec('{"x": 1}', { timeoutMs: 50 });
+  assert.deepEqual(out.output, OUTCOME_UNKNOWN);
+  assert.equal(h.audits[0].ok, false);
+});
+
+test("a write tool that errors (not a timeout) is still reported unavailable: the transaction rolled back", async () => {
+  const h = harness(async () => {
+    throw new Error("permission denied");
+  }, undefined, true);
+  const out = await h.exec('{"x": 1}');
   assert.deepEqual(out.output, UNAVAILABLE);
 });
 
@@ -151,4 +166,37 @@ test("an audit failure is logged but does not change the result", async () => {
   const out = await h.exec('{"x": 1}', { audit: async () => Promise.reject(new Error("db down")) });
   assert.equal(out.ok, true);
   assert.match(h.logs[0], /audit write failed/);
+});
+
+// ---------------------------------------------------------------------------
+// Rule R1: results never contain stored data
+// ---------------------------------------------------------------------------
+
+// A stub client whose RPCs return rows full of STORED values that differ from
+// what the customer typed. None of them may appear in the model's output.
+const STORED = ["STORED NAME", "stored@example.com", "9999999999", "stored interest"];
+function stubClient(data: unknown) {
+  return { rpc: async () => ({ data, error: null }) } as unknown as NonNullable<ToolContext["client"]>;
+}
+
+test("R1: save_lead echoes only what the customer gave, even if the database returns a stored lead", async () => {
+  const client = stubClient({ lead_id: "L1", created: false, name: STORED[0], email: STORED[1], phone: STORED[2], interest: STORED[3] });
+  const out = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "sara@x.com" }), { ...ctx, client }, { audit: async () => {}, log: () => {} });
+  assert.equal(out.ok, true);
+  const text = JSON.stringify(out.output);
+  for (const s of STORED) assert.ok(!text.includes(s), `leaked ${s}`);
+  assert.ok(text.includes("sara@x.com"));
+});
+
+test("R1: create_consultation_request does not return the stored contact snapshot", async () => {
+  const client = stubClient({ request_id: "R1", status: "pending", created: true, contact_name: STORED[0], contact_email: STORED[1], contact_phone: STORED[2] });
+  const out = await executeTool(
+    "create_consultation_request",
+    JSON.stringify({ service: "teeth whitening", preferred_datetime: "2026-10-20T15:00" }),
+    { ...ctx, client },
+    { audit: async () => {}, log: () => {} },
+  );
+  assert.equal(out.ok, true);
+  const text = JSON.stringify(out.output);
+  for (const s of STORED) assert.ok(!text.includes(s), `leaked ${s}`);
 });

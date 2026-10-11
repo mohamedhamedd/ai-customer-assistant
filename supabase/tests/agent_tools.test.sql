@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(20);
+select plan(22);
 
 insert into businesses (id, slug, name) values ('00000000-0000-0000-0000-0000000000b1', 'test-tools', 'Tools');
 insert into conversations (id, business_id, session_id) values
@@ -78,6 +78,15 @@ select is((select contact_name || '|' || coalesce(contact_phone, '') from consul
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
                                        'teeth whitening', '2026-10-20 22:00+00'))->>'created',
           'false', 'the same request again (different case) returns the existing one');
+
+-- Staff cancel it; asking for the same slot again creates a NEW request.
+update consultation_requests set status = 'cancelled' where conversation_id = '00000000-0000-0000-0000-0000000000c2';
+select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
+                                       'Teeth Whitening', '2026-10-20 22:00+00'))->>'created',
+          'true', 'a cancelled request does not block re-requesting the same slot');
+select is((select count(*)::int from consultation_requests
+            where conversation_id = '00000000-0000-0000-0000-0000000000c2' and status = 'pending'), 1,
+          'one pending request alongside the cancelled one');
 
 select ok(not has_function_privilege('anon', 'public.save_lead(uuid, uuid, text, text, text, text, text)', 'execute')
       and not has_function_privilege('anon', 'public.create_consultation_request(uuid, uuid, text, timestamptz, text)', 'execute'),
