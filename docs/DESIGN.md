@@ -116,3 +116,7 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Admin — empty states | [`design/admin-empty-states.png`](./design/admin-empty-states.png) |
 
 Every screen and state in the brief (§10) now has a reference frame.
+
+Build notes, where the reference images differ from this spec (follow the spec):
+- States board: the "1,962 / 2,000" counter renders red. It should be warning amber; only "2,000 / 2,000" is red.
+- Settings: the "Chat header preview" label is uppercase, the slug uses a monospace font, and the preview card truncates the business name. In the build, use a sentence-case label, Inter for every input, and a 320 px preview card where the name wraps.
