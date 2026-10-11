@@ -145,14 +145,14 @@ isOneToOne: false
                   ]
                 },"messages": {
                   Row: {
-                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
+                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_attempt_at": string,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
                   }
                   ComputedFields: never
                   Insert: {
-                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
                   }
                   Update: {
-                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
                   }
                   Relationships: [
                     {
@@ -195,7 +195,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "commit_document_chunks":
+            "claim_reply_attempt":
+{ Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
+                           },
+"commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
                            },
 "create_consultation_request":

@@ -204,6 +204,7 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `content` | text | yes | | `CHECK (content <> '')` when present. **Null only for a voice turn whose transcript hasn't arrived yet** (`CHECK (content IS NOT NULL OR channel = 'voice')`). Null rows are skipped when building the prompt and shown as "…" in the UI |
 | `sources` | jsonb | no | `'[]'` | Citations attached to an assistant answer: a **self-contained snapshot** copied from `search_knowledge` results, `[{documentId, title, heading, excerpt, similarity}]`. Chips and previews render only from this snapshot, never by joining `documents`, so they keep working after a document is deleted or replaced. `documentId` is informational (no FK); the UI labels a chip whose document no longer exists as "from a removed document" |
 | `actions` | jsonb | no | `'[]'` | Action cards an assistant reply produced (`lead_saved`, `consultation_requested`, `action_failed`), copied from tool results by the server, so they survive a reload |
+| `reply_attempt_at` | timestamptz | no | `now()` | User rows: when the latest attempt to answer started. The in-progress window counts from here (§7.1) |
 | `reply_failed_at` | timestamptz | yes | | User rows only: set when the server gave up producing the reply (model error, deadline). Lets a retry re-run at once instead of waiting out the in-progress window (§7.1) |
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
@@ -427,10 +428,12 @@ A text turn is: store the user message → run the agent → store the assistant
 |---|---|
 | A reply exists (`reply_to_message_id` = that message) | Return the stored reply. No model call, no tool calls |
 | No reply, and the turn is marked failed (`reply_failed_at`) | The original gave up (model error or deadline). Run the agent again at once |
-| No reply, and the user message is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
-| No reply, and the user message is **≥ 60 s old** | The original died. Run the agent again for that message |
+| No reply, and the latest attempt (`reply_attempt_at`) is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
+| No reply, and the latest attempt is **≥ 60 s old** | The original died. Run the agent again for that message |
 
 **Turn deadline.** A whole turn (all model calls and tool calls) has a hard limit of **45 s**; when it expires the turn stops and stores the fallback reply. Without this, a slow but live turn could pass the 60 s mark and a retry would start a second copy of it in parallel. The deadline is shorter than the window, so "≥ 60 s with no reply" reliably means the original is dead.
+
+**Re-runs are claimed atomically.** A re-run is only started by the caller that wins `claim_reply_attempt()`: one conditional `UPDATE` that clears the failure flag and restarts `reply_attempt_at`, only if the message is failed or its last attempt is older than the window, and has no reply. Two concurrent retries can't both win: the second waits on the row lock, re-checks the condition after the first commits, finds it false and gets 409. The window is measured from the latest attempt, not from when the message was sent, so a re-run of an old message is itself "in progress" for 60 s.
 
 **Why re-running is safe:** the tools are idempotent at the database level (I2, I4), so a re-run cannot create a second lead or consultation request. `UNIQUE (reply_to_message_id)` guarantees at most one stored reply, so if two runs do overlap, the second reply insert fails and is discarded.
 

@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(23);
+select plan(28);
 
 insert into businesses (id, slug, name) values ('00000000-0000-0000-0000-0000000000b1', 'test-tools', 'Tools');
 insert into conversations (id, business_id, session_id) values
@@ -90,6 +90,23 @@ select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '
 select is((select count(*)::int from consultation_requests
             where conversation_id = '00000000-0000-0000-0000-0000000000c2' and status = 'pending'), 1,
           'one pending request alongside the cancelled one');
+
+-- claim_reply_attempt: exactly one retry wins ---------------------------------
+insert into messages (id, conversation_id, role, content, client_message_id, reply_attempt_at)
+overriding system value values
+  (900001, '00000000-0000-0000-0000-0000000000c1', 'user', 'fresh', 'm-fresh', now()),
+  (900002, '00000000-0000-0000-0000-0000000000c1', 'user', 'old',   'm-old',   now() - interval '5 minutes'),
+  (900003, '00000000-0000-0000-0000-0000000000c1', 'user', 'answered', 'm-ans', now() - interval '5 minutes');
+insert into messages (conversation_id, role, content, reply_to_message_id)
+values ('00000000-0000-0000-0000-0000000000c1', 'assistant', 'the answer', 900003);
+update messages set reply_failed_at = now() where id = 900001;
+
+select is(claim_reply_attempt(900001, 60), true,  'a failed turn can be claimed at once');
+select is(claim_reply_attempt(900001, 60), false, 'a second claim right after loses (the attempt is fresh again)');
+select is(claim_reply_attempt(900002, 60), true,  'an attempt older than the window can be claimed');
+select is(claim_reply_attempt(900003, 60), false, 'a message that already has a reply is never re-run');
+select ok((select reply_failed_at is null and reply_attempt_at > now() - interval '1 minute' from messages where id = 900001),
+          'claiming clears the failure flag and restarts the window');
 
 select ok(not has_function_privilege('anon', 'public.save_lead(uuid, uuid, text, text, text, text, text)', 'execute')
       and not has_function_privilege('anon', 'public.create_consultation_request(uuid, uuid, text, timestamptz, text)', 'execute'),
