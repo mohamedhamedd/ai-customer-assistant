@@ -170,7 +170,8 @@ create index consultation_requests_business_status_idx
 -- ---------------------------------------------------------------------------
 
 create or replace function public.set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = '' as $$
 begin
   new.updated_at = now();
   return new;
@@ -186,7 +187,8 @@ create trigger consultation_requests_set_updated_at
   for each row execute function public.set_updated_at();
 
 create or replace function public.touch_conversation()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = '' as $$
 begin
   -- greatest(): a late-arriving row with an older timestamp (e.g. a voice
   -- transcript) must not move the conversation backwards in the admin list.
@@ -224,6 +226,8 @@ language sql stable
 -- HNSW applies the business_id filter after the index scan; iterative scans
 -- keep going until enough rows survive the filter (pgvector >= 0.8).
 set hnsw.iterative_scan = 'relaxed_order'
+-- An HNSW scan yields at most hnsw.ef_search candidates (default 40), so
+-- p_match_count is capped there; the app asks for 6.
 set search_path = public, extensions
 as $$
   select c.id, c.document_id, d.title, c.heading, c.content, s.similarity
@@ -232,7 +236,8 @@ as $$
     from chunks
     where business_id = p_business_id
     order by embedding <=> p_query_embedding
-    limit p_match_count
+    -- NULL would mean no limit and a negative value is an error; clamp both.
+    limit least(greatest(coalesce(p_match_count, 6), 0), 40)
   ) s
   join chunks c on c.id = s.id
   join documents d on d.id = c.document_id
@@ -256,6 +261,10 @@ $$;
 
 revoke all on all tables in schema public from anon, authenticated;
 revoke all on all sequences in schema public from anon, authenticated;
+-- Scope: this covers tables created by postgres, which is what CLI migrations
+-- and the dashboard run as. Default privileges for supabase_admin cannot be
+-- changed from a migration (permission denied), so a table created by that
+-- role would need its own revoke.
 alter default privileges for role postgres in schema public
   revoke all on tables from anon, authenticated;
 alter default privileges for role postgres in schema public
