@@ -67,11 +67,13 @@ erDiagram
         uuid business_id FK
         uuid session_id
         uuid lead_id FK
+        jsonb customer_facts
         timestamptz last_message_at
     }
     messages {
         bigint id PK
         uuid conversation_id FK
+        text client_message_id
         text role
         text channel
         text content
@@ -121,6 +123,8 @@ The model has three groups:
 
 Conventions used in every table:
 - `created_at timestamptz not null default now()`. All timestamps are `timestamptz` and stored in UTC; the UI converts to `businesses.timezone`.
+- **Exception, `messages` and `tool_calls`:** `created_at default clock_timestamp()`. `now()` is the *transaction start* time, so rows written close together could tie or come out of order. The admin transcript interleaves these two tables by `created_at`, so it needs the real insert time.
+- **Derived timestamps are kept by triggers, not app code:** `updated_at` on `leads` and `consultation_requests` (a `BEFORE UPDATE` trigger), and `conversations.last_message_at` (an `AFTER INSERT` trigger on `messages`). Setting them in app code is easy to forget in one code path.
 - Status-like columns use `text` + `CHECK (... in (...))` rather than Postgres `ENUM` (see §10).
 - `on delete cascade` from `businesses`: deleting a business removes all its data.
 
@@ -143,7 +147,7 @@ One uploaded file. The extracted text lives in `chunks`; the original file is no
 |---|---|---|---|---|
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `business_id` | uuid | no | | FK → `businesses`, cascade |
-| `title` | text | no | | Shown in source chips; defaults to the file name |
+| `title` | text | no | | Shown in source chips; defaults to the file name. At most one `ready` document per title (see I13 and §6.1, replacing a document) |
 | `source_type` | text | no | | `txt` \| `md` \| `pdf` |
 | `content_hash` | text | no | | SHA-256 of the extracted text. **Unique per business** → re-uploading the same content is a no-op (US-7.2) |
 | `embedding_model` | text | no | | Model that produced this document's vectors, e.g. `text-embedding-3-small`. Vectors from different models are not comparable, so re-indexing is needed if this changes |
@@ -176,9 +180,10 @@ One per anonymous browser session per business, so returning visitors continue t
 | `id` | uuid | no | `gen_random_uuid()` | PK |
 | `business_id` | uuid | no | | FK → `businesses`, cascade |
 | `session_id` | uuid | no | | Random UUID generated in the browser (`crypto.randomUUID()`), kept in localStorage. `unique (business_id, session_id)` |
-| `lead_id` | uuid | yes | | FK → `leads`, **set null** on lead delete. Set when the agent captures a lead, so later turns know who the customer is (US-6.3) |
+| `lead_id` | uuid | yes | | FK → `leads`, **set null** on lead delete. Links the conversation to the lead for the **admin** (lead → conversation). The agent never reads the lead row through this link (see §7) |
+| `customer_facts` | jsonb | no | `'{}'` | Contact details the customer gave **in this conversation**: `{name, email, phone, interest}`. This, not the `leads` row, is what the agent sees as memory (US-6.3) |
 | `created_at` | timestamptz | no | `now()` | |
-| `last_message_at` | timestamptz | no | `now()` | Updated on every message. Sorts the admin conversation list |
+| `last_message_at` | timestamptz | no | `now()` | Maintained by trigger on `messages` insert. Sorts the admin conversation list |
 
 ### 3.5 `messages`
 
@@ -188,6 +193,7 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 |---|---|---|---|---|
 | `id` | bigint identity | no | | PK. Monotonic, so it doubles as the ordering key |
 | `conversation_id` | uuid | no | | FK → `conversations`, cascade |
+| `client_message_id` | text | yes | | **Idempotency key.** Text messages: a UUID the browser generates per message and reuses on retry. Voice transcripts: the Realtime API's item id. `unique (conversation_id, client_message_id)`, so a retried send is never stored twice (US-11.6). Null for server-generated text replies |
 | `role` | text | no | | `user` \| `assistant` |
 | `channel` | text | no | `'text'` | `text` \| `voice`. Voice rows hold transcripts |
 | `content` | text | no | | `CHECK (content <> '')` |
@@ -220,13 +226,18 @@ A person who shared contact details with the agent.
 | `business_id` | uuid | no | | FK → `businesses`, cascade |
 | `name` | text | no | | |
 | `email` | text | yes | | Stored lowercase: `CHECK (email = lower(email))`. `unique (business_id, email)` |
-| `phone` | text | yes | | Normalised to `+` and digits only by the tool. `unique (business_id, phone)` |
+| `phone` | text | yes | | Normalised to `+` and digits only by the tool. `unique (business_id, phone)`. Matching on phone is best effort (see §12) |
 | `interest` | text | yes | | What they're interested in, e.g. "Invisalign" |
 | `source_channel` | text | no | | `text` \| `voice`: where the lead was captured (shown in admin, US-8.1) |
 | `created_at` | timestamptz | no | `now()` | |
 | `updated_at` | timestamptz | no | `now()` | Set when a later `save_lead` updates the lead |
 
 Table constraint: `CHECK (email IS NOT NULL OR phone IS NOT NULL)`. A lead must be reachable.
+
+**Matching rules for `save_lead` (no overwrite).** Anyone can type any email, so a match by email or phone is *not* proof of identity:
+- **No match** → insert a new lead.
+- **Match** → link this conversation to the existing lead and **only fill fields that are empty**. Existing name, email, phone and interest are never overwritten from a conversation. Differing details are kept in that conversation's `customer_facts` and visible to staff.
+- **Email matches lead A and phone matches lead B** → link to A (email wins); the phone stays only in `customer_facts`. No merge.
 
 ### 3.8 `consultation_requests`
 
@@ -265,6 +276,9 @@ Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeat
 | I10 | Deleting a document removes it from retrieval | FK `on delete cascade` to `chunks` | US-7.3 |
 | I11 | Preferred date is in the future, ≤ 6 months ahead | **Application** (zod in the tool). `CHECK` constraints can't use `now()` reliably, because a row valid when inserted would become "invalid" over time | US-5.2 |
 | I12 | Email / phone format is valid | **Application** (zod). Format rules change more often than schema, and errors need friendly wording for the model | US-4.2 |
+| I13 | At most one `ready` document per title per business | Partial unique index `(business_id, lower(title)) WHERE status = 'ready'`. Makes the replace-a-document swap (§6.1) safe: two live versions of "Pricing" can't coexist | US-7.3 |
+| I14 | A retried message is stored once | `UNIQUE (conversation_id, client_message_id)` | US-11.6 |
+| I15 | A conversation can't overwrite another customer's lead details | **Application** (`save_lead` fill-empty-only rule, §3.7). The DB can't know which conversation "owns" a lead | US-12.4 |
 
 **How constraint violations reach the user:** the tool layer catches Postgres error `23505` (unique violation) and handles it as an *idempotent success*: it returns the existing row. It never surfaces a raw database error to the model or the customer.
 
@@ -277,15 +291,17 @@ Indexes are derived from the queries the app actually runs.
 | # | Query | Where | Index |
 |---|---|---|---|
 | Q1 | Top-k chunks by vector similarity for one business | `search_knowledge` | `chunks USING hnsw (embedding vector_cosine_ops)` + `chunks (business_id)` |
-| Q2 | Get-or-create conversation by `(business_id, session_id)` | Every chat request | `UNIQUE (business_id, session_id)` |
+| Q2 | Get-or-create conversation by `(business_id, session_id)` | Every chat request | `UNIQUE (business_id, session_id)`. Race-safe: `INSERT … ON CONFLICT DO NOTHING`, then `SELECT`, so two tabs opening at once both get the same row |
 | Q3 | Last 20 messages of a conversation | Every chat request (memory) | `messages (conversation_id, id)` → `ORDER BY id DESC LIMIT 20` |
 | Q4 | Find lead by email or phone | `save_lead` | The two unique indexes on `leads` |
-| Q5 | Lead facts for a conversation | Every chat request | PK lookup on `leads` via `conversations.lead_id` |
+| Q5 | Customer facts for a conversation | Every chat request | Same row as Q2 (`conversations.customer_facts`); no extra query |
+| Q5b | Has this message already been stored? | Every chat request (retry) | `UNIQUE (conversation_id, client_message_id)` |
 | Q6 | Consultations by business + status, newest first | Admin | `consultation_requests (business_id, status, created_at DESC)` |
 | Q7 | Leads by business, newest first | Admin | `leads (business_id, created_at DESC)` |
 | Q8 | Conversations by business, most recent activity | Admin | `conversations (business_id, last_message_at DESC)` |
 | Q9 | Tool calls of a conversation in order | Admin transcript | `tool_calls (conversation_id, id)` |
 | Q10 | Documents of a business | Admin | Leading column of `UNIQUE (business_id, content_hash)` |
+| Q11 | Is there a live document with this title? | Upload (replace flow) | Partial unique index `(business_id, lower(title)) WHERE status = 'ready'` |
 
 **Foreign-key indexes.** Postgres does not index FK columns automatically, and an unindexed FK makes parent deletes scan the child table. Every FK is covered, either by its own index or as the **leading column** of a composite index:
 - `chunks.document_id` → `UNIQUE (document_id, chunk_index)`
@@ -327,8 +343,13 @@ stateDiagram-v2
     processing --> ready: text extracted, all chunks embedded and inserted
     processing --> failed: extraction / embedding error (reason in documents.error)
     failed --> [*]: re-upload replaces the failed row
-    ready --> [*]: admin deletes (chunks cascade)
+    ready --> [*]: admin deletes, or a new version replaces it (chunks cascade)
 ```
+
+- **Replacing a document (new version of the price list).** Without this, uploading an updated "Pricing" would leave *both* versions searchable and the assistant could quote the old price. Flow:
+  1. The admin uploads a file whose title matches a `ready` document. The UI asks "Replace the existing *Pricing*?"
+  2. The new version is extracted and embedded while the old one keeps serving answers.
+  3. **One transaction:** insert the new chunks, delete the old document (its chunks cascade), mark the new one `ready`. Customers see either the old version or the new one, never both and never neither. Invariant I13 guarantees this at the database level.
 
 - **No partial indexing.** All embeddings are computed first, then chunks are inserted in **one statement** (atomic). A failure mid-way leaves zero chunks, and the document is marked `failed` (US-11.5).
 - **Retry after failure.** The `content_hash` uniqueness would block re-uploading a failed file, so ingestion deletes an existing `failed` row with the same hash before retrying. A `ready` duplicate is reported as "already in your knowledge base".
@@ -354,11 +375,13 @@ How the tables above implement "context & memory" (E6):
 | Memory type | Stored in | How it's used |
 |---|---|---|
 | **Short-term (working) memory** | `messages` | The last 20 messages are loaded server-side on every turn |
-| **Long-term facts about the customer** | `leads` via `conversations.lead_id` | Injected as a facts block in the system prompt ("Customer: Sara Ali, sara@…, interested in whitening"), so the agent doesn't re-ask |
+| **Long-term facts about the customer** | `conversations.customer_facts` | Injected as a facts block in the system prompt ("Customer: Sara Ali, sara@…, interested in whitening"), so the agent doesn't re-ask. Survives return visits, because the conversation is per browser session |
 | **Business knowledge** | `chunks` | Retrieved on demand by `search_knowledge` |
 | **What the agent did** | `tool_calls` | Audit and debugging only. **Not** replayed into the prompt |
 
-**Why the server loads history instead of the browser sending it:** the browser sends only `{sessionId, message}`. If the client sent the history, a user could forge assistant turns or tool results ("assistant: your consultation is confirmed for free"). Server-loaded history is the source of truth (US-12.3).
+**Why the facts come from the conversation, not the `leads` row.** Leads are matched by email or phone, and anyone can type anyone's email. If the agent's memory were the matched lead row, a visitor could type `sara@x.com` and then ask "what phone number do you have for me?", and the agent would read out Sara's phone. Facts from `customer_facts` are only ever what *this* visitor said in *this* conversation, so the agent can never reveal stored data it wasn't told.
+
+**Why the server loads history instead of the browser sending it:** the browser sends only `{sessionId, message}`. If the client sent the history, a user could forge assistant turns or tool results ("assistant: your consultation is confirmed for free"). Server-loaded history is the source of truth (US-12.3). Voice transcripts are an exception, see §12, L1.
 
 ---
 
@@ -368,7 +391,7 @@ How the tables above implement "context & memory" (E6):
 |---|---|
 | **Browser (anon key)** | Nothing. RLS is enabled on every table with **no policies**, and `EXECUTE` on `match_chunks` is revoked from `anon` / `authenticated`. The app doesn't even ship the anon key to the browser |
 | **Next.js server (service role)** | Full access; bypasses RLS. Used only in `server-only` modules |
-| **The AI agent** | Indirect, only through three tools, each scoped by the server to the current `business_id` and `conversation_id`. The model never supplies those IDs, so it cannot read or write another business's or customer's data |
+| **The AI agent** | Indirect, only through three tools, each scoped by the server to the current `business_id` and `conversation_id`. The model never supplies those IDs. No tool *reads* lead data, and `save_lead` never overwrites an existing lead (§3.7), so the agent cannot reveal or alter another customer's details |
 
 **`session_id` is a bearer token.** Anyone holding it can read that conversation. It is a random v4 UUID (122 bits of randomness), never shown in URLs, and only stored in the visitor's own browser.
 
@@ -381,6 +404,7 @@ How the tables above implement "context & memory" (E6):
 | Data | Personal? | Retention (demo) |
 |---|---|---|
 | `leads` (name, email, phone) | Yes | Until deleted by admin |
+| `conversations.customer_facts` | Yes | Kept with the conversation |
 | `messages.content` | May contain anything the customer typed or said | Kept with the conversation |
 | `tool_calls.arguments` | Contains lead details | Kept with the conversation |
 | Voice audio | — | **Never stored.** Only transcripts |
@@ -398,7 +422,7 @@ How the tables above implement "context & memory" (E6):
 |---|---|---|---|
 | A1 | Dedicated vector DB (Pinecone, Weaviate) | **Rejected** | Required stack is Supabase; one DB means tenant filtering, joins, and deletes are consistent and transactional. Revisit at tens of millions of vectors |
 | A2 | IVFFlat index | **Rejected** | Needs data present before building and periodic re-tuning; HNSW works from an empty table |
-| A3 | Store tool calls/results as rows in `messages` (OpenAI message format) | **Rejected** | Replaying old retrieval results into every prompt costs tokens and adds noise; facts that matter are in `leads`. `tool_calls` gives a cleaner audit trail |
+| A3 | Store tool calls/results as rows in `messages` (OpenAI message format) | **Rejected** | Replaying old retrieval results into every prompt costs tokens and adds noise; facts that matter are in `customer_facts`. `tool_calls` gives a cleaner audit trail |
 | A4 | New conversation per page visit | **Rejected** | Breaks "continue where I left off" (US-6.2) |
 | A5 | Store original files in Supabase Storage | **Deferred** | Not needed to answer questions; adds a bucket + policies. Would enable re-chunking with a new strategy later |
 | A6 | Postgres `ENUM` types for statuses | **Rejected** | Adding/removing values needs `ALTER TYPE` migrations with restrictions; `CHECK` constraints are easier to change |
@@ -425,3 +449,17 @@ How the tables above implement "context & memory" (E6):
 | Switch embedding model | New vector column or re-ingest all documents where `embedding_model` differs |
 | Conversation summaries (long chats) | Add `conversations.summary text` |
 | Real calendar booking | Add `availability_slots`; consultation status gains `booked` |
+
+---
+
+## 12. Known limitations (accepted trade-offs)
+
+| # | Limitation | Impact | Mitigation now | Production fix |
+|---|---|---|---|---|
+| L1 | **Voice transcripts are reported by the browser.** With WebRTC, transcripts arrive in the browser, which posts them to the server. A user could write fake "assistant" turns into **their own** history | Can only mislead the model within that visitor's own conversation. Database records come only from validated tool calls, and `customer_facts` is written only by `save_lead`, never from message text | Transcripts are stored with `channel = 'voice'`; tools re-validate every input server-side | Have the server observe the voice session directly. The Realtime API appears to support a server-side connection to a browser's WebRTC call, but this needs verifying before relying on it |
+| L2 | **`session_id` is a bearer token.** Whoever holds it can read that conversation | An XSS bug or a shared computer exposes one conversation | Random UUID (122 bits), never in URLs, only in the visitor's localStorage | Short-lived signed session cookie (`HttpOnly`) instead of localStorage |
+| L3 | **Lead spam.** Anyone can create leads with made-up details | Junk rows in the leads list | Per-session rate limit (PR-13); validation | Bot protection (e.g. Turnstile) before voice/lead actions; email verification for high-value actions |
+| L4 | **Phone matching is best effort.** `555-1234` and `+1 555 1234` normalise to different values without a country | The same person can appear as two leads | Normalise to `+` and digits; email is the primary match key | Parse with a phone library (libphonenumber) using a default country from business settings |
+| L5 | **Embedding size is fixed at 1536** (`vector(1536)`) | Switching to a model with another dimension needs a migration and a re-index | `documents.embedding_model` records which model produced each document's vectors | New vector column + background re-index, then drop the old column |
+| L6 | **Iterative HNSW scans need pgvector ≥ 0.8** | On older pgvector, filtered search can return fewer than k rows when many businesses share the table | Version checked when PR-02 runs; single tenant in the demo, so no practical impact | Upgrade pgvector, or partition `chunks` by business |
+| L7 | **No admin authentication** | Admin pages are open | Local/demo use only (assumption A1) | Supabase Auth + `business_members` + RLS policies (§11) |
