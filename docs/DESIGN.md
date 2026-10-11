@@ -93,6 +93,13 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Customer Assistant — Chat | [`design/customer-chat.png`](./design/customer-chat.png) |
 | Home — business launcher (`/`) | [`design/home.png`](./design/home.png) |
 | Customer Assistant — Voice mode (speaking) | [`design/customer-voice.png`](./design/customer-voice.png) |
+| Voice — permission explainer dialog | [`design/voice-permission.png`](./design/voice-permission.png) |
+| Voice panel — all states | [`design/voice-states.png`](./design/voice-states.png) |
+| Mobile — Home | [`design/mobile-home.png`](./design/mobile-home.png) |
+| Mobile — Welcome (suggested questions) | [`design/mobile-welcome.png`](./design/mobile-welcome.png) |
+| Mobile — Chat | [`design/mobile-chat.png`](./design/mobile-chat.png) |
+| Mobile — Source preview (bottom sheet) | [`design/mobile-source-preview.png`](./design/mobile-source-preview.png) |
+| Mobile — Voice mode (listening) | [`design/mobile-voice.png`](./design/mobile-voice.png) |
 | Admin — New business | [`design/admin-new-business.png`](./design/admin-new-business.png) |
 | Admin — Settings (saved) | [`design/admin-settings.png`](./design/admin-settings.png) |
 | Admin — Overview (business switcher open) | [`design/admin-overview.png`](./design/admin-overview.png) |
@@ -101,6 +108,6 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Admin — Consultations (status menu open) | [`design/admin-consultations.png`](./design/admin-consultations.png) |
 | Admin — Conversations (AI audit trail) | [`design/admin-conversations.png`](./design/admin-conversations.png) |
 
-Still to design (brief §10, Priority 1): mobile layout, source preview popover, the remaining voice states, and the failed/error cards.
+Still to design: the desktop source preview popover, the failed/error cards and edge states (§5.7), and admin empty states.
 
 Known issue: in the Consultations screen the open status menu is clipped by the table card, so "Cancelled" is hidden. Build it as a floating menu that overlays the card.
