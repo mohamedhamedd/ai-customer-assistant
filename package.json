@@ -12,7 +12,7 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
     "db:status": "supabase status",
-    "db:types": "supabase gen types typescript --local --schema public > src/lib/db/database.types.ts"
+    "db:types": "supabase gen types typescript --local --schema public > src/lib/db/database.types.ts.tmp && mv src/lib/db/database.types.ts.tmp src/lib/db/database.types.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

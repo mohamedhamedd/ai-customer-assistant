@@ -437,7 +437,7 @@ A text turn is: store the user message → run the agent → store the assistant
 
 | Actor | Access |
 |---|---|
-| **Browser (anon key)** | Nothing. RLS is enabled on every table with **no policies**, and `EXECUTE` on `match_chunks` is revoked from `anon` / `authenticated`. The app doesn't even ship the anon key to the browser |
+| **Browser (anon key)** | Nothing. RLS is enabled on every table with **no policies**, **and** all table and sequence privileges are revoked from `anon` / `authenticated` (including by default for future tables). The revoke matters: Supabase grants new tables to `anon` by default, and `TRUNCATE` is not subject to RLS, so RLS alone would still let the public key wipe a table. `EXECUTE` on every function is revoked too. The app doesn't even ship the anon key to the browser |
 | **Next.js server (service role)** | Full access; bypasses RLS. Used only in `server-only` modules |
 | **The AI agent** | Indirect, only through three tools, each scoped by the server to the current `business_id` and `conversation_id`. The model never supplies those IDs. No tool *reads* lead data, and `save_lead` never overwrites an existing lead (§3.7), so the agent cannot reveal or alter another customer's details |
 

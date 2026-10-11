@@ -36,7 +36,7 @@ create table public.documents (
 
 -- I13: at most one live document per title, so a replace swap is atomic (§6.1).
 create unique index documents_ready_title_idx
-  on public.documents (business_id, lower(title))
+  on public.documents (business_id, lower(btrim(title)))
   where status = 'ready';
 
 create table public.chunks (
@@ -143,7 +143,8 @@ create table public.consultation_requests (
   conversation_id uuid references public.conversations(id) on delete set null,
   -- Snapshot of what the requester gave, so staff never call the wrong person (§3.8).
   contact_name    text not null,
-  contact_email   text,
+  contact_email   text constraint consultation_requests_contact_email_lowercase
+                  check (contact_email = lower(contact_email)),
   contact_phone   text,
   service         text not null,
   preferred_at    timestamptz not null,
@@ -187,8 +188,10 @@ create trigger consultation_requests_set_updated_at
 create or replace function public.touch_conversation()
 returns trigger language plpgsql as $$
 begin
+  -- greatest(): a late-arriving row with an older timestamp (e.g. a voice
+  -- transcript) must not move the conversation backwards in the admin list.
   update public.conversations
-     set last_message_at = new.created_at
+     set last_message_at = greatest(last_message_at, new.created_at)
    where id = new.conversation_id;
   return new;
 end;
@@ -233,14 +236,32 @@ as $$
   ) s
   join chunks c on c.id = s.id
   join documents d on d.id = c.document_id
-  where s.similarity >= p_min_similarity
+  -- A zero-norm query vector yields NaN, and Postgres sorts NaN above every
+  -- number, so it would pass the threshold. Postgres has no isnan(), but it
+  -- does treat NaN as equal to NaN, so this comparison excludes it.
+  where s.similarity <> 'NaN'::float
+    and s.similarity >= p_min_similarity
   order by s.similarity desc;
 $$;
 
 -- ---------------------------------------------------------------------------
 -- Security (§8): RLS on, no policies. Only the service role (server) can
 -- read or write. The anon key gets nothing.
+--
+-- RLS alone is not enough: Supabase's default privileges grant anon and
+-- authenticated INSERT/SELECT/UPDATE/DELETE/TRUNCATE on new tables, and
+-- TRUNCATE is NOT subject to RLS. So table privileges are revoked outright,
+-- and the default privileges are changed so future tables are covered too.
 -- ---------------------------------------------------------------------------
+
+revoke all on all tables in schema public from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated;
+alter default privileges for role postgres in schema public
+  revoke all on sequences from anon, authenticated;
+
+-- Defence in depth: if a privilege is ever granted back, RLS still applies.
 
 alter table public.businesses            enable row level security;
 alter table public.documents             enable row level security;
