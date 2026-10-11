@@ -394,6 +394,15 @@ Story IDs follow `US-<epic>.<n>`. Acceptance criteria use **Given / When / Then*
 - Fields: name (required, max 100 chars), description (max 500 chars), timezone (selected from a list).
 - Changes apply to the next customer message without a redeploy.
 
+#### US-10.2 Add another business — *Should*
+**As an** admin, **I want** to add another business with its own documents, **so that** the same assistant serves it without any code change.
+
+**Acceptance criteria**
+- Creating a business asks for name, short description, timezone and assistant guidelines (business-specific rules, e.g. "no medical advice" for a clinic).
+- After uploading its documents, the business has its own chat, which answers only from its documents, with sources.
+- Other businesses are unaffected: their answers never draw on another business's documents.
+- *Scope note:* for the local demo, a home page lists the businesses as cards. Tenant sign-up and per-tenant admin login are out of scope (see §9, A1, A2).
+
 ---
 
 ## 6. System stories — reliability (E11)
@@ -484,7 +493,7 @@ Story IDs follow `US-<epic>.<n>`. Acceptance criteria use **Given / When / Then*
 | # | Assumption / question | Decision for this version |
 |---|---|---|
 | A1 | Admin authentication | Out of scope. Admin pages are unprotected and for demo/local use only; Supabase Auth would be added for production. |
-| A2 | Single vs multiple businesses | Data model is multi-business; the UI serves one demo business. |
+| A2 | Single vs multiple businesses | Data model is multi-business; each chat serves one business. For the local demo, the admin can add a business and a home page lists them (US-10.2). |
 | A3 | Real booking | Not included. Consultation requests are created as *Pending* for staff to confirm. |
 | A4 | Opening hours validation | Checked by the assistant using the documents; not enforced in the database (hours aren't stored as structured data). |
 | A5 | Scanned PDFs / images | Not supported. They would need OCR or a vision model (documented in README). |
