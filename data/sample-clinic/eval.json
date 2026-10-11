@@ -20,6 +20,7 @@
     { "q": "Do you do Botox or dermal fillers?", "gap": true },
     { "q": "Do you have a branch in Portland?", "gap": true },
     { "q": "Do you offer massage therapy?", "gap": true },
+    { "q": "Do you have a patient lounge?", "gap": true, "$comment": "Common word (patient) plus an absent one (lounge): the broad-question fallback must not fire" },
     { "q": "Do you sell electric toothbrushes?", "gap": true }
   ]
 }

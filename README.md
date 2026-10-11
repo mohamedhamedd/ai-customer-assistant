@@ -39,6 +39,7 @@ The server validates its configuration at startup. If anything is missing or inv
 | `npm run db:start` / `db:stop` | Start / stop local Supabase |
 | `npm run db:reset` | Recreate the local database from migrations + seed |
 | `npm run db:status` | Show local Supabase URLs and keys |
+| `npm test` / `npm run test:db` | Unit tests (Node) / database tests (pgTAP in `supabase/tests/`, needs Supabase running) |
 | `npm run db:types` | Regenerate `src/lib/db/database.types.ts` from the local schema (run after every migration) |
 
 ## Database
@@ -81,7 +82,7 @@ Chunker unit tests: `npm test`.
 
 This gate filters noise. The system prompt remains the main defence: the model answers only from the retrieved text and says so when that text doesn't cover the question.
 
-The evaluation set is `data/sample-clinic/eval.json` (13 answerable questions with their expected section, 5 out-of-scope ones). The script reports top-1 / top-3 hit rates for vector-only and hybrid retrieval, whether the found rule agrees, and the similarity margin.
+The evaluation set is `data/sample-clinic/eval.json` (15 answerable questions with their expected section, 6 out-of-scope ones). The keyword rules themselves, including the small-knowledge-base and broad-question cases the clinic data can't show, are covered by pgTAP tests in `supabase/tests/keyword_query.test.sql` (`npm run test:db`). The script reports top-1 / top-3 hit rates for vector-only and hybrid retrieval, whether the found rule agrees, and the similarity margin.
 
 ## Project structure
 

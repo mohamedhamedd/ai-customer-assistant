@@ -27,7 +27,10 @@ create index chunks_fts_idx on public.chunks using gin (fts);
 -- in more than 25% of this business's chunks (IDF-style; never fewer than 3
 -- chunks, so small knowledge bases keep their keywords). If nothing specific
 -- remains but common words do ("What treatments do you have?"), that is a
--- broad question the corpus covers, so the common words are used instead.
+-- broad question the corpus covers, so the common words are used instead,
+-- but only when EVERY remaining word occurs in the corpus. "Do you have a
+-- patient lounge?" mentions a common word, yet "lounge" is nowhere, so the
+-- question is about something the business doesn't describe: no query.
 -- Words absent from the corpus never form a query: "laser eye surgery".
 --
 -- Lexemes are already stemmed, so the query is built with a ::tsquery cast
@@ -59,7 +62,10 @@ as $$
   chosen as (
     select l from specific
     union all
-    select l from df where df.n > 0 and not exists (select 1 from specific)
+    select l from df
+     where df.n > 0
+       and not exists (select 1 from specific)
+       and not exists (select 1 from df absent where absent.n = 0)
   )
   select case
     when count(*) = 0 then null

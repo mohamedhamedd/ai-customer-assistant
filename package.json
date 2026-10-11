@@ -15,7 +15,8 @@
     "db:types": "supabase gen types typescript --local --schema public > src/lib/db/database.types.ts.tmp && mv src/lib/db/database.types.ts.tmp src/lib/db/database.types.ts",
     "test": "node --conditions=react-server --import tsx --test \"src/**/*.test.ts\"",
     "ingest": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/ingest.ts",
-    "eval:retrieval": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/eval-retrieval.ts"
+    "eval:retrieval": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/eval-retrieval.ts",
+    "test:db": "supabase test db"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

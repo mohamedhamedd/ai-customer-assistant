@@ -38,9 +38,13 @@ const MAX_QUERY_CHARS = 1000;
 
 // Vectors from different models are not comparable (design L5). Ingestion
 // refuses to mix models; search must refuse too, or results are silently
-// random. Checked once a minute per business.
+// random. Only the consistent state is cached: a mismatch is re-checked on
+// every call, so a re-index is seen immediately, including one done by the
+// ingest CLI in another process. A cached "consistent" can't go stale: the
+// ingestion guard stops new mismatched documents, and changing the
+// configured model needs a restart, which clears this map.
 const INDEXED_MODEL_TTL_MS = 60_000;
-const indexedModelCache = new Map<string, { mismatch: string | null; checkedAt: number }>();
+const consistentUntil = new Map<string, number>();
 
 export interface RetrievedChunk {
   chunkId: number;
@@ -62,11 +66,14 @@ export interface Source {
   similarity: number;
 }
 
-export interface RetrievalResult {
-  found: boolean;
-  chunks: RetrievedChunk[];
-  sources: Source[];
-}
+// When nothing relevant was found there are no chunks to hand the model: the
+// type makes "pass the candidates anyway" impossible rather than a convention.
+// (The eval needs the raw candidates and calls searchChunks() directly.)
+export type RetrievalResult =
+  | { found: true; chunks: RetrievedChunk[]; sources: Source[] }
+  | { found: false; chunks: []; sources: [] };
+
+const notFound = (): RetrievalResult => ({ found: false, chunks: [], sources: [] });
 
 export interface RetrieveOptions {
   matchCount?: number;
@@ -74,40 +81,37 @@ export interface RetrieveOptions {
 }
 
 export async function retrieve(businessId: string, query: string, options: RetrieveOptions = {}): Promise<RetrievalResult> {
-  const text = query.trim().slice(0, MAX_QUERY_CHARS);
-  if (text.length < 2) return { found: false, chunks: [], sources: [] };
+  // toWellFormed(): slicing by UTF-16 unit can split an emoji into a lone
+  // surrogate, which the embeddings API rejects as invalid UTF-8.
+  const text = query.trim().slice(0, MAX_QUERY_CHARS).toWellFormed();
+  if (text.length < 2) return notFound();
 
   await assertIndexedModel(businessId);
   const [embedding] = await embedTexts([text]);
   const chunks = await searchChunks(businessId, embedding, text, options.matchCount ?? DEFAULT_MATCH_COUNT);
-  const found = isFound(chunks, options.rule ?? DEFAULT_FOUND_RULE);
-  return { found, chunks, sources: found ? toSources(chunks) : [] };
+  if (!isFound(chunks, options.rule ?? DEFAULT_FOUND_RULE)) return notFound();
+  return { found: true, chunks, sources: toSources(chunks) };
 }
 
 export async function assertIndexedModel(businessId: string): Promise<void> {
+  if ((consistentUntil.get(businessId) ?? 0) > Date.now()) return;
+
   const configured = env().OPENAI_EMBEDDING_MODEL;
-  const cached = indexedModelCache.get(businessId);
-  let mismatch: string | null;
-  if (cached && Date.now() - cached.checkedAt < INDEXED_MODEL_TTL_MS) {
-    mismatch = cached.mismatch;
-  } else {
-    const { data, error } = await db()
-      .from("documents")
-      .select("embedding_model")
-      .eq("business_id", businessId)
-      .eq("status", "ready")
-      .neq("embedding_model", configured)
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new Error(`Retrieval failed: ${error.message}`);
-    mismatch = data?.embedding_model ?? null;
-    indexedModelCache.set(businessId, { mismatch, checkedAt: Date.now() });
-  }
-  if (mismatch) {
+  const { data, error } = await db()
+    .from("documents")
+    .select("embedding_model")
+    .eq("business_id", businessId)
+    .eq("status", "ready")
+    .neq("embedding_model", configured)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`Retrieval failed: ${error.message}`);
+  if (data) {
     throw new Error(
-      `The knowledge base was indexed with ${mismatch} but OPENAI_EMBEDDING_MODEL is ${configured}. Re-index all documents with one model.`,
+      `The knowledge base was indexed with ${data.embedding_model} but OPENAI_EMBEDDING_MODEL is ${configured}. Re-index all documents with one model.`,
     );
   }
+  consistentUntil.set(businessId, Date.now() + INDEXED_MODEL_TTL_MS);
 }
 
 // Exposed separately so the eval script can reuse one query embedding.
