@@ -7,6 +7,7 @@ import { executeTool } from "@/lib/agent/execute";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
 import { buildSystemPrompt, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { formatHuman } from "@/lib/agent/time";
+import { isBusinessSlug } from "@/lib/chat/limits";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 
@@ -44,27 +45,45 @@ export class ChatHttpError extends Error {
 
 export const AI_UNAVAILABLE = "I'm having trouble responding right now. Please try again in a moment.";
 
-interface Business {
+export interface Business {
   id: string;
+  slug: string;
   name: string;
   description: string;
   timezone: string;
 }
 
+// Each chat page serves one business, picked by the slug in its URL
+// (/b/[slug], decision D-14). Cached briefly per slug: every message needs it,
+// and a business's profile rarely changes.
+//
+// Only businesses that exist are cached, so the cache is bounded by the
+// number of businesses: a stream of made-up slugs from the internet can't
+// grow it, and a business created a moment ago is found at once.
 const BUSINESS_TTL_MS = 60_000;
-let businessCache: { value: Business; expires: number } | undefined;
+const businessCache = new Map<string, { value: Business; expires: number }>();
 
-export async function demoBusiness(): Promise<Business> {
-  if (businessCache && businessCache.expires > Date.now()) return businessCache.value;
+export async function findBusiness(slug: string): Promise<Business | null> {
+  if (!isBusinessSlug(slug)) return null;
+  const hit = businessCache.get(slug);
+  if (hit && hit.expires > Date.now()) return hit.value;
   const { data, error } = await db()
     .from("businesses")
-    .select("id, name, description, timezone")
-    .eq("slug", env().DEMO_BUSINESS_SLUG)
+    .select("id, slug, name, description, timezone")
+    .eq("slug", slug)
     .maybeSingle();
   if (error) throw new Error(`Loading business failed: ${error.message}`);
-  if (!data) throw new ChatHttpError(503, "The assistant isn't set up yet.");
-  businessCache = { value: data, expires: Date.now() + BUSINESS_TTL_MS };
+  if (data) businessCache.set(slug, { value: data, expires: Date.now() + BUSINESS_TTL_MS });
+  else businessCache.delete(slug);
   return data;
+}
+
+export const UNKNOWN_BUSINESS = "This assistant doesn't exist.";
+
+async function requireBusiness(slug: string): Promise<Business> {
+  const business = await findBusiness(slug);
+  if (!business) throw new ChatHttpError(404, UNKNOWN_BUSINESS);
+  return business;
 }
 
 // Race-safe get-or-create (design Q2): two tabs opening at once both end up
@@ -118,6 +137,7 @@ export function decideRetry(
 // ---------------------------------------------------------------------------
 
 export interface ChatTurnInput {
+  businessSlug: string;
   sessionId: string;
   clientMessageId: string;
   message: string;
@@ -139,7 +159,7 @@ async function storedReply(userMessageId: number): Promise<StoredReply | null> {
 // Throws ChatHttpError before any event is emitted (bad request, in
 // progress). After the first event, failures are reported as an error event.
 export async function prepareChatTurn(input: ChatTurnInput) {
-  const business = await demoBusiness();
+  const business = await requireBusiness(input.businessSlug);
   const conversation = await conversationFor(business.id, input.sessionId);
 
   // One turn at a time per conversation (the SQL function locks the
@@ -339,8 +359,8 @@ function log(fields: Record<string, unknown>) {
 // History for the UI
 // ---------------------------------------------------------------------------
 
-export async function loadHistory(sessionId: string) {
-  const business = await demoBusiness();
+export async function loadHistory(businessSlug: string, sessionId: string) {
+  const business = await requireBusiness(businessSlug);
   const { data: conversation } = await db()
     .from("conversations")
     .select("id")
@@ -350,7 +370,7 @@ export async function loadHistory(sessionId: string) {
   if (!conversation) return [];
   const { data, error } = await db()
     .from("messages")
-    .select("id, role, channel, content, sources, actions, created_at, reply_failed_at")
+    .select("id, role, channel, content, sources, actions, created_at, reply_failed_at, client_message_id")
     .eq("conversation_id", conversation.id)
     // The newest messages (reversed below so they read oldest first).
     .order("id", { ascending: false })
@@ -365,5 +385,8 @@ export async function loadHistory(sessionId: string) {
     actions: m.actions,
     createdAt: m.created_at,
     replyFailed: m.reply_failed_at !== null,
+    // The browser generated it; returned so a failed last message can still
+    // be retried (same id) after a reload.
+    clientMessageId: m.client_message_id,
   }));
 }

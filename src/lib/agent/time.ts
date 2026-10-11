@@ -52,10 +52,13 @@ export function formatLocal(at: Date, timeZone: string): string {
   return `${w.year}-${pad(w.month)}-${pad(w.day)}T${pad(w.hour)}:${pad(w.minute)}`;
 }
 
-// "Tuesday, October 20, 2026 at 3:00 PM"
+// "Tuesday, October 20, 2026 at 3:00 PM PDT". One format everywhere (prompt
+// clock, tool results, action cards), so the model never sees one time
+// written two ways. The zone label is for that date, so it is right across a
+// daylight-saving change (a November request reads PST).
 export function formatHuman(at: Date, timeZone: string): string {
   const date = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(at);
-  const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit" }).format(at);
+  const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(at);
   return `${date} at ${time}`;
 }
 

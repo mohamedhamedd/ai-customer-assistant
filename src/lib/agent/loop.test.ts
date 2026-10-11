@@ -150,6 +150,21 @@ test("several tool calls in one step run sequentially in the model's order", asy
   assert.equal(events.filter((e) => e.type === "action").length, 2);
 });
 
+test("saving the same details twice in one turn gives one action", async () => {
+  const model = fakeModel([
+    { calls: [{ id: "a", name: "save_lead", args: '{"name":"Sara","email":"s@x.com"}' }] },
+    { calls: [{ id: "b", name: "save_lead", args: '{"name":"Sara","email":"s@x.com"}' }] },
+    { text: "Saved." },
+  ]);
+  const tools = fakeTools({ save_lead: { ok: true, saved: true, details: { name: "Sara", email: "s@x.com" } } });
+  const events: TurnEvent[] = [];
+  const result = await runAgentTurn(baseInput(events), { complete: model.complete, executeTool: tools.executeTool });
+
+  assert.equal(tools.ran.length, 2, "both calls still run");
+  assert.equal(result.actions.length, 1);
+  assert.equal(events.filter((e) => e.type === "action").length, 1);
+});
+
 test("an outage on a write tool becomes a failed-action card; invalid input does not", async () => {
   const model = fakeModel([
     { calls: [{ id: "a", name: "save_lead", args: "{}" }] },

@@ -15,7 +15,7 @@ const schema = z.object({
   OPENAI_REALTIME_MODEL: z.string().min(1).default("gpt-realtime"),
   OPENAI_REALTIME_VOICE: z.string().min(1).default("alloy"),
 
-  // The customer chat serves one business; the schema supports many.
+  // Where / sends visitors until the home page lists every business (PR-15).
   DEMO_BUSINESS_SLUG: z.string().min(1).default("lakeside-dental"),
 });
 
