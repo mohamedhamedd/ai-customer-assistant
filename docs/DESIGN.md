@@ -81,6 +81,7 @@ Mostly flat. Hierarchy comes from borders and surface contrast.
   - A surface card with a 1 px border, 16 px radius and 24 px padding. On hover it shows a Level 2 shadow and the border darkens slightly.
   - Inside: a 44 px round initials avatar in the accent colour, the business name in 18 px semibold, and a 14 px text-muted description clamped to 2 lines.
   - At the bottom: a 12 px text-muted meta line ("6 documents") on the left and an accent "Open chat →" link on the right.
+- **Business switcher (admin):** a full-width button with a 28 px avatar, the name in 14 px semibold and a chevron. Long names truncate with an ellipsis, and the full name shows in a tooltip and in the open menu, where names wrap instead of truncating.
 - **Buttons:** primary (accent fill), secondary (surface with border), ghost and danger, all 8 px radius and 40 px tall (44 px on touch).
 - **Badges:** a pill with a status tint and status-colour text, 12 px medium weight.
 
@@ -93,8 +94,11 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Customer Assistant — Chat | [`design/customer-chat.png`](./design/customer-chat.png) |
 | Home — business launcher (`/`) | [`design/home.png`](./design/home.png) |
 | Customer Assistant — Voice mode (speaking) | [`design/customer-voice.png`](./design/customer-voice.png) |
+| Customer Assistant — Source preview popover | [`design/customer-source-preview.png`](./design/customer-source-preview.png) |
+| Chat — message types & edge states | [`design/customer-states.png`](./design/customer-states.png) |
 | Voice — permission explainer dialog | [`design/voice-permission.png`](./design/voice-permission.png) |
 | Voice panel — all states | [`design/voice-states.png`](./design/voice-states.png) |
+| Home — loading & empty | [`design/home-states.png`](./design/home-states.png) |
 | Mobile — Home | [`design/mobile-home.png`](./design/mobile-home.png) |
 | Mobile — Welcome (suggested questions) | [`design/mobile-welcome.png`](./design/mobile-welcome.png) |
 | Mobile — Chat | [`design/mobile-chat.png`](./design/mobile-chat.png) |
@@ -107,7 +111,8 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Admin — Leads (detail drawer open) | [`design/admin-leads.png`](./design/admin-leads.png) |
 | Admin — Consultations (status menu open) | [`design/admin-consultations.png`](./design/admin-consultations.png) |
 | Admin — Conversations (AI audit trail) | [`design/admin-conversations.png`](./design/admin-conversations.png) |
+| Admin — Knowledge base (new business, empty) | [`design/admin-knowledge-base-empty.png`](./design/admin-knowledge-base-empty.png) |
+| Admin — Delete document dialog | [`design/admin-delete-document.png`](./design/admin-delete-document.png) |
+| Admin — empty states | [`design/admin-empty-states.png`](./design/admin-empty-states.png) |
 
-Still to design: the desktop source preview popover, the failed/error cards and edge states (§5.7), and admin empty states.
-
-Known issue: in the Consultations screen the open status menu is clipped by the table card, so "Cancelled" is hidden. Build it as a floating menu that overlays the card.
+Every screen and state in the brief (§10) now has a reference frame.
