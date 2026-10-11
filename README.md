@@ -67,4 +67,5 @@ docs/             User stories, UI design brief, delivery plan
 
 - [User stories & acceptance criteria](docs/user-stories.md)
 - [UI design brief](docs/ui-design-brief.md)
+- [Database design](docs/database-design.md)
 - [Delivery plan: PRs, story coverage, decision log](docs/project-plan.xlsx)
