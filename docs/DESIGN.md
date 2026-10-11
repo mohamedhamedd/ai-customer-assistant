@@ -81,7 +81,6 @@ Mostly flat. Hierarchy comes from borders and surface contrast.
   - A surface card with a 1 px border, 16 px radius and 24 px padding. On hover it shows a Level 2 shadow and the border darkens slightly.
   - Inside: a 44 px round initials avatar in the accent colour, the business name in 18 px semibold, and a 14 px text-muted description clamped to 2 lines.
   - At the bottom: a 12 px text-muted meta line ("6 documents") on the left and an accent "Open chat →" link on the right.
-  - The "Add a business" card is the same size, with a dashed border, a plus icon and text-muted copy.
 - **Buttons:** primary (accent fill), secondary (surface with border), ghost and danger, all 8 px radius and 40 px tall (44 px on touch).
 - **Badges:** a pill with a status tint and status-colour text, 12 px medium weight.
 

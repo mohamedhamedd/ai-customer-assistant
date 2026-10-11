@@ -128,14 +128,14 @@ A simple launcher that lists every business for the local demo. Nothing on it is
 └───────────────────────────────────────────────────────────┘
 ```
 
-- **Product header:** this is the only page that shows the product's own name rather than a business's. It has an "Admin ↗" link on the right, which is fine here because the page is for the demo operator, not for customers.
+- **Product header:** this is the only page that shows the product's own name rather than a business's. It has a small "Admin ↗" link on the right, which is the demo's way into the admin while there is no login (A1).
 - **Business card:** an initials avatar, the business name (16–18 px semibold), its description clamped to 2 lines, a muted meta line ("6 documents"), and an "Open chat →" link. The whole card is clickable and keyboard-focusable. It is a grid of 2–3 columns on desktop and 1 column on mobile.
 - **Visual identity:** every business uses the same product accent. The data model has no per-business colour or logo, so the initials avatar is the only thing that tells cards apart.
 - **States:**
   - **Loading:** skeleton cards.
-  - **Empty:** "No businesses yet", with a "Create one in the admin" button.
+  - **Empty:** "No businesses yet. Add one in the admin." in muted text, with no button.
   - **Business without documents:** the card shows "No documents yet" in the muted colour, and opening it still works because the assistant says it has no information.
-- **Never on the home page:** marketing hero sections, pricing, sign-up, or industry imagery.
+- **Never on the home page:** an "Add a business" card or button (creating, editing and deleting businesses happens only in the admin, §6.8), marketing hero sections, pricing, sign-up, or industry imagery.
 
 ### 5.1 Layout
 
