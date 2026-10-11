@@ -41,9 +41,9 @@ export async function POST(request: Request) {
   }
 
   const encoder = new TextEncoder();
+  let open = true;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let open = true;
       // If the customer closes the tab, keep going: the reply is still saved,
       // and a retry with the same clientMessageId replays it.
       const emit = (event: ChatEvent) => {
@@ -64,11 +64,18 @@ export async function POST(request: Request) {
         console.error("[chat] turn failed", err);
         emit({ type: "error", message: "Something went wrong. Please try again.", retryable: true });
       } finally {
-        if (open) controller.close();
+        if (open) {
+          try {
+            controller.close();
+          } catch {
+            // Already closed by a disconnect between the last event and here.
+          }
+        }
       }
     },
     cancel() {
       // Client went away; the turn finishes and persists on its own.
+      open = false;
     },
   });
   return new Response(stream, { headers: NDJSON_HEADERS });

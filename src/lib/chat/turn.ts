@@ -4,7 +4,7 @@ import type { Json } from "@/lib/db/database.types";
 import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
 import { executeTool } from "@/lib/agent/execute";
-import { runAgentTurn, type Action, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
+import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
 import { buildSystemPrompt, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { formatHuman } from "@/lib/agent/time";
 import { toolDefinitions } from "@/lib/agent/tools";
@@ -18,6 +18,9 @@ import type { Source } from "@/lib/rag/retrieve";
 // Working memory: the last N user/assistant messages (design §7). Older turns
 // are not sent, to bound cost; the customer's details survive via facts.
 export const HISTORY_LIMIT = 20;
+
+// Messages returned to the UI on load: the most recent ones.
+export const HISTORY_PAGE = 200;
 
 // A user message with no reply younger than this is assumed to be still
 // running (design §7.1). Longer than the turn deadline (45 s).
@@ -121,6 +124,7 @@ export interface ChatTurnInput {
 }
 
 const IN_PROGRESS_MESSAGE = "This message is still being answered.";
+export const BUSY_MESSAGE = "I'm still answering your previous message. Please wait a moment.";
 
 async function storedReply(userMessageId: number): Promise<StoredReply | null> {
   const { data, error } = await db()
@@ -138,50 +142,64 @@ export async function prepareChatTurn(input: ChatTurnInput) {
   const business = await demoBusiness();
   const conversation = await conversationFor(business.id, input.sessionId);
 
-  let userMessageId: number;
-  const { data: inserted, error } = await db()
+  // One turn at a time per conversation (the SQL function locks the
+  // conversation row): a second message while the first is still being
+  // answered gets a 409 instead of running on stale history and state.
+  const { data: begun, error: beginError } = await db().rpc("begin_user_message", {
+    p_conversation_id: conversation.id,
+    p_client_message_id: input.clientMessageId,
+    p_content: input.message,
+    p_window_seconds: IN_PROGRESS_WINDOW_MS / 1000,
+  });
+  if (beginError) throw new Error(`Saving message failed: ${beginError.message}`);
+  const result = begun as { status: "created" | "exists" | "busy"; message_id?: number };
+  if (result.status === "busy") throw new ChatHttpError(409, BUSY_MESSAGE);
+  if (result.status === "created") return { kind: "run" as const, business, conversation, userMessageId: result.message_id! };
+
+  // A retry of a message we already have (design §7.1).
+  const { data: existing, error: existingError } = await db()
     .from("messages")
-    .insert({ conversation_id: conversation.id, client_message_id: input.clientMessageId, role: "user", channel: "text", content: input.message })
-    .select("id")
+    .select("id, reply_attempt_at, reply_failed_at")
+    .eq("id", result.message_id!)
     .single();
+  if (existingError) throw new Error(`Loading message failed: ${existingError.message}`);
+  const decision = decideRetry(existing, await storedReply(existing.id), new Date());
+  if (decision.kind === "in_progress") throw new ChatHttpError(409, IN_PROGRESS_MESSAGE);
+  if (decision.kind === "replay") return { kind: "replay" as const, userMessageId: existing.id, reply: decision.reply };
 
-  if (!error) {
-    userMessageId = inserted.id;
-  } else if (error.message.includes("messages_conversation_id_client_message_id_key")) {
-    // A retry of a message we already have.
-    const { data: existing, error: existingError } = await db()
-      .from("messages")
-      .select("id, reply_attempt_at, reply_failed_at")
-      .eq("conversation_id", conversation.id)
-      .eq("client_message_id", input.clientMessageId)
-      .single();
-    if (existingError) throw new Error(`Loading message failed: ${existingError.message}`);
-    const decision = decideRetry(existing, await storedReply(existing.id), new Date());
-    if (decision.kind === "in_progress") throw new ChatHttpError(409, IN_PROGRESS_MESSAGE);
-    if (decision.kind === "replay") return { kind: "replay" as const, userMessageId: existing.id, reply: decision.reply };
-
-    const { data: claimed, error: claimError } = await db().rpc("claim_reply_attempt", {
-      p_message_id: existing.id,
-      p_window_seconds: IN_PROGRESS_WINDOW_MS / 1000,
-    });
-    if (claimError) throw new Error(`Claiming retry failed: ${claimError.message}`);
-    if (!claimed) {
-      // Another retry claimed it first, or its reply landed meanwhile.
-      const late = await storedReply(existing.id);
-      if (late) return { kind: "replay" as const, userMessageId: existing.id, reply: late };
-      throw new ChatHttpError(409, IN_PROGRESS_MESSAGE);
-    }
-    userMessageId = existing.id;
-  } else {
-    throw new Error(`Saving message failed: ${error.message}`);
+  const { data: claimed, error: claimError } = await db().rpc("claim_reply_attempt", {
+    p_message_id: existing.id,
+    p_window_seconds: IN_PROGRESS_WINDOW_MS / 1000,
+  });
+  if (claimError) throw new Error(`Claiming retry failed: ${claimError.message}`);
+  if (!claimed) {
+    // Another retry claimed it first, its reply landed meanwhile, or another
+    // turn in this conversation is running.
+    const late = await storedReply(existing.id);
+    if (late) return { kind: "replay" as const, userMessageId: existing.id, reply: late };
+    throw new ChatHttpError(409, IN_PROGRESS_MESSAGE);
   }
+  const userMessageId = existing.id;
 
   return { kind: "run" as const, business, conversation, userMessageId };
 }
 
 export const REPLY_NOT_SAVED = "That answer couldn't be saved, so it may not appear if you reload the page.";
 
-export async function runChatTurn(prepared: Extract<Awaited<ReturnType<typeof prepareChatTurn>>, { kind: "run" }>, input: ChatTurnInput, emit: (e: ChatEvent) => void) {
+export interface ChatTurnDeps {
+  complete: AgentDeps["complete"];
+}
+
+const defaultTurnDeps: ChatTurnDeps = {
+  complete: (params, signal) => openai().chat.completions.create(params, { signal }),
+};
+
+export async function runChatTurn(
+  prepared: Extract<Awaited<ReturnType<typeof prepareChatTurn>>, { kind: "run" }>,
+  input: ChatTurnInput,
+  emit: (e: ChatEvent) => void,
+  deps: ChatTurnDeps = defaultTurnDeps,
+) {
   const { business, conversation, userMessageId } = prepared;
   const started = Date.now();
   emit({ type: "start", userMessageId });
@@ -202,10 +220,7 @@ export async function runChatTurn(prepared: Extract<Awaited<ReturnType<typeof pr
         toolCtx: { businessId: business.id, conversationId: conversation.id, channel: "text", timeZone: business.timezone, now: () => new Date() },
         emit,
       },
-      {
-        complete: (params, signal) => openai().chat.completions.create(params, { signal }),
-        executeTool,
-      },
+      { complete: deps.complete, executeTool },
     );
   } catch (err) {
     await markFailed(userMessageId);
@@ -337,10 +352,11 @@ export async function loadHistory(sessionId: string) {
     .from("messages")
     .select("id, role, channel, content, sources, actions, created_at, reply_failed_at")
     .eq("conversation_id", conversation.id)
-    .order("id", { ascending: true })
-    .limit(200);
+    // The newest messages (reversed below so they read oldest first).
+    .order("id", { ascending: false })
+    .limit(HISTORY_PAGE);
   if (error) throw new Error(`Loading history failed: ${error.message}`);
-  return (data ?? []).map((m) => ({
+  return (data ?? []).reverse().map((m) => ({
     id: m.id,
     role: m.role,
     channel: m.channel,

@@ -195,7 +195,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "claim_reply_attempt":
+            "begin_user_message":
+{ Args: { "p_channel"?: string,"p_client_message_id": string,"p_content": string,"p_conversation_id": string,"p_window_seconds": number }; Returns: Json
+                           },
+"claim_reply_attempt":
 { Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
                            },
 "commit_document_chunks":
@@ -219,6 +222,9 @@ isOneToOne: false
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
+                           },
+"turn_in_progress":
+{ Args: { "p_conversation_id": string,"p_except_message_id": number,"p_window_seconds": number }; Returns: boolean
                            }
           }
           Enums: {

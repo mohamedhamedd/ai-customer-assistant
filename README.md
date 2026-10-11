@@ -40,6 +40,7 @@ The server validates its configuration at startup. If anything is missing or inv
 | `npm run db:reset` | Recreate the local database from migrations + seed |
 | `npm run db:status` | Show local Supabase URLs and keys |
 | `npm test` / `npm run test:db` | Unit tests (Node) / database tests (pgTAP in `supabase/tests/`, needs Supabase running) |
+| `npm run test:integration` | Turn orchestration against the local database with a fake model (`*.itest.ts`, needs Supabase running; no OpenAI calls) |
 | `npm run db:types` | Regenerate `src/lib/db/database.types.ts` from the local schema (run after every migration) |
 
 ## Database
@@ -88,6 +89,7 @@ This gate filters noise. The system prompt remains the main defence: the model a
 
 - **Memory:** the browser sends only the new message. The server loads the last 20 messages, what the customer told us (`customer_facts`) and what was already done in the conversation (contact saved, requests with their live status). A client can't inject fake history.
 - **Agent loop** (`src/lib/agent/loop.ts`): hand-written over Chat Completions. Model → tool calls (run in order) → results back → repeat, at most 5 tool rounds, then one call with tools off so it must answer. The whole turn has a 45 s deadline, and a tool is only started if its 15 s timeout fits in what's left.
+- **One turn at a time:** a second message while the first is still being answered gets 409, enforced in the database with a row lock on the conversation.
 - **Retries:** each message carries a `clientMessageId`. Resending it replays a stored reply (no model call), returns 409 while the original is still running, or re-runs it if the original failed or died.
 - **Failures:** if the model call fails, the customer gets a friendly message, the message stays saved and is marked failed, and one structured log line records the reason.
 
