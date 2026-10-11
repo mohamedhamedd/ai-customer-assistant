@@ -95,5 +95,12 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Customer Assistant — Voice mode (speaking) | [`design/customer-voice.png`](./design/customer-voice.png) |
 | Admin — New business | [`design/admin-new-business.png`](./design/admin-new-business.png) |
 | Admin — Settings (saved) | [`design/admin-settings.png`](./design/admin-settings.png) |
+| Admin — Overview (business switcher open) | [`design/admin-overview.png`](./design/admin-overview.png) |
+| Admin — Knowledge base (upload states) | [`design/admin-knowledge-base.png`](./design/admin-knowledge-base.png) |
+| Admin — Leads (detail drawer open) | [`design/admin-leads.png`](./design/admin-leads.png) |
+| Admin — Consultations (status menu open) | [`design/admin-consultations.png`](./design/admin-consultations.png) |
+| Admin — Conversations (AI audit trail) | [`design/admin-conversations.png`](./design/admin-conversations.png) |
 
 Still to design (brief §10, Priority 1): mobile layout, source preview popover, the remaining voice states, and the failed/error cards.
+
+Known issue: in the Consultations screen the open status menu is clipped by the table card, so "Cancelled" is hidden. Build it as a floating menu that overlays the card.
