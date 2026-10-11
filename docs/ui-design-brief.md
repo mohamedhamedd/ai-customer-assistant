@@ -4,7 +4,7 @@
 |---|---|
 | **For** | UI / product designer |
 | **Companion doc** | [`user-stories.md`](./user-stories.md) (story IDs like `US-2.1` are referenced throughout) |
-| **Version** | 1.0 (draft for planning) |
+| **Version** | 1.1 (business-agnostic revision) |
 | **Timeline** | Very short (1–2 day build). Favour clear, standard patterns over custom ones. |
 
 ---
@@ -16,14 +16,28 @@ Two surfaces for one product:
 1. **Customer Assistant**: a chat page where a business's customers talk to an AI assistant by **text or voice**. The assistant answers from the business's documents (with **source chips**), captures contact details, and creates **consultation requests**.
 2. **Admin Console**: a small back-office where the business owner uploads documents and reviews **leads**, **consultation requests**, and **conversations** (including what the AI did behind the scenes).
 
-Demo business: **Lakeside Dental Clinic** (fictional). The product itself is **white-label**: the customer side must look good with any business name and accent colour.
+The product is **white-label and industry-neutral**: it serves any small business that takes enquiries (a clinic, a salon, a law firm, a repair service). The customer side must look right with any business name, logo and accent colour. Everything industry-specific comes from the business's own documents and settings, never from the UI itself.
+
+Demo business: **Lakeside Dental Clinic** (fictional). It is **sample data only**. Use it to fill mockups, but don't design anything that only makes sense for a dental or medical business. The test: replace "Lakeside Dental Clinic" with "Northside Plumbing" and the screen should still make sense.
+
+### 1.1 What the assistant can actually do
+
+Design only for these capabilities. They are the assistant's three tools:
+
+| Tool | What the customer sees |
+|---|---|
+| `search_knowledge` | An answer with source chips |
+| `save_lead` | "Details shared" action card |
+| `create_consultation_request` | "Request sent, pending" action card |
+
+Don't show features that don't exist, such as insurance checks, prices or staff on a request, editing or cancelling a request, calendar availability, or payments.
 
 ---
 
 ## 2. Design principles
 
 1. **Trust over cleverness.** Show where answers come from (source chips), show what the AI *did* (action cards), and never make a request look like a confirmed booking.
-2. **Calm and fast.** A healthcare-style calm palette, generous whitespace, and immediate feedback for every action (thinking, searching, saving).
+2. **Calm and fast.** A calm, neutral palette where the business's accent colour does the branding, generous whitespace, and immediate feedback for every action (thinking, searching, saving).
 3. **Voice is a mode, not a separate app.** Voice and text share one thread. Switching never loses context.
 4. **Always show state.** Every async process has a visible state: idle, loading, success, error. No silent failures.
 5. **Accessible by default.** WCAG 2.1 AA, keyboard-first, captions for voice.
@@ -51,7 +65,7 @@ Admin side (/admin)
 ## 4. Visual direction
 
 ### 4.1 Mood
-Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clarity), Linear (admin density and restraint), ChatGPT voice mode (a single animated orb as the voice focal point).
+Clean, warm, modern SaaS, neutral enough for any industry. The accent colour and logo carry the brand; the rest stays greyscale. References: Intercom Messenger (chat clarity), Linear (admin density and restraint), ChatGPT voice mode (a single animated orb as the voice focal point).
 
 ### 4.2 Design tokens (proposal; the designer may refine)
 
@@ -107,7 +121,7 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 │                                               │
 │  ┌─ ✓ Consultation requested ──────────────┐  │  ← action card
 │  │ Teeth whitening · Tue, Oct 20 · 3:00 PM │  │
-│  │ Status: Pending — the clinic will confirm│  │
+│  │ Status: Pending — Lakeside will confirm  │  │
 │  └──────────────────────────────────────────┘  │
 ├───────────────────────────────────────────────┤
 │ [ Type your message…                  ] 🎤 ➤  │  ← composer
@@ -119,10 +133,11 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 - Business logo (or an initials avatar), business name, an "AI assistant" subtitle.
 - Overflow menu (⋯): "New conversation" (US-1.5), "About this assistant / privacy".
 - Optional status dot: Online / Reconnecting.
+- **One row, about 56–64 px tall. Nothing else.** No navigation tabs (Services, Pricing, About…). The business's own website does that. No link to the Admin Console: customers never see the back office.
 
 ### 5.3 Empty / welcome state (US-1.1)
 - A welcome message from the assistant introducing the business in one line.
-- **3–4 suggested question chips** (tappable): "What services do you offer?", "What are your hours?", "Do you accept insurance?", "Book a consultation".
+- **3–4 suggested question chips** (tappable). They are **configured per business**. Generic defaults: "What services do you offer?", "What are your hours?", "How much does it cost?", "Request a consultation". The Lakeside demo may swap one for an insurance question, but the layout must not depend on it.
 - A subtle hint: "You can also talk to me 🎤".
 
 ### 5.4 Message types — **please design every one**
@@ -131,15 +146,15 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 |---|---|---|
 | **User message (text)** | Right-aligned bubble, accent background. | US-1.2 |
 | **User message (voice)** | Same, plus a small mic icon; the text is the transcript. | US-2.3 |
-| **Assistant message** | Left-aligned, muted surface, with an AI avatar. Supports **basic markdown**: paragraphs, bold, bullet lists, short tables (price lists!). | US-1.2, US-3.1 |
+| **Assistant message** | Left-aligned, muted surface, with an AI avatar. Supports **basic markdown**: paragraphs, bold, bullet lists, short tables (e.g. a price list). | US-1.2, US-3.1 |
 | **Assistant message (voice)** | Same, plus a speaker icon; the text is the transcript of the spoken answer. | US-2.3 |
 | **Streaming state** | Assistant bubble growing as text arrives, with a soft caret at the end. | US-1.2 |
 | **Thinking indicator** | Three-dot or shimmer placeholder before any text arrives. | US-1.2 |
-| **Tool status line** | Small inline row under the avatar: spinner + "Searching clinic information…" / "Saving your details…" / "Creating your request…". Replaced by the result once done. | US-1.2 |
+| **Tool status line** | Small inline row under the avatar: spinner + "Searching {business} information…" / "Saving your details…" / "Creating your request…". Replaced by the result once done. | US-1.2 |
 | **Source chips** | Row of pill chips under an assistant message: file icon + document title (+ "› section"). Max 3 visible, then "+2 more". | US-3.2 |
 | **Source preview** | On chip click: a popover (desktop) or bottom sheet (mobile) with the document title, section heading, and the excerpt text. The relevant passage may be highlighted. | US-3.2 |
-| **Action card — Lead saved** | Compact card, success accent: "✓ Details shared with Lakeside Dental Clinic", name + masked contact (s***@example.com). | US-4.1 |
-| **Action card — Consultation requested** | Card with service, date & time (in the business timezone, with the timezone label), and a **Pending** badge + the line "The clinic will confirm with you". **Must not look like a confirmed booking**: no "Booked!" language, use a warning-coloured *Pending* badge. | US-5.1 |
+| **Action card — Lead saved** | Compact card, success accent: "✓ Details shared with {business}", name + masked contact (s***@example.com). | US-4.1 |
+| **Action card — Consultation requested** | Card with **only** service, preferred date & time (in the business timezone, with the timezone label), and a **Pending** badge + the line "{business} will confirm with you". No price, staff, room, reference numbers, or Modify/Cancel buttons (none of these exist). **Must not look like a confirmed booking**: no "Booked!" language, use a warning-coloured *Pending* badge. | US-5.1 |
 | **Action card — Failed** | Danger accent: "Couldn't save your request", short reason, and "Try again". | US-11.1 |
 | **Message send failed** | The user bubble gets a red outline + "Not sent · Retry". | US-11.6 |
 | **System notice** | Centred muted text: "Voice session ended", "New conversation started", "You're offline". | US-2.5, US-11.6 |
@@ -147,16 +162,20 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 
 Also design: timestamps (on hover/tap, or grouped by time), and a "jump to latest" button when the user has scrolled up during streaming.
 
+**Mockups must show a realistic conversation, not a catalogue.** A main screen should show 4–6 messages, as a real customer would see them. Show each remaining message type as its own small component frame or state variant, not stacked into one thread. Completed tool status lines disappear (they're replaced by the result). The source preview is a popover, so it's closed by default.
+
 ### 5.5 Composer (US-1.2, US-1.3)
 - Auto-growing textarea (1 → 5 lines, then scrolls). Placeholder: "Ask about services, prices, hours…".
 - **Mic button** (secondary) + **Send button** (primary, accent). Send is disabled while empty, while streaming, or when over the limit.
 - Character counter appears from 1,800 / 2,000; the limit is reached at 2,000 (danger colour).
 - Inline error area above the composer for server errors, keeping the user's text.
-- Footer microcopy: "AI assistant — answers are based on Lakeside's information. Don't share sensitive medical details."
+- Footer microcopy: "AI assistant — answers are based on {business}'s information and may contain mistakes. Don't share sensitive personal details."
 
 ### 5.6 Voice mode (US-2.1 – 2.6) — **key component**
 
 Entering voice mode **does not navigate away**. The composer area transforms into a **voice panel** (or a bottom sheet on mobile). The thread stays visible above it, showing live captions as messages.
+
+The voice panel is **compact**: it sits where the composer was, at most about 280 px tall on desktop, and the thread still fills the screen above it. It contains only the orb, the state label, Mute, End and a "Type instead" link. It has no technical readouts (latency, audio quality, connection details) and no state switcher. Show each state as a separate frame.
 
 ```
 ┌───────────────────────────────────────────────┐
@@ -177,7 +196,7 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 | Connecting | "Connecting…" | Slow pulse |
 | Listening | "Listening…" | Gentle idle breathing |
 | User speaking | "Listening…" | Reacts to the **user's** mic level |
-| Thinking / using a tool | "Thinking…" / "Checking clinic info…" | Rotating shimmer |
+| Thinking / using a tool | "Thinking…" / "Checking {business} info…" | Rotating shimmer |
 | Assistant speaking | "Speaking… (talk anytime to interrupt)" | Reacts to the **assistant's** audio level |
 | Muted | "Muted" | Greyed, mic-off icon |
 | Error / disconnected | "Voice disconnected" + Reconnect | Danger outline, static |
@@ -193,6 +212,14 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 - Rate limited ("You're sending messages quickly. Please wait a moment.").
 - Unsupported browser for voice (mic button disabled, with a tooltip explaining why).
 - Very long answers (scroll behaviour), very long single words or URLs (wrapping).
+
+### 5.8 Never on the customer page
+- Navigation tabs, or a link to the Admin Console.
+- Compliance or trust claims the product can't back up: "HIPAA", "Verified", "Certified", "Clinical AI", match-percentage scores.
+- Industry-specific legal text, such as medical or emergency disclaimers. If a business needs one, it goes in its own documents.
+- Dev or demo controls (state simulators, latency, audio quality) and marketing feature cards.
+- Request details the system doesn't have (price estimates, assigned staff, reference numbers) and actions it doesn't support (modify, cancel, insurance checks).
+- Decorative tints on every element. Use colour only for the accent (user bubbles, primary button, orb) and for status (success, pending, error).
 
 ---
 
@@ -275,11 +302,11 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 
 | Situation | Copy |
 |---|---|
-| Welcome | "Hi! I'm Lakeside Dental's assistant. Ask me about services, prices, or hours — or request a consultation." |
-| Searching | "Searching clinic information…" |
+| Welcome | "Hi! I'm {business}'s assistant. Ask me about services, prices, or hours — or request a consultation." |
+| Searching | "Searching {business} information…" |
 | Don't know | "I don't have that information. Would you like someone from the team to contact you?" |
-| Lead saved | "Your details were shared with Lakeside Dental Clinic." |
-| Request created | "Consultation requested — the clinic will confirm with you." |
+| Lead saved | "Your details were shared with {business}." |
+| Request created | "Consultation requested — {business} will confirm with you." |
 | Tool failed | "I couldn't save that just now. Please try again in a moment." |
 | AI down | "I'm having trouble responding right now. Please try again." |
 | Mic denied | "Microphone access is blocked. Allow it in your browser settings, or keep chatting by text." |
@@ -287,6 +314,8 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 | Duplicate doc | "This document is already in your knowledge base." |
 
 **Words to avoid:** "booked", "confirmed" (for requests), "guaranteed", "diagnosis".
+
+**`{business}`** is the business name from Settings (in the demo, "Lakeside Dental Clinic"). Write every customer-facing string with the placeholder, never a hard-coded name or industry word.
 
 ---
 
