@@ -4,7 +4,7 @@
 |---|---|
 | **For** | UI / product designer |
 | **Companion doc** | [`user-stories.md`](./user-stories.md) (story IDs like `US-2.1` are referenced throughout) |
-| **Version** | 1.0 (draft for planning) |
+| **Version** | 1.1 (business-agnostic revision) |
 | **Timeline** | Very short (1–2 day build). Favour clear, standard patterns over custom ones. |
 
 ---
@@ -16,14 +16,28 @@ Two surfaces for one product:
 1. **Customer Assistant**: a chat page where a business's customers talk to an AI assistant by **text or voice**. The assistant answers from the business's documents (with **source chips**), captures contact details, and creates **consultation requests**.
 2. **Admin Console**: a small back-office where the business owner uploads documents and reviews **leads**, **consultation requests**, and **conversations** (including what the AI did behind the scenes).
 
-Demo business: **Lakeside Dental Clinic** (fictional). The product itself is **white-label**: the customer side must look good with any business name and accent colour.
+The product is **white-label and industry-neutral**: it serves any small business that takes enquiries (a clinic, a salon, a law firm, a repair service). The customer side must look right with any business name, logo and accent colour. Everything industry-specific comes from the business's own documents and settings, never from the UI itself.
+
+Demo business: **Lakeside Dental Clinic** (fictional). It is **sample data only**. Use it to fill mockups, but don't design anything that only makes sense for a dental or medical business. The test: replace "Lakeside Dental Clinic" with "Northside Plumbing" and the screen should still make sense.
+
+### 1.1 What the assistant can actually do
+
+Design only for these capabilities. They are the assistant's three tools:
+
+| Tool | What the customer sees |
+|---|---|
+| `search_knowledge` | An answer with source chips |
+| `save_lead` | "Details shared" action card |
+| `create_consultation_request` | "Request sent, pending" action card |
+
+Don't show features that don't exist, such as insurance checks, prices or staff on a request, editing or cancelling a request, calendar availability, or payments.
 
 ---
 
 ## 2. Design principles
 
 1. **Trust over cleverness.** Show where answers come from (source chips), show what the AI *did* (action cards), and never make a request look like a confirmed booking.
-2. **Calm and fast.** A healthcare-style calm palette, generous whitespace, and immediate feedback for every action (thinking, searching, saving).
+2. **Calm and fast.** A calm, neutral palette where the business's accent colour does the branding, generous whitespace, and immediate feedback for every action (thinking, searching, saving).
 3. **Voice is a mode, not a separate app.** Voice and text share one thread. Switching never loses context.
 4. **Always show state.** Every async process has a visible state: idle, loading, success, error. No silent failures.
 5. **Accessible by default.** WCAG 2.1 AA, keyboard-first, captions for voice.
@@ -35,23 +49,27 @@ Demo business: **Lakeside Dental Clinic** (fictional). The product itself is **w
 
 ```
 Customer side
-└── /                      Chat (text + voice) for the business
+├── /                      Home: the businesses as cards (local demo, PR-15)
+└── /b/[slug]              Chat (text + voice) for one business
 
-Admin side (/admin)
+Admin side (/admin), scoped to the business picked in the sidebar switcher
+├── New business           Create a business (PR-15, US-10.2)
 ├── Overview               KPIs + recent activity
 ├── Knowledge base         Upload, document list, document detail (sections)
 ├── Leads                  Table + lead detail drawer
 ├── Consultations          Table with status filter + status change
 ├── Conversations          List + transcript with AI audit trail
-└── Settings               Business profile (name, description, timezone)
+└── Settings               Business profile (name, slug, description, timezone, assistant guidelines)
 ```
+
+Each chat serves exactly one business (decision D-14). In production, customers reach `/b/[slug]` from the business's own website, so the home page is a demo convenience, not a customer flow.
 
 ---
 
 ## 4. Visual direction
 
 ### 4.1 Mood
-Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clarity), Linear (admin density and restraint), ChatGPT voice mode (a single animated orb as the voice focal point).
+Clean, warm, modern SaaS, neutral enough for any industry. The accent colour and logo carry the brand; the rest stays greyscale. References: Intercom Messenger (chat clarity), Linear (admin density and restraint), ChatGPT voice mode (a single animated orb as the voice focal point).
 
 ### 4.2 Design tokens (proposal; the designer may refine)
 
@@ -88,6 +106,37 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 
 ## 5. Customer Assistant — screens & components
 
+### 5.0 Home page (`/`, US-10.2, PR-15)
+
+A simple launcher that lists every business for the local demo. Nothing on it is industry-specific.
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ [✦] AI Customer Assistant                      Admin ↗    │  ← product header
+├───────────────────────────────────────────────────────────┤
+│  Choose a business                                        │
+│  Each business has its own assistant, trained only on     │
+│  its own documents.                                       │
+│                                                           │
+│  ┌──────────────────────┐  ┌──────────────────────┐       │
+│  │ (LD) Lakeside Dental │  │ (PF) Peak Fitness    │       │
+│  │ Family & cosmetic    │  │ Gym, classes and     │       │
+│  │ dentistry in …       │  │ personal training …  │       │
+│  │ 6 documents          │  │ 4 documents          │       │
+│  │          Open chat → │  │          Open chat → │       │
+│  └──────────────────────┘  └──────────────────────┘       │
+└───────────────────────────────────────────────────────────┘
+```
+
+- **Product header:** this is the only page that shows the product's own name rather than a business's. It has a small "Admin ↗" link on the right, which is the demo's way into the admin while there is no login (A1).
+- **Business card:** an initials avatar, the business name (16–18 px semibold), its description clamped to 2 lines, a muted meta line ("6 documents"), and an "Open chat →" link. The whole card is clickable and keyboard-focusable. It is a grid of 2–3 columns on desktop and 1 column on mobile.
+- **Visual identity:** every business uses the same product accent. The data model has no per-business colour or logo, so the initials avatar is the only thing that tells cards apart.
+- **States:**
+  - **Loading:** skeleton cards.
+  - **Empty:** "No businesses yet. Add one in the admin." in muted text, with no button.
+  - **Business without documents:** the card shows "No documents yet" in the muted colour, and opening it still works because the assistant says it has no information.
+- **Never on the home page:** an "Add a business" card or button (creating, editing and deleting businesses happens only in the admin, §6.8), marketing hero sections, pricing, sign-up, or industry imagery.
+
 ### 5.1 Layout
 
 **Desktop (≥ 1024 px):** a centred chat column, max width ~760 px, full height. A slim header across the top.
@@ -107,7 +156,7 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 │                                               │
 │  ┌─ ✓ Consultation requested ──────────────┐  │  ← action card
 │  │ Teeth whitening · Tue, Oct 20 · 3:00 PM │  │
-│  │ Status: Pending — the clinic will confirm│  │
+│  │ Status: Pending — Lakeside will confirm  │  │
 │  └──────────────────────────────────────────┘  │
 ├───────────────────────────────────────────────┤
 │ [ Type your message…                  ] 🎤 ➤  │  ← composer
@@ -117,12 +166,13 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 
 ### 5.2 Header
 - Business logo (or an initials avatar), business name, an "AI assistant" subtitle.
-- Overflow menu (⋯): "New conversation" (US-1.5), "About this assistant / privacy".
+- Overflow menu (⋯): "New conversation" (US-1.5), "About this assistant / privacy", and "All businesses" (back to the home page; demo only).
 - Optional status dot: Online / Reconnecting.
+- **One row, about 56–64 px tall. Nothing else.** No navigation tabs (Services, Pricing, About…). The business's own website does that. No link to the Admin Console: customers never see the back office.
 
 ### 5.3 Empty / welcome state (US-1.1)
 - A welcome message from the assistant introducing the business in one line.
-- **3–4 suggested question chips** (tappable): "What services do you offer?", "What are your hours?", "Do you accept insurance?", "Book a consultation".
+- **3–4 suggested question chips** (tappable). They are **configured per business**. Generic defaults: "What services do you offer?", "What are your hours?", "How much does it cost?", "Request a consultation". The Lakeside demo may swap one for an insurance question, but the layout must not depend on it.
 - A subtle hint: "You can also talk to me 🎤".
 
 ### 5.4 Message types — **please design every one**
@@ -131,15 +181,15 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 |---|---|---|
 | **User message (text)** | Right-aligned bubble, accent background. | US-1.2 |
 | **User message (voice)** | Same, plus a small mic icon; the text is the transcript. | US-2.3 |
-| **Assistant message** | Left-aligned, muted surface, with an AI avatar. Supports **basic markdown**: paragraphs, bold, bullet lists, short tables (price lists!). | US-1.2, US-3.1 |
+| **Assistant message** | Left-aligned, muted surface, with an AI avatar. Supports **basic markdown**: paragraphs, bold, bullet lists, short tables (e.g. a price list). | US-1.2, US-3.1 |
 | **Assistant message (voice)** | Same, plus a speaker icon; the text is the transcript of the spoken answer. | US-2.3 |
 | **Streaming state** | Assistant bubble growing as text arrives, with a soft caret at the end. | US-1.2 |
 | **Thinking indicator** | Three-dot or shimmer placeholder before any text arrives. | US-1.2 |
-| **Tool status line** | Small inline row under the avatar: spinner + "Searching clinic information…" / "Saving your details…" / "Creating your request…". Replaced by the result once done. | US-1.2 |
+| **Tool status line** | Small inline row under the avatar: spinner + "Searching {business} information…" / "Saving your details…" / "Creating your request…". Replaced by the result once done. | US-1.2 |
 | **Source chips** | Row of pill chips under an assistant message: file icon + document title (+ "› section"). Max 3 visible, then "+2 more". | US-3.2 |
 | **Source preview** | On chip click: a popover (desktop) or bottom sheet (mobile) with the document title, section heading, and the excerpt text. The relevant passage may be highlighted. | US-3.2 |
-| **Action card — Lead saved** | Compact card, success accent: "✓ Details shared with Lakeside Dental Clinic", name + masked contact (s***@example.com). | US-4.1 |
-| **Action card — Consultation requested** | Card with service, date & time (in the business timezone, with the timezone label), and a **Pending** badge + the line "The clinic will confirm with you". **Must not look like a confirmed booking**: no "Booked!" language, use a warning-coloured *Pending* badge. | US-5.1 |
+| **Action card — Lead saved** | Compact card, success accent: "✓ Details shared with {business}", name + masked contact (s***@example.com). | US-4.1 |
+| **Action card — Consultation requested** | Card with **only** service, preferred date & time (in the business timezone, with the timezone label), and a **Pending** badge + the line "{business} will confirm with you". No price, staff, room, reference numbers, or Modify/Cancel buttons (none of these exist). **Must not look like a confirmed booking**: no "Booked!" language, use a warning-coloured *Pending* badge. | US-5.1 |
 | **Action card — Failed** | Danger accent: "Couldn't save your request", short reason, and "Try again". | US-11.1 |
 | **Message send failed** | The user bubble gets a red outline + "Not sent · Retry". | US-11.6 |
 | **System notice** | Centred muted text: "Voice session ended", "New conversation started", "You're offline". | US-2.5, US-11.6 |
@@ -147,16 +197,20 @@ Clean, clinical-but-warm, modern SaaS. References: Intercom Messenger (chat clar
 
 Also design: timestamps (on hover/tap, or grouped by time), and a "jump to latest" button when the user has scrolled up during streaming.
 
+**Mockups must show a realistic conversation, not a catalogue.** A main screen should show 4–6 messages, as a real customer would see them. Show each remaining message type as its own small component frame or state variant, not stacked into one thread. Completed tool status lines disappear (they're replaced by the result). The source preview is a popover, so it's closed by default.
+
 ### 5.5 Composer (US-1.2, US-1.3)
 - Auto-growing textarea (1 → 5 lines, then scrolls). Placeholder: "Ask about services, prices, hours…".
 - **Mic button** (secondary) + **Send button** (primary, accent). Send is disabled while empty, while streaming, or when over the limit.
 - Character counter appears from 1,800 / 2,000; the limit is reached at 2,000 (danger colour).
 - Inline error area above the composer for server errors, keeping the user's text.
-- Footer microcopy: "AI assistant — answers are based on Lakeside's information. Don't share sensitive medical details."
+- Footer microcopy: "AI assistant — answers are based on {business}'s information and may contain mistakes. Don't share sensitive personal details."
 
 ### 5.6 Voice mode (US-2.1 – 2.6) — **key component**
 
 Entering voice mode **does not navigate away**. The composer area transforms into a **voice panel** (or a bottom sheet on mobile). The thread stays visible above it, showing live captions as messages.
+
+The voice panel is **compact**: it sits where the composer was, at most about 280 px tall on desktop, and the thread still fills the screen above it. It contains only the orb, the state label, Mute, End and a "Type instead" link. It has no technical readouts (latency, audio quality, connection details) and no state switcher. Show each state as a separate frame.
 
 ```
 ┌───────────────────────────────────────────────┐
@@ -177,7 +231,7 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 | Connecting | "Connecting…" | Slow pulse |
 | Listening | "Listening…" | Gentle idle breathing |
 | User speaking | "Listening…" | Reacts to the **user's** mic level |
-| Thinking / using a tool | "Thinking…" / "Checking clinic info…" | Rotating shimmer |
+| Thinking / using a tool | "Thinking…" / "Checking {business} info…" | Rotating shimmer |
 | Assistant speaking | "Speaking… (talk anytime to interrupt)" | Reacts to the **assistant's** audio level |
 | Muted | "Muted" | Greyed, mic-off icon |
 | Error / disconnected | "Voice disconnected" + Reconnect | Danger outline, static |
@@ -194,12 +248,20 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 - Unsupported browser for voice (mic button disabled, with a tooltip explaining why).
 - Very long answers (scroll behaviour), very long single words or URLs (wrapping).
 
+### 5.8 Never on the customer page
+- Navigation tabs, or a link to the Admin Console.
+- Compliance or trust claims the product can't back up: "HIPAA", "Verified", "Certified", "Clinical AI", match-percentage scores.
+- Industry-specific legal text, such as medical or emergency disclaimers. If a business needs one, it goes in its own documents.
+- Dev or demo controls (state simulators, latency, audio quality) and marketing feature cards.
+- Request details the system doesn't have (price estimates, assigned staff, reference numbers) and actions it doesn't support (modify, cancel, insurance checks).
+- Decorative tints on every element. Use colour only for the accent (user bubbles, primary button, orb) and for status (success, pending, error).
+
 ---
 
 ## 6. Admin Console — screens & components
 
 ### 6.1 Shell
-- **Left sidebar** (collapsible to icons at < 1280 px): business name at the top; nav items **Overview, Knowledge base, Leads, Consultations, Conversations, Settings**; a pending-count badge on Consultations.
+- **Left sidebar** (collapsible to icons at < 1280 px): a **business switcher** at the top (initials avatar + name + chevron). It opens a menu listing every business and a "+ New business" item, and every admin page shows data for the selected business only; nav items **Overview, Knowledge base, Leads, Consultations, Conversations, Settings**; a pending-count badge on Consultations.
 - **Top bar:** page title, primary page action on the right (e.g. "Upload documents"), and an "Open chat ↗" link to the customer side.
 - A visible **"Demo mode — no login"** label in the sidebar footer (assumption A1).
 - Desktop-first (≥ 1024 px). Tablet usable. Mobile: tables become stacked cards (nice to have).
@@ -243,9 +305,20 @@ Entering voice mode **does not navigate away**. The composer area transforms int
   - A toggle: "Show AI activity" (on by default).
 
 ### 6.7 Settings — Business profile (US-10.1)
-- Form: Business name, short description (textarea with a counter), timezone (searchable select), accent colour (Could: a colour picker with a contrast warning), logo (Could).
-- Live preview of the chat header with the chosen name and accent (nice to have).
-- Save button with loading → success toast; inline field validation errors.
+- Form for the selected business:
+  - **Business name** (required, max 100).
+  - **Slug** (lowercase letters, digits and dashes; unique). Shows the chat URL `/b/{slug}` underneath, with a copy button.
+  - **Short description** (textarea, max 500, with a counter).
+  - **Timezone** (searchable select).
+  - **Assistant guidelines** (textarea, max 2,000, with a counter). These are business-specific rules, e.g. "Never give a diagnosis; for emergencies tell the customer to call 911." Helper text: "Added to the assistant's instructions for this business only."
+- Live preview of the chat header with the chosen name (nice to have).
+- Save button with loading → success toast; inline field validation errors (e.g. "This slug is already used").
+- Changes apply to the next customer message without a redeploy.
+
+### 6.8 New business (US-10.2, PR-15)
+- Reached from "+ New business" in the sidebar switcher. It is a page (or a large dialog) with the same fields as Settings. The slug is suggested from the name as you type.
+- On create: switch to the new business and land on **Knowledge base** with its empty state ("Upload your first document…"). A toast reads "Business created. Upload its documents so the assistant can answer."
+- Errors: duplicate slug, a required field missing. The form keeps what was typed.
 
 ---
 
@@ -275,11 +348,11 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 
 | Situation | Copy |
 |---|---|
-| Welcome | "Hi! I'm Lakeside Dental's assistant. Ask me about services, prices, or hours — or request a consultation." |
-| Searching | "Searching clinic information…" |
+| Welcome | "Hi! I'm {business}'s assistant. Ask me about services, prices, or hours — or request a consultation." |
+| Searching | "Searching {business} information…" |
 | Don't know | "I don't have that information. Would you like someone from the team to contact you?" |
-| Lead saved | "Your details were shared with Lakeside Dental Clinic." |
-| Request created | "Consultation requested — the clinic will confirm with you." |
+| Lead saved | "Your details were shared with {business}." |
+| Request created | "Consultation requested — {business} will confirm with you." |
 | Tool failed | "I couldn't save that just now. Please try again in a moment." |
 | AI down | "I'm having trouble responding right now. Please try again." |
 | Mic denied | "Microphone access is blocked. Allow it in your browser settings, or keep chatting by text." |
@@ -287,6 +360,8 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 | Duplicate doc | "This document is already in your knowledge base." |
 
 **Words to avoid:** "booked", "confirmed" (for requests), "guaranteed", "diagnosis".
+
+**`{business}`** is the business name from Settings (in the demo, "Lakeside Dental Clinic"). Write every customer-facing string with the placeholder, never a hard-coded name or industry word.
 
 ---
 
@@ -303,8 +378,12 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 6. Leads table + lead drawer; Consultations table with status change.
 7. Conversations transcript with the AI audit trail.
 
+**Priority 2b (PR-15)**
+8. Home page (§5.0): desktop + mobile, with loading and empty states.
+9. Admin business switcher, New business (§6.8) and Settings (§6.7).
+
 **Priority 3**
-8. Overview dashboard, Settings, error/edge states from §5.7, white-label accent variants.
+10. Overview dashboard, error/edge states from §5.7, white-label accent variants.
 
 **Format:** Figma, with components using auto-layout and variants for states (e.g. `Message / type=assistant, channel=voice, state=streaming`). Please annotate spacing and the token used per element.
 
@@ -312,6 +391,7 @@ Entering voice mode **does not navigate away**. The composer area transforms int
 
 ## 11. Out of scope for design (this version)
 - Admin login / user management screens.
+- Tenant sign-up, per-business admin access, and per-business colours or logos (not in the data model; see D-14).
 - Calendar or availability pickers (dates come from conversation).
 - Embeddable widget launcher bubble for third-party sites (possible future: same chat in a 400×640 floating panel).
 - Payments, multi-language.
