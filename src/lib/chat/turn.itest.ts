@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions";
 import { db } from "@/lib/db/supabase";
+import { env } from "@/lib/env";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -17,6 +18,7 @@ import {
   type ChatEvent,
   type ChatTurnDeps,
   type ChatTurnInput,
+  UNKNOWN_BUSINESS,
 } from "./turn";
 
 const sessions: string[] = [];
@@ -25,7 +27,7 @@ after(async () => {
 });
 
 function newInput(sessionId: string, message = "Hello"): ChatTurnInput {
-  return { sessionId, clientMessageId: randomUUID(), message };
+  return { businessSlug: env().DEMO_BUSINESS_SLUG, sessionId, clientMessageId: randomUUID(), message };
 }
 
 function session(): string {
@@ -113,8 +115,35 @@ test("history returns the newest page of a long conversation, oldest first", asy
   }));
   await db().from("messages").insert(rows);
 
-  const history = await loadHistory(sessionId);
+  const history = await loadHistory(env().DEMO_BUSINESS_SLUG, sessionId);
   assert.equal(history.length, HISTORY_PAGE);
   assert.equal(history.at(-1)!.content, `filler ${HISTORY_PAGE + 4}`, "ends with the newest message");
   assert.equal(history[0].content, "filler 5", "the oldest messages are the ones left out");
+});
+
+test("an unknown business slug is a 404, before anything is stored", async () => {
+  const input = { ...newInput(session()), businessSlug: "no-such-business" };
+  await assert.rejects(prepareChatTurn(input), (err: unknown) => err instanceof ChatHttpError && err.status === 404 && err.message === UNKNOWN_BUSINESS);
+  const { count } = await db().from("conversations").select("id", { count: "exact", head: true }).eq("session_id", input.sessionId);
+  assert.equal(count, 0);
+});
+
+test("the same browser session gets a separate conversation per business", async () => {
+  const slug = `itest-${randomUUID().slice(0, 8)}`;
+  const { error } = await db().from("businesses").insert({ slug, name: "Other Business", description: "", timezone: "America/Toronto" });
+  assert.ifError(error);
+  try {
+    const sessionId = session();
+    await run(newInput(sessionId, "question for the demo business"), replies("demo answer"));
+    await run({ ...newInput(sessionId, "question for the other business"), businessSlug: slug }, replies("other answer"));
+
+    const demo = await loadHistory(env().DEMO_BUSINESS_SLUG, sessionId);
+    const other = await loadHistory(slug, sessionId);
+    assert.deepEqual(demo.map((m) => m.content), ["question for the demo business", "demo answer"]);
+    assert.deepEqual(other.map((m) => m.content), ["question for the other business", "other answer"]);
+  } finally {
+    const { data: business } = await db().from("businesses").select("id").eq("slug", slug).single();
+    await db().from("conversations").delete().eq("business_id", business!.id);
+    await db().from("businesses").delete().eq("slug", slug);
+  }
 });

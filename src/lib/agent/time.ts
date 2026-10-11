@@ -52,10 +52,17 @@ export function formatLocal(at: Date, timeZone: string): string {
   return `${w.year}-${pad(w.month)}-${pad(w.day)}T${pad(w.hour)}:${pad(w.minute)}`;
 }
 
-// "Tuesday, October 20, 2026 at 3:00 PM"
-export function formatHuman(at: Date, timeZone: string): string {
+// "Tuesday, October 20, 2026 at 3:00 PM", or with the zone label
+// "... at 3:00 PM PDT". The label is for that date, so it is right across a
+// daylight-saving change (a November request reads PST).
+export function formatHuman(at: Date, timeZone: string, opts: { zoneLabel?: boolean } = {}): string {
   const date = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(at);
-  const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit" }).format(at);
+  const time = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+    ...(opts.zoneLabel ? { timeZoneName: "short" as const } : {}),
+  }).format(at);
   return `${date} at ${time}`;
 }
 

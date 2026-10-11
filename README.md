@@ -85,13 +85,21 @@ This gate filters noise. The system prompt remains the main defence: the model a
 
 ## Chat API
 
-`POST /api/chat` with `{ sessionId, clientMessageId, message }` streams the reply as NDJSON (one JSON event per line): `start`, `delta` (text), `tool` (started/finished), `action` (lead saved, consultation requested, failed), `sources`, `done`, or `error`. `GET /api/chat?sessionId=…` returns the conversation history.
+`POST /api/chat` with `{ businessSlug, sessionId, clientMessageId, message }` streams the reply as NDJSON (one JSON event per line): `start`, `delta` (text), `tool` (started/finished), `action` (lead saved, consultation requested, failed), `sources`, `done`, or `error`. `GET /api/chat?business=…&sessionId=…` returns the conversation history. An unknown business is a 404, and a browser session gets a separate conversation with each business.
 
 - **Memory:** the browser sends only the new message. The server loads the last 20 messages, what the customer told us (`customer_facts`) and what was already done in the conversation (contact saved, requests with their live status). A client can't inject fake history.
 - **Agent loop** (`src/lib/agent/loop.ts`): hand-written over Chat Completions. Model → tool calls (run in order) → results back → repeat, at most 5 tool rounds, then one call with tools off so it must answer. The whole turn has a 45 s deadline, and a tool is only started if its 15 s timeout fits in what's left.
 - **One turn at a time:** a second message while the first is still being answered gets 409, enforced in the database with a row lock on the conversation.
 - **Retries:** each message carries a `clientMessageId`. Resending it replays a stored reply (no model call), returns 409 while the original is still running, or re-runs it if the original failed or died.
 - **Failures:** if the model call fails, the customer gets a friendly message, the message stays saved and is marked failed, and one structured log line records the reason.
+
+## Customer chat
+
+`/b/[slug]` is the chat for one business (`/` opens the demo business until the home page lands). The name comes from the database, so the same page serves any business. Code: `src/components/chat/`.
+
+- **`thread.ts`**: the thread as plain data and every rule that changes it, unit-tested without a browser. A retryable error drops partially streamed text (the server never saves it), so the screen matches what a reload shows; only the **latest** failed message offers Retry (an older one's answer would land out of order); a repeated "details saved" card is shown once.
+- **`use-chat.ts`**: the network side. An anonymous session id in `localStorage` (one per business), a fresh `clientMessageId` per message (reused on retry, also after a reload), NDJSON streaming, 409 / offline / "AI unavailable" handling, and re-sending a message that failed while offline when the browser is back online.
+- **UI**: streaming markdown (tables, lists; raw HTML is ignored), a tool status line ("Searching {business} information…"), source chips with the passage in a popover (a bottom sheet on mobile), action cards built from tool results (never from the model's text), and a consultation card that always says *Pending*, with the time in the business's timezone. Composer: Enter sends, Shift+Enter adds a line, counter from 1,800 characters, limit 2,000. Works from 360 px wide, by keyboard, and in dark mode; screen readers hear each finished answer once instead of every streamed fragment.
 
 ## Agent: prompt and tools
 
@@ -114,7 +122,8 @@ The evaluation set is `data/sample-clinic/eval.json` (15 answerable questions wi
 
 ```
 src/
-  app/            Next.js routes: customer chat, admin, API route handlers
+  app/            Next.js routes: customer chat (/b/[slug]), admin, API route handlers
+  components/chat/  Customer chat UI (client components)
   lib/
     env.ts        Validated configuration (server-only)
     openai.ts     OpenAI client (server-only)

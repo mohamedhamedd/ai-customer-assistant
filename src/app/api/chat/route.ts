@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn, type ChatEvent } from "@/lib/chat/turn";
 
-// POST /api/chat   { sessionId, clientMessageId, message } -> NDJSON event stream
-// GET  /api/chat?sessionId=...                                -> { messages }
+// POST /api/chat   { businessSlug, sessionId, clientMessageId, message } -> NDJSON event stream
+// GET  /api/chat?business=...&sessionId=...                               -> { messages }
 //
 // Streaming format: one JSON object per line (NDJSON). EventSource can't send
 // a POST body, and NDJSON is trivial to parse from fetch().body.
@@ -10,7 +10,11 @@ import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn,
 export const MAX_MESSAGE_CHARS = 2000;
 const MAX_BODY_BYTES = 16 * 1024;
 
+// Same shape as the slugs in the businesses table; anything else can't match.
+const businessSlug = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Unknown business.").max(64, "Unknown business.");
+
 const chatRequest = z.object({
+  businessSlug,
   sessionId: z.uuid("sessionId must be a UUID"),
   clientMessageId: z.uuid("clientMessageId must be a UUID"),
   message: z
@@ -109,12 +113,15 @@ async function readJsonCapped(request: Request, maxBytes: number): Promise<JsonB
 }
 
 export async function GET(request: Request) {
-  const sessionId = new URL(request.url).searchParams.get("sessionId") ?? "";
+  const params = new URL(request.url).searchParams;
+  const sessionId = params.get("sessionId") ?? "";
+  const slug = businessSlug.safeParse(params.get("business") ?? "");
+  if (!slug.success) return Response.json({ error: "Unknown business." }, { status: 400 });
   if (!z.uuid().safeParse(sessionId).success) {
     return Response.json({ error: "sessionId must be a UUID" }, { status: 400 });
   }
   try {
-    return Response.json({ messages: await loadHistory(sessionId) }, { headers: { "cache-control": "no-store" } });
+    return Response.json({ messages: await loadHistory(slug.data, sessionId) }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });
     console.error("[chat] history failed", err);

@@ -1,26 +1,78 @@
 @import "tailwindcss";
 
+/* Design tokens: docs/DESIGN.md. The accent is the business's brand colour
+   (teal is the demo value); everything else is neutral. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-muted: #f1f3f6;
+  --border: #e3e6eb;
+  --text: #111827;
+  --text-muted: #6b7280;
+  --accent: #0f766e;
+  --accent-contrast: #ffffff;
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
+  --info: #1d4ed8;
+  --shadow-level-2: 0 8px 24px -6px rgba(17, 24, 39, 0.12);
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg: #0b0d10;
+    --surface: #14171c;
+    --surface-muted: #1c2027;
+    --border: #2a2f37;
+    --text: #f3f4f6;
+    --text-muted: #9ca3af;
+    --accent: #2dd4bf;
+    --accent-contrast: #042f2e;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --info: #60a5fa;
+    --shadow-level-2: 0 8px 24px -6px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
   }
 }
 
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --shadow-level-2: var(--shadow-level-2);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Thinking dots and the streaming caret. Off for reduced motion. */
+@keyframes dot-bounce {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+@keyframes caret-blink {
+  50% { opacity: 0; }
+}
+.dot { animation: dot-bounce 1.2s infinite ease-in-out; }
+.dot:nth-child(2) { animation-delay: 0.15s; }
+.dot:nth-child(3) { animation-delay: 0.3s; }
+.caret { animation: caret-blink 1s steps(1) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot, .caret, .animate-spin { animation: none; }
 }

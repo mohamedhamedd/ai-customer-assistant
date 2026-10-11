@@ -1,9 +1,12 @@
-// Placeholder until the customer chat lands (PR-08).
-export default function Home() {
-  return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-      <h1 className="text-2xl font-semibold">AI Customer Assistant</h1>
-      <p className="text-zinc-600 dark:text-zinc-400">Chat and voice assistant: coming soon.</p>
-    </main>
-  );
+import { redirect } from "next/navigation";
+import { connection } from "next/server";
+import { env } from "@/lib/env";
+
+// Until the home page lists every business (PR-15), / opens the demo one.
+// Nothing to show while it resolves, so blocking is fine (no Suspense shell).
+export const instant = false;
+
+export default async function Home() {
+  await connection(); // read the slug at request time, not at build
+  redirect(`/b/${env().DEMO_BUSINESS_SLUG}`);
 }

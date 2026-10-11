@@ -266,7 +266,8 @@ const createConsultationRequest = defineTool({
         already_requested: !row.created,
         // On a repeat, the service as first requested (the wording may differ).
         service: row.service ?? args.service,
-        preferred_time: formatHuman(when.at, ctx.timeZone),
+        // With the zone label: the action card shows this string as is.
+        preferred_time: formatHuman(when.at, ctx.timeZone, { zoneLabel: true }),
         preferred_datetime: formatLocal(when.at, ctx.timeZone),
         note: "This is a request. The team will contact the customer to confirm.",
       },
