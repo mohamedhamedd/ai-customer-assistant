@@ -49,16 +49,20 @@ Don't show features that don't exist, such as insurance checks, prices or staff 
 
 ```
 Customer side
-└── /                      Chat (text + voice) for the business
+├── /                      Home: the businesses as cards (local demo, PR-15)
+└── /b/[slug]              Chat (text + voice) for one business
 
-Admin side (/admin)
+Admin side (/admin), scoped to the business picked in the sidebar switcher
+├── New business           Create a business (PR-15, US-10.2)
 ├── Overview               KPIs + recent activity
 ├── Knowledge base         Upload, document list, document detail (sections)
 ├── Leads                  Table + lead detail drawer
 ├── Consultations          Table with status filter + status change
 ├── Conversations          List + transcript with AI audit trail
-└── Settings               Business profile (name, description, timezone)
+└── Settings               Business profile (name, slug, description, timezone, assistant guidelines)
 ```
+
+Each chat serves exactly one business (decision D-14). In production, customers reach `/b/[slug]` from the business's own website, so the home page is a demo convenience, not a customer flow.
 
 ---
 
@@ -102,6 +106,37 @@ Clean, warm, modern SaaS, neutral enough for any industry. The accent colour and
 
 ## 5. Customer Assistant — screens & components
 
+### 5.0 Home page (`/`, US-10.2, PR-15)
+
+A simple launcher that lists every business for the local demo. Nothing on it is industry-specific.
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ [✦] AI Customer Assistant                      Admin ↗    │  ← product header
+├───────────────────────────────────────────────────────────┤
+│  Choose a business                                        │
+│  Each business has its own assistant, trained only on     │
+│  its own documents.                                       │
+│                                                           │
+│  ┌──────────────────────┐  ┌──────────────────────┐       │
+│  │ (LD) Lakeside Dental │  │ (PF) Peak Fitness    │       │
+│  │ Family & cosmetic    │  │ Gym, classes and     │       │
+│  │ dentistry in …       │  │ personal training …  │       │
+│  │ 6 documents          │  │ 4 documents          │       │
+│  │          Open chat → │  │          Open chat → │       │
+│  └──────────────────────┘  └──────────────────────┘       │
+└───────────────────────────────────────────────────────────┘
+```
+
+- **Product header:** this is the only page that shows the product's own name rather than a business's. It has an "Admin ↗" link on the right, which is fine here because the page is for the demo operator, not for customers.
+- **Business card:** an initials avatar, the business name (16–18 px semibold), its description clamped to 2 lines, a muted meta line ("6 documents"), and an "Open chat →" link. The whole card is clickable and keyboard-focusable. It is a grid of 2–3 columns on desktop and 1 column on mobile.
+- **Visual identity:** every business uses the same product accent. The data model has no per-business colour or logo, so the initials avatar is the only thing that tells cards apart.
+- **States:**
+  - **Loading:** skeleton cards.
+  - **Empty:** "No businesses yet", with a "Create one in the admin" button.
+  - **Business without documents:** the card shows "No documents yet" in the muted colour, and opening it still works because the assistant says it has no information.
+- **Never on the home page:** marketing hero sections, pricing, sign-up, or industry imagery.
+
 ### 5.1 Layout
 
 **Desktop (≥ 1024 px):** a centred chat column, max width ~760 px, full height. A slim header across the top.
@@ -131,7 +166,7 @@ Clean, warm, modern SaaS, neutral enough for any industry. The accent colour and
 
 ### 5.2 Header
 - Business logo (or an initials avatar), business name, an "AI assistant" subtitle.
-- Overflow menu (⋯): "New conversation" (US-1.5), "About this assistant / privacy".
+- Overflow menu (⋯): "New conversation" (US-1.5), "About this assistant / privacy", and "All businesses" (back to the home page; demo only).
 - Optional status dot: Online / Reconnecting.
 - **One row, about 56–64 px tall. Nothing else.** No navigation tabs (Services, Pricing, About…). The business's own website does that. No link to the Admin Console: customers never see the back office.
 
@@ -226,7 +261,7 @@ The voice panel is **compact**: it sits where the composer was, at most about 28
 ## 6. Admin Console — screens & components
 
 ### 6.1 Shell
-- **Left sidebar** (collapsible to icons at < 1280 px): business name at the top; nav items **Overview, Knowledge base, Leads, Consultations, Conversations, Settings**; a pending-count badge on Consultations.
+- **Left sidebar** (collapsible to icons at < 1280 px): a **business switcher** at the top (initials avatar + name + chevron). It opens a menu listing every business and a "+ New business" item, and every admin page shows data for the selected business only; nav items **Overview, Knowledge base, Leads, Consultations, Conversations, Settings**; a pending-count badge on Consultations.
 - **Top bar:** page title, primary page action on the right (e.g. "Upload documents"), and an "Open chat ↗" link to the customer side.
 - A visible **"Demo mode — no login"** label in the sidebar footer (assumption A1).
 - Desktop-first (≥ 1024 px). Tablet usable. Mobile: tables become stacked cards (nice to have).
@@ -270,9 +305,20 @@ The voice panel is **compact**: it sits where the composer was, at most about 28
   - A toggle: "Show AI activity" (on by default).
 
 ### 6.7 Settings — Business profile (US-10.1)
-- Form: Business name, short description (textarea with a counter), timezone (searchable select), accent colour (Could: a colour picker with a contrast warning), logo (Could).
-- Live preview of the chat header with the chosen name and accent (nice to have).
-- Save button with loading → success toast; inline field validation errors.
+- Form for the selected business:
+  - **Business name** (required, max 100).
+  - **Slug** (lowercase letters, digits and dashes; unique). Shows the chat URL `/b/{slug}` underneath, with a copy button.
+  - **Short description** (textarea, max 500, with a counter).
+  - **Timezone** (searchable select).
+  - **Assistant guidelines** (textarea, monospace optional). These are business-specific rules, e.g. "Never give a diagnosis; for emergencies tell the customer to call 911." Helper text: "Added to the assistant's instructions for this business only."
+- Live preview of the chat header with the chosen name (nice to have).
+- Save button with loading → success toast; inline field validation errors (e.g. "This slug is already used").
+- Changes apply to the next customer message without a redeploy.
+
+### 6.8 New business (US-10.2, PR-15)
+- Reached from "+ New business" in the sidebar switcher. It is a page (or a large dialog) with the same fields as Settings. The slug is suggested from the name as you type.
+- On create: switch to the new business and land on **Knowledge base** with its empty state ("Upload your first document…"). A toast reads "Business created. Upload its documents so the assistant can answer."
+- Errors: duplicate slug, a required field missing. The form keeps what was typed.
 
 ---
 
@@ -332,8 +378,12 @@ The voice panel is **compact**: it sits where the composer was, at most about 28
 6. Leads table + lead drawer; Consultations table with status change.
 7. Conversations transcript with the AI audit trail.
 
+**Priority 2b (PR-15)**
+8. Home page (§5.0): desktop + mobile, with loading and empty states.
+9. Admin business switcher, New business (§6.8) and Settings (§6.7).
+
 **Priority 3**
-8. Overview dashboard, Settings, error/edge states from §5.7, white-label accent variants.
+10. Overview dashboard, error/edge states from §5.7, white-label accent variants.
 
 **Format:** Figma, with components using auto-layout and variants for states (e.g. `Message / type=assistant, channel=voice, state=streaming`). Please annotate spacing and the token used per element.
 
@@ -341,6 +391,7 @@ The voice panel is **compact**: it sits where the composer was, at most about 28
 
 ## 11. Out of scope for design (this version)
 - Admin login / user management screens.
+- Tenant sign-up, per-business admin access, and per-business colours or logos (not in the data model; see D-14).
 - Calendar or availability pickers (dates come from conversation).
 - Embeddable widget launcher bubble for third-party sites (possible future: same chat in a 400×640 floating panel).
 - Payments, multi-language.

@@ -77,6 +77,11 @@ Mostly flat. Hierarchy comes from borders and surface contrast.
 - **Action card (failed):** a pale danger tint, an alert-triangle icon, a one-line reason and a "Try again" button.
 - **Composer:** a surface card with a 1 px border and 16 px radius, containing an auto-growing textarea (16 px). It has a ghost mic button and a round accent send button. Below it, a 12 px text-muted disclaimer line.
 - **Voice panel:** replaces the composer and is at most about 280 px tall. It holds an 88 px accent orb with a soft glow, a state label below ("Listening…" or "Speaking…"), and two buttons: Mute (secondary) and End (danger outline). A "Type instead" text link sits underneath.
+- **Business card (home page):**
+  - A surface card with a 1 px border, 16 px radius and 24 px padding. On hover it shows a Level 2 shadow and the border darkens slightly.
+  - Inside: a 44 px round initials avatar in the accent colour, the business name in 18 px semibold, and a 14 px text-muted description clamped to 2 lines.
+  - At the bottom: a 12 px text-muted meta line ("6 documents") on the left and an accent "Open chat →" link on the right.
+  - The "Add a business" card is the same size, with a dashed border, a plus icon and text-muted copy.
 - **Buttons:** primary (accent fill), secondary (surface with border), ghost and danger, all 8 px radius and 40 px tall (44 px on touch).
 - **Badges:** a pill with a status tint and status-colour text, 12 px medium weight.
 
@@ -87,6 +92,7 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Screen | Image |
 |---|---|
 | Customer Assistant — Chat | [`design/customer-chat.png`](./design/customer-chat.png) |
+| Home — business launcher (`/`) | [`design/home.png`](./design/home.png) |
 | Customer Assistant — Voice mode (speaking) | [`design/customer-voice.png`](./design/customer-voice.png) |
 
 Still to design (brief §10, Priority 1): mobile layout, source preview popover, the remaining voice states, and the failed/error cards.
