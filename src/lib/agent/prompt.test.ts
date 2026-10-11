@@ -8,7 +8,7 @@ const now = new Date("2026-10-11T23:30:00Z"); // Sunday Oct 11, 4:30 PM PDT
 test("names the business, the local time and a calendar to resolve relative dates", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.ok(p.includes("virtual assistant for Lakeside Dental Clinic"));
-  assert.ok(p.includes("Sunday, October 11, 2026 at 4:30 PM (America/Los_Angeles)"));
+  assert.ok(p.includes("Sunday, October 11, 2026 at 4:30 PM PDT (America/Los_Angeles)"));
   assert.ok(p.includes("- Tuesday 2026-10-13"));
   assert.ok(p.includes("- Tuesday 2026-10-20"));
 });

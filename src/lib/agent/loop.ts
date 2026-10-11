@@ -135,7 +135,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
         toolCalls.push({ name: call.function.name, ok: outcome.ok });
         sources.push(...outcome.sources);
         const action = toAction(outcome);
-        if (action) {
+        if (action && !repeatsAction(actions, action)) {
           actions.push(action);
           input.emit({ type: "action", action });
         }
@@ -197,6 +197,15 @@ async function streamStep(
     .sort(([a], [b]) => a - b)
     .map(([, c]) => ({ id: c.id, type: "function" as const, function: { name: c.name, arguments: c.args } }));
   return { content, toolCalls };
+}
+
+// The model sometimes calls save_lead again with the same details. The save
+// is harmless (it matches the same lead), but a second "details saved"
+// action would be stored, shown and audited as if something new happened.
+function repeatsAction(actions: Action[], action: Action): boolean {
+  if (action.kind !== "lead_saved") return false;
+  const details = JSON.stringify(action.details);
+  return actions.some((a) => a.kind === "lead_saved" && JSON.stringify(a.details) === details);
 }
 
 // Cards shown in the thread come from tool results, never from model text.

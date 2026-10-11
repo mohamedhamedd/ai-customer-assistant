@@ -1,15 +1,30 @@
 "use client";
 
 import { ArrowUp, Mic } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { COUNTER_FROM, MAX_MESSAGE_CHARS } from "./thread";
 
 const MAX_HEIGHT_PX = 140; // about 5 lines, then it scrolls
 
 // Text input (US-1.2, US-1.3). Enter sends, Shift+Enter adds a line. Sending
 // is blocked while a reply is streaming, so there's one turn at a time.
-export function Composer({ busy, businessName, onSend }: { busy: boolean; businessName: string; onSend: (text: string) => boolean }) {
-  const [text, setText] = useState("");
+// The text lives in the parent, which can prefill it ("Try again" on a failed
+// action card). The textarea's id is COMPOSER_ID, for focusing it.
+export const COMPOSER_ID = "composer";
+
+export function Composer({
+  busy,
+  businessName,
+  text,
+  setText,
+  onSend,
+}: {
+  busy: boolean;
+  businessName: string;
+  text: string;
+  setText: (text: string) => void;
+  onSend: (text: string) => boolean;
+}) {
   const area = useRef<HTMLTextAreaElement>(null);
   const length = text.length;
   const empty = text.trim().length === 0;
@@ -41,11 +56,11 @@ export function Composer({ busy, businessName, onSend }: { busy: boolean; busine
         }`}
       >
         <div className="flex min-w-0 flex-1 flex-col py-1">
-          <label htmlFor="composer" className="sr-only">
+          <label htmlFor={COMPOSER_ID} className="sr-only">
             Message {businessName}
           </label>
           <textarea
-            id="composer"
+            id={COMPOSER_ID}
             ref={area}
             rows={1}
             value={text}

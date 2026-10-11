@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BUSINESS_SLUG, MAX_MESSAGE_CHARS, MAX_SLUG_CHARS } from "@/lib/chat/limits";
 import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn, type ChatEvent } from "@/lib/chat/turn";
 
 // POST /api/chat   { businessSlug, sessionId, clientMessageId, message } -> NDJSON event stream
@@ -7,11 +8,10 @@ import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn,
 // Streaming format: one JSON object per line (NDJSON). EventSource can't send
 // a POST body, and NDJSON is trivial to parse from fetch().body.
 
-export const MAX_MESSAGE_CHARS = 2000;
 const MAX_BODY_BYTES = 16 * 1024;
 
 // Same shape as the slugs in the businesses table; anything else can't match.
-const businessSlug = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Unknown business.").max(64, "Unknown business.");
+const businessSlug = z.string().max(MAX_SLUG_CHARS, "Unknown business.").regex(BUSINESS_SLUG, "Unknown business.");
 
 const chatRequest = z.object({
   businessSlug,

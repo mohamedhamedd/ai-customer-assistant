@@ -7,12 +7,19 @@ import { findBusiness } from "@/lib/chat/turn";
 
 // /b/[slug]: the chat for one business (D-14). The business's name comes from
 // the database, so the same page serves any business.
+//
+// An unknown slug renders the not-found page with status 200: the static
+// shell has already streamed when the lookup runs, and Next adds a noindex
+// tag. A real 404 would need a database lookup in Proxy on every page load;
+// the chat API itself returns a true 404.
 
-// The lookup is per request (it reads the database through a short in-memory
-// cache): connection() tells Next not to prerender it.
+async function businessFor(params: PageProps<"/b/[slug]">["params"]) {
+  await connection(); // per request, not prerendered
+  return findBusiness((await params).slug);
+}
+
 export async function generateMetadata({ params }: PageProps<"/b/[slug]">): Promise<Metadata> {
-  await connection();
-  const business = await findBusiness((await params).slug);
+  const business = await businessFor(params);
   if (!business) return { title: "Assistant not found" };
   return { title: `${business.name} · AI assistant`, description: business.description };
 }
@@ -27,8 +34,7 @@ export default function Page({ params }: PageProps<"/b/[slug]">) {
 }
 
 async function BusinessChat({ params }: Pick<PageProps<"/b/[slug]">, "params">) {
-  await connection();
-  const business = await findBusiness((await params).slug);
+  const business = await businessFor(params);
   if (!business) notFound();
   // Only what the browser needs: no ids or settings.
   return <Chat business={{ slug: business.slug, name: business.name }} />;

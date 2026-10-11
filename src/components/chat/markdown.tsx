@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -38,10 +39,13 @@ const components: Components = {
   ),
 };
 
-export function Markdown({ text }: { text: string }) {
+const plugins = [remarkGfm];
+
+// Parsing is the expensive part; re-parse only when the text changes.
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+    <ReactMarkdown remarkPlugins={plugins} components={components}>
       {text}
     </ReactMarkdown>
   );
-}
+});

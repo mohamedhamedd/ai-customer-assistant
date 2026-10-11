@@ -38,13 +38,12 @@ test("bad formats and impossible times are rejected", () => {
 test("formatting round-trips", () => {
   const at = new Date("2026-10-20T22:00:00Z");
   assert.equal(formatLocal(at, LA), "2026-10-20T15:00");
-  assert.equal(formatHuman(at, LA), "Tuesday, October 20, 2026 at 3:00 PM");
+  assert.equal(formatHuman(at, LA), "Tuesday, October 20, 2026 at 3:00 PM PDT");
 });
 
 test("the zone label belongs to the date shown, not to today", () => {
-  assert.equal(formatHuman(new Date("2026-10-20T22:00:00Z"), LA, { zoneLabel: true }), "Tuesday, October 20, 2026 at 3:00 PM PDT");
   // After the clock change (Nov 1), the same wall-clock time is PST.
-  assert.equal(formatHuman(new Date("2026-11-10T23:00:00Z"), LA, { zoneLabel: true }), "Tuesday, November 10, 2026 at 3:00 PM PST");
+  assert.equal(formatHuman(new Date("2026-11-10T23:00:00Z"), LA), "Tuesday, November 10, 2026 at 3:00 PM PST");
 });
 
 test("upcoming days: today, tomorrow, and no duplicate date across the clock change", () => {

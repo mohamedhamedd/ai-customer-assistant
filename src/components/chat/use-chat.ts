@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { readNdjson } from "./ndjson";
 import {
   applyEvent,
+  isAnsweredElsewhere,
   isBusy,
   newTurn,
   retryTurn,
   sendFailed,
+  stopWaiting,
   streamBroke,
   turnsFromHistory,
   type ChatEvent,
@@ -63,6 +65,12 @@ function subscribeOnline(onChange: () => void) {
   };
 }
 
+// Polling for an answer that is being produced elsewhere (reload mid-answer,
+// another tab). Past the server's 60 s in-progress window, stop and offer a
+// retry, which the server then re-runs.
+const POLL_MS = 3000;
+const GIVE_UP_MS = 65_000;
+
 export type HistoryState = "loading" | "ready" | "failed";
 
 export function useChat(businessSlug: string) {
@@ -85,16 +93,23 @@ export function useChat(businessSlug: string) {
     setTurns((ts) => ts.map((t) => (t.key === key ? change(t) : t)));
   }, []);
 
+  // Bumped by every load, send and new conversation. A history response is
+  // applied only if nothing happened since it was requested, so a late
+  // response can't replace a message the customer just sent.
+  const generation = useRef(0);
+
   const loadHistory = useCallback(async () => {
+    const gen = ++generation.current;
     try {
       const url = `/api/chat?business=${encodeURIComponent(businessSlug)}&sessionId=${sessionId.current}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`history ${res.status}`);
       const body = (await res.json()) as { messages: HistoryMessage[] };
+      if (gen !== generation.current) return;
       setTurns(turnsFromHistory(body.messages));
       setHistory("ready");
     } catch {
-      setHistory("failed");
+      if (gen === generation.current) setHistory("failed");
     }
   }, [businessSlug]);
 
@@ -154,7 +169,10 @@ export function useChat(businessSlug: string) {
   const send = useCallback(
     (text: string) => {
       const message = text.trim();
-      if (!message || isBusy(turnsRef.current) || !sessionId.current) return false;
+      // Not before history is loaded: the new message would land before (or
+      // be replaced by) the conversation it belongs to.
+      if (!message || history !== "ready" || isBusy(turnsRef.current) || !sessionId.current) return false;
+      generation.current++;
       // A fresh clientMessageId per message; a retry reuses it.
       const turn = newTurn(uuid(), message);
       turnsRef.current = [...turnsRef.current, turn];
@@ -163,12 +181,13 @@ export function useChat(businessSlug: string) {
       void run(turn);
       return true;
     },
-    [run],
+    [history, run],
   );
 
   const retry = useCallback(() => {
     const last = turnsRef.current.at(-1);
     if (!last?.clientMessageId) return;
+    generation.current++;
     const again = retryTurn(last);
     update(last.key, () => again);
     void run(again);
@@ -176,11 +195,27 @@ export function useChat(businessSlug: string) {
 
   const newConversation = useCallback(() => {
     if (isBusy(turnsRef.current)) return;
+    generation.current++;
     sessionId.current = storeSessionId(businessSlug, uuid());
     setTurns([]);
     setStartedFresh(true);
     setHistory("ready");
   }, [businessSlug]);
+
+  // An answer being produced elsewhere: refresh history until it lands.
+  const answeredElsewhere = isAnsweredElsewhere(turns);
+  useEffect(() => {
+    if (!answeredElsewhere) return;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - started < GIVE_UP_MS) return void loadHistory();
+      clearInterval(timer);
+      generation.current++; // a refresh still in flight must not undo this
+      const last = turnsRef.current.at(-1);
+      if (last) update(last.key, stopWaiting);
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [answeredElsewhere, loadHistory, update]);
 
   // Send what failed while offline once we're back.
   useEffect(() => {

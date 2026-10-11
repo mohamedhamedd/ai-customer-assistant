@@ -1,9 +1,9 @@
 "use client";
 
 import { AlertCircle, ArrowDown, Loader2, MoreHorizontal, RefreshCw, Sparkles, WifiOff } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActionCard } from "./action-card";
-import { Composer } from "./composer";
+import { Composer, COMPOSER_ID } from "./composer";
 import { Markdown } from "./markdown";
 import { Sources } from "./sources";
 import { canRetry, toolStatus, visibleActions, type Action, type Turn } from "./thread";
@@ -28,7 +28,7 @@ const initials = (name: string) =>
 
 export function Chat({ business }: { business: ChatBusiness }) {
   const chat = useChat(business.slug);
-  const actions = visibleActions(chat.turns);
+  const actions = useMemo(() => visibleActions(chat.turns), [chat.turns]);
   const empty = chat.history === "ready" && chat.turns.length === 0;
 
   // Follow the reply while the reader is at the bottom; if they scrolled up
@@ -53,10 +53,23 @@ export function Chat({ business }: { business: ChatBusiness }) {
     setShowJump(false);
   };
   // A message the customer sends always scrolls into view.
-  const send = (text: string) => {
-    atBottom.current = true;
-    return chat.send(text);
-  };
+  const chatSend = chat.send;
+  const send = useCallback(
+    (text: string) => {
+      atBottom.current = true;
+      return chatSend(text);
+    },
+    [chatSend],
+  );
+
+  // The composer's text lives here so "Try again" on a failed action card
+  // can prefill it. The customer reviews and sends it themselves: the
+  // transcript never holds words they didn't send.
+  const [draft, setDraft] = useState("");
+  const tryAgain = useCallback(() => {
+    setDraft("Please try saving that again.");
+    document.getElementById(COMPOSER_ID)?.focus();
+  }, []);
 
   return (
     <div className="flex h-dvh flex-col bg-bg">
@@ -99,7 +112,7 @@ export function Chat({ business }: { business: ChatBusiness }) {
                 businessName={business.name}
                 retryable={canRetry(chat.turns, i)}
                 onRetry={chat.retry}
-                onTryAgain={i === chat.turns.length - 1 && !chat.busy ? () => send("Please try that again.") : undefined}
+                onTryAgain={i === chat.turns.length - 1 && !chat.busy ? tryAgain : undefined}
               />
             ))}
           </div>
@@ -122,7 +135,13 @@ export function Chat({ business }: { business: ChatBusiness }) {
 
       <footer className="shrink-0 px-4 pb-4 pt-2">
         <div className="mx-auto max-w-[760px]">
-          <Composer busy={chat.busy || chat.history === "loading"} businessName={business.name} onSend={send} />
+          <Composer
+            busy={chat.busy || chat.history !== "ready"}
+            businessName={business.name}
+            text={draft}
+            setText={setDraft}
+            onSend={send}
+          />
         </div>
       </footer>
     </div>
@@ -223,7 +242,21 @@ function Welcome({ business, showSuggestions, onPick }: { business: ChatBusiness
   );
 }
 
-function TurnView({
+// Memoized: while a reply streams, only its own turn re-renders, instead of
+// re-parsing the markdown of every message in the thread on each fragment.
+const TurnView = memo(
+  TurnViewInner,
+  (a, b) =>
+    a.turn === b.turn &&
+    a.retryable === b.retryable &&
+    a.businessName === b.businessName &&
+    a.onRetry === b.onRetry &&
+    a.onTryAgain === b.onTryAgain &&
+    a.actions.length === b.actions.length &&
+    a.actions.every((x, i) => x === b.actions[i]),
+);
+
+function TurnViewInner({
   turn,
   actions,
   businessName,

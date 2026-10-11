@@ -8,6 +8,7 @@ import type { ChatEvent } from "@/lib/chat/turn";
 import type { Source } from "@/lib/rag/retrieve";
 
 export type { Action, ChatEvent, Source };
+export { MAX_MESSAGE_CHARS } from "@/lib/chat/limits";
 
 export interface ReplyError {
   message: string;
@@ -36,6 +37,10 @@ export interface Turn {
   sendState: "sending" | "sent" | "notSent";
   sendError?: ReplyError;
   reply: Reply | null;
+  // Loaded from history rather than sent from this page. A restored turn
+  // that is "waiting" is being answered elsewhere (the page was reloaded
+  // mid-answer, or another tab): the hook polls history until it lands.
+  restored?: boolean;
 }
 
 const emptyReply = (): Reply => ({ phase: "waiting", text: "", sources: [], actions: [], activeTool: null });
@@ -69,17 +74,19 @@ export function applyEvent(turn: Turn, event: ChatEvent): Turn {
   }
 }
 
-// A retryable error means nothing was saved: the server stores no partial
-// text, so drop it and show the error, and the screen matches a reload. A
-// non-retryable one (REPLY_NOT_SAVED) comes after the full answer was shown,
-// so the text stays with a note under it.
+// A retryable error means the reply wasn't saved: the server stores no
+// partial text, so drop it (and its sources) and show the error. Actions stay:
+// a lead or request saved before the failure really exists, and hiding it
+// would invite the customer to give their details again. A non-retryable
+// error (REPLY_NOT_SAVED) comes after the full answer was shown, so the text
+// stays with a note under it.
 function replyError(reply: Reply, error: ReplyError): Reply {
   return {
     ...reply,
     phase: "error",
     activeTool: null,
     error: { message: error.message, retryable: error.retryable },
-    ...(error.retryable ? { text: "", sources: [], actions: [] } : {}),
+    ...(error.retryable ? { text: "", sources: [] } : {}),
   };
 }
 
@@ -138,6 +145,7 @@ export function turnsFromHistory(messages: HistoryMessage[]): Turn[] {
         sendState: "sent",
         // Retryable: the server re-runs a failed message with the same id.
         reply: m.replyFailed ? { ...emptyReply(), phase: "error", error: { message: NOT_ANSWERED, retryable: true } } : null,
+        restored: true,
       });
       continue;
     }
@@ -152,36 +160,47 @@ export function turnsFromHistory(messages: HistoryMessage[]): Turn[] {
     // An assistant message without a question before it (the page cut it
     // off) gets a turn of its own with no user bubble.
     if (last && last.reply?.phase !== "done") last.reply = reply;
-    else turns.push({ key: `m${m.id}`, clientMessageId: null, userText: "", sendState: "sent", reply });
+    else turns.push({ key: `m${m.id}`, clientMessageId: null, userText: "", sendState: "sent", reply, restored: true });
   }
+  // The last question with no reply and no failure is still being answered
+  // (one turn at a time, so only the last can be). Older unanswered ones were
+  // abandoned and stay without a reply.
+  const last = turns.at(-1);
+  if (last && last.userText && !last.reply) last.reply = emptyReply();
   return turns;
 }
+
+// Waiting on an answer from elsewhere for too long: the server's in-progress
+// window has passed, so a retry with the same id re-runs it.
+export function stopWaiting(turn: Turn): Turn {
+  if (turn.reply?.phase !== "waiting") return turn;
+  return { ...turn, reply: { ...emptyReply(), phase: "error", error: { message: NOT_ANSWERED, retryable: true } } };
+}
+
+export const isAnsweredElsewhere = (turns: Turn[]) => {
+  const last = turns.at(-1);
+  return !!last?.restored && last.reply?.phase === "waiting";
+};
 
 // ---------------------------------------------------------------------------
 // What to show
 // ---------------------------------------------------------------------------
 
-// The model sometimes calls save_lead again with the same details (in the
-// same turn or a later one). Each save is real, but repeating the card is
-// noise: show one card per turn, and none when the details match the card
-// already on screen.
+// The server already drops a repeated save within one turn (loop.ts). Across
+// turns, the model sometimes saves the same details again: each save is real
+// and stored, but a second identical card is noise, so a "details saved" card
+// is only shown when the details differ from the last one shown.
 export function visibleActions(turns: Turn[]): Action[][] {
   let lastLead = "";
-  return turns.map((turn) => {
-    const actions = turn.reply?.actions ?? [];
-    const leads = actions.filter((a) => a.kind === "lead_saved");
-    const latestLead = leads.at(-1);
-    const shown: Action[] = [];
-    for (const action of actions) {
-      if (action.kind !== "lead_saved") shown.push(action);
-      else if (action === latestLead) {
-        const key = JSON.stringify(action.details);
-        if (key !== lastLead) shown.push(action);
-        lastLead = key;
-      }
-    }
-    return shown;
-  });
+  return turns.map((turn) =>
+    (turn.reply?.actions ?? []).filter((action) => {
+      if (action.kind !== "lead_saved") return true;
+      const key = JSON.stringify(action.details);
+      if (key === lastLead) return false;
+      lastLead = key;
+      return true;
+    }),
+  );
 }
 
 // One chip per document section, in retrieval order.
@@ -222,6 +241,4 @@ export function toolStatus(tool: string, businessName: string): string {
   }
 }
 
-// Same limit as the API (src/app/api/chat/route.ts).
-export const MAX_MESSAGE_CHARS = 2000;
 export const COUNTER_FROM = 1800;

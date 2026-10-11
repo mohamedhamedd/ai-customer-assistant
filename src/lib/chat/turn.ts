@@ -7,6 +7,7 @@ import { executeTool } from "@/lib/agent/execute";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
 import { buildSystemPrompt, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { formatHuman } from "@/lib/agent/time";
+import { isBusinessSlug } from "@/lib/chat/limits";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 
@@ -55,10 +56,15 @@ export interface Business {
 // Each chat page serves one business, picked by the slug in its URL
 // (/b/[slug], decision D-14). Cached briefly per slug: every message needs it,
 // and a business's profile rarely changes.
+//
+// Only businesses that exist are cached, so the cache is bounded by the
+// number of businesses: a stream of made-up slugs from the internet can't
+// grow it, and a business created a moment ago is found at once.
 const BUSINESS_TTL_MS = 60_000;
-const businessCache = new Map<string, { value: Business | null; expires: number }>();
+const businessCache = new Map<string, { value: Business; expires: number }>();
 
 export async function findBusiness(slug: string): Promise<Business | null> {
+  if (!isBusinessSlug(slug)) return null;
   const hit = businessCache.get(slug);
   if (hit && hit.expires > Date.now()) return hit.value;
   const { data, error } = await db()
@@ -67,7 +73,8 @@ export async function findBusiness(slug: string): Promise<Business | null> {
     .eq("slug", slug)
     .maybeSingle();
   if (error) throw new Error(`Loading business failed: ${error.message}`);
-  businessCache.set(slug, { value: data, expires: Date.now() + BUSINESS_TTL_MS });
+  if (data) businessCache.set(slug, { value: data, expires: Date.now() + BUSINESS_TTL_MS });
+  else businessCache.delete(slug);
   return data;
 }
 

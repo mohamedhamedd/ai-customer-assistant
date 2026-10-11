@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   applyEvent,
   canRetry,
+  isAnsweredElsewhere,
+  isBusy,
+  stopWaiting,
   CONNECTION_LOST,
   maskEmail,
   maskPhone,
@@ -54,7 +57,7 @@ test("the tool status line shows only while a tool runs", () => {
   assert.equal(finished.reply?.activeTool, null);
 });
 
-test("a retryable error drops the partial text: the server didn't save it", () => {
+test("a retryable error drops the partial text (not saved) but keeps actions (they happened)", () => {
   const turn = play(newTurn("c1", "Hi"), [
     { type: "start", userMessageId: 1 },
     { type: "action", action: request },
@@ -63,7 +66,7 @@ test("a retryable error drops the partial text: the server didn't save it", () =
   ]);
   assert.equal(turn.reply?.phase, "error");
   assert.equal(turn.reply?.text, "");
-  assert.deepEqual(turn.reply?.actions, []);
+  assert.deepEqual(turn.reply?.actions, [request]);
   assert.equal(turn.reply?.error?.retryable, true);
 });
 
@@ -126,6 +129,25 @@ test("history: a failed message answered by a later re-run shows the answer", ()
   assert.equal(turns.length, 1);
   assert.equal(turns[0].reply?.phase, "done");
   assert.equal(turns[0].reply?.text, "a");
+});
+
+test("reloading mid-answer shows the last question as still being answered", () => {
+  const turns = turnsFromHistory([
+    { id: 1, role: "user", content: "old, abandoned", sources: [], actions: [], replyFailed: false, clientMessageId: "c1" },
+    { id: 2, role: "user", content: "q", sources: [], actions: [], replyFailed: false, clientMessageId: "c2" },
+  ]);
+  assert.equal(turns[0].reply, null, "only the last can be in progress");
+  assert.equal(turns[1].reply?.phase, "waiting");
+  assert.equal(isAnsweredElsewhere(turns), true);
+  assert.equal(isBusy(turns), true, "the composer waits, as the server would answer 409");
+
+  const gaveUp = stopWaiting(turns[1]);
+  assert.equal(gaveUp.reply?.error?.message, NOT_ANSWERED);
+  assert.equal(canRetry([turns[0], gaveUp], 1), true);
+});
+
+test("a message sent from this page isn't treated as answered elsewhere", () => {
+  assert.equal(isAnsweredElsewhere([newTurn("c1", "q")]), false);
 });
 
 test("a repeated save_lead shows one card, in the same turn or a later one", () => {

@@ -11,6 +11,7 @@ import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
   ChatHttpError,
+  findBusiness,
   HISTORY_PAGE,
   loadHistory,
   prepareChatTurn,
@@ -130,9 +131,12 @@ test("an unknown business slug is a 404, before anything is stored", async () =>
 
 test("the same browser session gets a separate conversation per business", async () => {
   const slug = `itest-${randomUUID().slice(0, 8)}`;
+  // A miss isn't cached: the business is found as soon as it exists.
+  assert.equal(await findBusiness(slug), null);
   const { error } = await db().from("businesses").insert({ slug, name: "Other Business", description: "", timezone: "America/Toronto" });
   assert.ifError(error);
   try {
+    assert.equal((await findBusiness(slug))?.name, "Other Business");
     const sessionId = session();
     await run(newInput(sessionId, "question for the demo business"), replies("demo answer"));
     await run({ ...newInput(sessionId, "question for the other business"), businessSlug: slug }, replies("other answer"));
