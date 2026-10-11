@@ -195,7 +195,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "match_chunks":
+            "commit_document_chunks":
+{ Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
+                           },
+"match_chunks":
 { Args: { "p_business_id": string,"p_match_count": number,"p_min_similarity": number,"p_query_embedding": string }; Returns: {
               "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"similarity": number
             }[]
