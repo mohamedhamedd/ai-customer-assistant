@@ -45,11 +45,15 @@ interface Section {
   blocks: string[];
 }
 
+// What goes between this unit and the previous one when they share a chunk:
+// a blank line (paragraph start), a newline (table row / list item from a
+// split block) or a space (sentence from a split paragraph).
+type Separator = "\n\n" | "\n" | " ";
+
 interface Unit {
   text: string;
   tokens: number;
-  // Joined to the previous unit with a blank line (true) or a space (false).
-  startsParagraph: boolean;
+  sep: Separator;
 }
 
 // text-embedding-3-* models use cl100k_base.
@@ -195,7 +199,14 @@ function packSection(section: Section, title: string, opts: ChunkOptions, startI
   };
 
   units.forEach((unit, i) => {
-    if (fresh > 0 && currentTokens + unit.tokens > opts.maxTokens) flush();
+    if (currentTokens + unit.tokens > opts.maxTokens) {
+      if (fresh > 0) flush();
+      // The carried overlap must never push the next unit over the cap.
+      if (currentTokens + unit.tokens > opts.maxTokens) {
+        current = [];
+        currentTokens = 0;
+      }
+    }
     current.push(unit);
     currentTokens += unit.tokens;
     fresh++;
@@ -208,21 +219,21 @@ function packSection(section: Section, title: string, opts: ChunkOptions, startI
 
 // A block is one unit if it fits. Otherwise split by lines (tables, lists),
 // then sentences, then raw tokens as a last resort.
-function toUnits(block: string, maxTokens: number, startsParagraph = true): Unit[] {
+function toUnits(block: string, maxTokens: number, sep: Separator = "\n\n"): Unit[] {
   const tokens = countTokens(block);
-  if (tokens <= maxTokens) return [{ text: block, tokens, startsParagraph }];
+  if (tokens <= maxTokens) return [{ text: block, tokens, sep }];
 
   const lines = block.split("\n").filter((l) => l.trim());
-  if (lines.length > 1) return lines.flatMap((l, i) => toUnits(l, maxTokens, i === 0 && startsParagraph));
+  if (lines.length > 1) return lines.flatMap((l, i) => toUnits(l, maxTokens, i === 0 ? sep : "\n"));
 
   const sentences = splitSentences(block);
-  if (sentences.length > 1) return sentences.flatMap((s, i) => toUnits(s, maxTokens, i === 0 && startsParagraph));
+  if (sentences.length > 1) return sentences.flatMap((s, i) => toUnits(s, maxTokens, i === 0 ? sep : " "));
 
   const ids = enc().encode(block);
   const units: Unit[] = [];
   for (let k = 0; k < ids.length; k += maxTokens) {
     const slice = ids.slice(k, k + maxTokens);
-    units.push({ text: enc().decode(slice), tokens: slice.length, startsParagraph: k === 0 && startsParagraph });
+    units.push({ text: enc().decode(slice), tokens: slice.length, sep: k === 0 ? sep : " " });
   }
   return units;
 }
@@ -234,7 +245,7 @@ function splitSentences(text: string): string[] {
 // The last sentences of a chunk, up to the overlap budget.
 function overlapTail(units: Unit[], budget: number): { units: Unit[]; tokens: number } {
   const sentences = units.flatMap((u) =>
-    splitSentences(u.text).map((s, i) => ({ text: s, tokens: countTokens(s), startsParagraph: i === 0 && u.startsParagraph })),
+    splitSentences(u.text).map((s, i): Unit => ({ text: s, tokens: countTokens(s), sep: i === 0 ? u.sep : " " })),
   );
   const tail: Unit[] = [];
   let total = 0;
@@ -243,12 +254,12 @@ function overlapTail(units: Unit[], budget: number): { units: Unit[]; tokens: nu
     tail.unshift(sentences[i]);
     total += sentences[i].tokens;
   }
-  if (tail.length) tail[0] = { ...tail[0], startsParagraph: true };
+  if (tail.length) tail[0] = { ...tail[0], sep: "\n\n" };
   return { units: tail, tokens: total };
 }
 
 function makeChunk(units: Unit[], heading: string, title: string, index: number): Chunk {
-  const content = units.reduce((acc, u, i) => (i === 0 ? u.text : acc + (u.startsParagraph ? "\n\n" : " ") + u.text), "");
+  const content = units.reduce((acc, u, i) => (i === 0 ? u.text : acc + u.sep + u.text), "");
   const prefix = heading ? `${title} › ${heading}` : title;
   return { index, heading, content, tokenCount: countTokens(content), embeddingInput: `${prefix}\n\n${content}` };
 }

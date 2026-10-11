@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { PDFParse } from "pdf-parse";
 import type { SourceType } from "./chunk";
 
-export type ExtractErrorCode = "unsupported_type" | "scanned_pdf" | "empty" | "parse_failed";
+export type ExtractErrorCode = "unsupported_type" | "unsupported_encoding" | "scanned_pdf" | "empty" | "parse_failed";
 
 // Thrown for files we cannot turn into text. The code maps to a message the
 // admin sees; the pipeline records it on the document row.
@@ -40,10 +40,24 @@ export interface ExtractedText {
 }
 
 export async function extractText(data: Buffer, sourceType: SourceType): Promise<ExtractedText> {
-  const raw = sourceType === "pdf" ? await extractPdf(data) : data.toString("utf8");
+  const raw = sourceType === "pdf" ? await extractPdf(data) : decodeText(data);
   const text = normalise(raw);
   if (text.length === 0) throw new ExtractError("empty", "The file contains no text.");
   return { text, contentHash: sha256(text) };
+}
+
+// Text files are expected in UTF-8. A UTF-16 BOM is honoured; anything else
+// that decodes to replacement characters (Windows-1252 and friends) is
+// refused rather than indexed as mojibake.
+function decodeText(data: Buffer): string {
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) return data.subarray(2).toString("utf16le");
+  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) return data.subarray(2).swap16().toString("utf16le");
+  const text = data.toString("utf8");
+  const bad = (text.match(/�/g) ?? []).length;
+  if (bad > 0 && bad / text.length > 0.002) {
+    throw new ExtractError("unsupported_encoding", "The file is not UTF-8 encoded. Save it as UTF-8 and upload again.");
+  }
+  return text;
 }
 
 async function extractPdf(data: Buffer): Promise<string> {

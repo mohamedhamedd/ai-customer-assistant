@@ -47,10 +47,28 @@ export async function ingestDocument(input: IngestInput): Promise<IngestResult> 
   const title = input.title ?? deriveTitle(text, input.filename, sourceType);
   const embeddingModel = env().OPENAI_EMBEDDING_MODEL;
 
+  // Vectors from different models are not comparable (design L5): a business's
+  // knowledge base must be indexed with one model, or search is meaningless.
+  const { data: other } = await db()
+    .from("documents")
+    .select("embedding_model")
+    .eq("business_id", input.businessId)
+    .eq("status", "ready")
+    .neq("embedding_model", embeddingModel)
+    .limit(1)
+    .maybeSingle();
+  if (other) {
+    return {
+      status: "failed",
+      title,
+      error: `The knowledge base was indexed with ${other.embedding_model} but OPENAI_EMBEDDING_MODEL is ${embeddingModel}. Re-index all documents with one model.`,
+    };
+  }
+
   const existing = await clearPrior(input.businessId, contentHash);
   if (existing.kind === "ready") return { status: "duplicate", documentId: existing.id, title };
   if (existing.kind === "in_progress") {
-    return { status: "failed", documentId: existing.id, title, error: "A copy of this document is still being processed. Try again in a few minutes." };
+    return { status: "failed", documentId: existing.id, title, error: IN_PROGRESS_MESSAGE };
   }
 
   const { data: doc, error: insertError } = await db()
@@ -58,7 +76,16 @@ export async function ingestDocument(input: IngestInput): Promise<IngestResult> 
     .insert({ business_id: input.businessId, title, source_type: sourceType, content_hash: contentHash, embedding_model: embeddingModel })
     .select("id")
     .single();
-  if (insertError) return { status: "failed", title, error: friendlyDbError(insertError.message) };
+  if (insertError) {
+    // Lost a race with a concurrent upload of the same content (I6): the
+    // other one is either done or still running. Report it as such.
+    if (insertError.message.includes("documents_business_id_content_hash_key")) {
+      const again = await clearPrior(input.businessId, contentHash);
+      if (again.kind === "ready") return { status: "duplicate", documentId: again.id, title };
+      return { status: "failed", title, error: IN_PROGRESS_MESSAGE };
+    }
+    return { status: "failed", title, error: friendlyDbError(insertError.message) };
+  }
 
   try {
     const chunks = chunkDocument({ title, text, sourceType });
@@ -83,10 +110,13 @@ export async function ingestDocument(input: IngestInput): Promise<IngestResult> 
     return { status: "ready", documentId: doc.id, title, chunkCount: count ?? chunks.length };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error(`[ingest] document ${doc.id} ("${title}") failed:`, err);
     await db().from("documents").update({ status: "failed", error: message }).eq("id", doc.id);
     return { status: "failed", documentId: doc.id, title, error: message };
   }
 }
+
+const IN_PROGRESS_MESSAGE = "A copy of this document is still being processed. Try again in a few minutes.";
 
 type Prior = { kind: "none" } | { kind: "ready"; id: string } | { kind: "in_progress"; id: string };
 

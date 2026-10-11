@@ -100,6 +100,32 @@ test("all paragraphs of the section are present across the chunks in order", () 
   }
 });
 
+test("the carried overlap never pushes a chunk over maxTokens", () => {
+  // Ten short sentences (an overlap-friendly tail) followed by a paragraph
+  // just under the cap: carry + paragraph would exceed maxTokens.
+  const short = Array.from({ length: 10 }, (_, s) => `Short sentence number ${s} here.`).join(" ");
+  const big = paragraph(1, 117);
+  const bigTokens = countTokens(big);
+  assert.ok(bigTokens > 430 && bigTokens <= DEFAULT_CHUNK_OPTIONS.maxTokens, `fixture is ${bigTokens} tokens`);
+
+  const chunks = chunkDocument({ title: "Doc", text: `## S\n\n${short}\n\n${big}`, sourceType: "md" });
+  assert.equal(chunks.length, 2);
+  for (const c of chunks) assert.ok(c.tokenCount <= DEFAULT_CHUNK_OPTIONS.maxTokens, `chunk ${c.index} has ${c.tokenCount} tokens`);
+  assert.equal(chunks[1].content, big);
+});
+
+test("an oversized table is split by rows and the rows keep their line breaks", () => {
+  const rows = Array.from({ length: 120 }, (_, i) => `| Service number ${i} with a long descriptive name | $${100 + i} |`);
+  const table = ["| Service | Price |", "|---|---|", ...rows].join("\n");
+  const chunks = chunkDocument({ title: "Pricing", text: `## Fees\n\n${table}`, sourceType: "md" });
+  assert.ok(chunks.length > 1);
+  for (const c of chunks) {
+    assert.ok(c.tokenCount <= DEFAULT_CHUNK_OPTIONS.maxTokens);
+    assert.ok(c.content.includes("|\n|"), "rows should be newline-separated");
+    assert.ok(!c.content.includes("| |"), "rows must not be joined with spaces");
+  }
+});
+
 test("a single oversized paragraph with no sentence breaks is hard-split by tokens", () => {
   const giant = Array.from({ length: 1500 }, (_, i) => `w${i}`).join(" ");
   const chunks = chunkDocument({ title: "Doc", text: giant, sourceType: "txt" });

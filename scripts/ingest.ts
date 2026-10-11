@@ -26,7 +26,11 @@ async function main() {
   if (error) throw new Error(error.message);
   if (!business) throw new Error(`No business with slug "${slug}". Run \`npm run db:reset\` to seed the demo business.`);
 
-  const files = (await readdir(dir)).filter((f) => !f.startsWith(".")).sort();
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = entries
+    .filter((e) => e.isFile() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort();
   console.log(`Ingesting ${files.length} file(s) from ${dir} into "${business.name}"\n`);
 
   let failed = 0;

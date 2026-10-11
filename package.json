@@ -13,7 +13,7 @@
     "db:reset": "supabase db reset",
     "db:status": "supabase status",
     "db:types": "supabase gen types typescript --local --schema public > src/lib/db/database.types.ts.tmp && mv src/lib/db/database.types.ts.tmp src/lib/db/database.types.ts",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --conditions=react-server --import tsx --test \"src/**/*.test.ts\"",
     "ingest": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/ingest.ts"
   },
   "dependencies": {
