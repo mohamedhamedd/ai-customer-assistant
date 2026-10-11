@@ -93,5 +93,7 @@ Generated in Stitch (project "File Review Assistant", `680365958594726836`) from
 | Customer Assistant — Chat | [`design/customer-chat.png`](./design/customer-chat.png) |
 | Home — business launcher (`/`) | [`design/home.png`](./design/home.png) |
 | Customer Assistant — Voice mode (speaking) | [`design/customer-voice.png`](./design/customer-voice.png) |
+| Admin — New business | [`design/admin-new-business.png`](./design/admin-new-business.png) |
+| Admin — Settings (saved) | [`design/admin-settings.png`](./design/admin-settings.png) |
 
 Still to design (brief §10, Priority 1): mobile layout, source preview popover, the remaining voice states, and the failed/error cards.

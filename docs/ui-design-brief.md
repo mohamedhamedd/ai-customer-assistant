@@ -310,7 +310,7 @@ The voice panel is **compact**: it sits where the composer was, at most about 28
   - **Slug** (lowercase letters, digits and dashes; unique). Shows the chat URL `/b/{slug}` underneath, with a copy button.
   - **Short description** (textarea, max 500, with a counter).
   - **Timezone** (searchable select).
-  - **Assistant guidelines** (textarea, monospace optional). These are business-specific rules, e.g. "Never give a diagnosis; for emergencies tell the customer to call 911." Helper text: "Added to the assistant's instructions for this business only."
+  - **Assistant guidelines** (textarea, max 2,000, with a counter). These are business-specific rules, e.g. "Never give a diagnosis; for emergencies tell the customer to call 911." Helper text: "Added to the assistant's instructions for this business only."
 - Live preview of the chat header with the chosen name (nice to have).
 - Save button with loading → success toast; inline field validation errors (e.g. "This slug is already used").
 - Changes apply to the next customer message without a redeploy.
