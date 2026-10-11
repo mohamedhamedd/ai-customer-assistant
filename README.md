@@ -57,6 +57,22 @@ Business rules the database enforces itself: no duplicate leads per email/phone,
 
 After changing a migration: `npm run db:reset && npm run db:types`.
 
+## Knowledge base ingestion
+
+```bash
+npm run ingest -- ./data/sample-clinic            # demo business (DEMO_BUSINESS_SLUG)
+npm run ingest -- ./my-docs --business my-slug
+```
+
+Supported: `.txt`, `.md`, text-based `.pdf`. Scanned PDFs and images are rejected with a clear error (they would need OCR or a vision model). The pipeline, in `src/lib/rag/`:
+
+1. **Extract** (`extract.ts`): read the text, normalise it, hash it. A PDF with almost no letters per page is treated as scanned.
+2. **Chunk** (`chunk.ts`): split by headings, then pack each section's paragraphs into chunks of about 450 tokens (max 500) with a ~60-token sentence overlap when a section has to be split. A section boundary is always a chunk boundary, so a FAQ answer or a price table is never cut in half. PDFs get light structure recovery (numbered headings, re-joined wrapped lines). Each chunk is embedded with its document title and heading path in front (`Pricing Guide › Cosmetic treatment`), so short chunks still retrieve well.
+3. **Embed** (`embed.ts`): `text-embedding-3-small`, batched, every vector validated.
+4. **Commit** (`ingest.ts` + `commit_document_chunks()` in SQL): all chunks are inserted and the document marked `ready` in one transaction. A failure leaves zero chunks and a `failed` document with the reason. Re-uploading identical content is a no-op; a failed or crashed (`processing` for over 10 minutes) attempt is replaced on retry.
+
+Chunker unit tests: `npm test`.
+
 ## Project structure
 
 ```
