@@ -203,6 +203,9 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `channel` | text | no | `'text'` | `text` \| `voice`. Voice rows hold transcripts |
 | `content` | text | yes | | `CHECK (content <> '')` when present. **Null only for a voice turn whose transcript hasn't arrived yet** (`CHECK (content IS NOT NULL OR channel = 'voice')`). Null rows are skipped when building the prompt and shown as "…" in the UI |
 | `sources` | jsonb | no | `'[]'` | Citations attached to an assistant answer: a **self-contained snapshot** copied from `search_knowledge` results, `[{documentId, title, heading, excerpt, similarity}]`. Chips and previews render only from this snapshot, never by joining `documents`, so they keep working after a document is deleted or replaced. `documentId` is informational (no FK); the UI labels a chip whose document no longer exists as "from a removed document" |
+| `actions` | jsonb | no | `'[]'` | Action cards an assistant reply produced (`lead_saved`, `consultation_requested`, `action_failed`), copied from tool results by the server, so they survive a reload |
+| `reply_attempt_at` | timestamptz | no | `now()` | User rows: when the latest attempt to answer started. The in-progress window counts from here (§7.1) |
+| `reply_failed_at` | timestamptz | yes | | User rows only: set when the server gave up producing the reply (model error, deadline). Lets a retry re-run at once instead of waiting out the in-progress window (§7.1) |
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 **Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
@@ -285,7 +288,7 @@ Unique index: `(conversation_id, lower(service), preferred_at)`. The same reques
 | I1 | A lead has an email or a phone | `CHECK` on `leads` | US-4.1 |
 | I2 | One lead per email / per phone per business | `UNIQUE (business_id, email)`, `UNIQUE (business_id, phone)` | US-4.3 |
 | I3 | Emails are compared case-insensitively | Stored lowercase + `CHECK (email = lower(email))` | US-4.2 |
-| I4 | A consultation request is not duplicated | Partial unique index `(conversation_id, lower(service), preferred_at) WHERE status <> 'cancelled'`: a slot staff cancelled can be requested again | US-5.3 |
+| I4 | A consultation request is not duplicated | Partial unique index `(conversation_id, preferred_at) WHERE status <> 'cancelled'`: one open request per time slot per conversation, whatever the service is called (the model's wording varies between calls); a slot staff cancelled can be requested again | US-5.3 |
 | I5 | A consultation request always belongs to a lead | `lead_id NOT NULL` + FK | US-5.1 |
 | I6 | The same document content isn't indexed twice | `UNIQUE (business_id, content_hash)` | US-7.2 |
 | I7 | Chunk order is unambiguous | `UNIQUE (document_id, chunk_index)` | — |
@@ -413,6 +416,7 @@ How the tables above implement "context & memory" (E6):
 | **Long-term facts about the customer** | `conversations.customer_facts` | Injected as a facts block in the system prompt ("Customer: Sara Ali, sara@…, interested in whitening"), so the agent doesn't re-ask. Survives return visits, because the conversation is per browser session |
 | **Business knowledge** | `chunks` | Retrieved on demand by `search_knowledge` |
 | **What the agent did** | `tool_calls` | Audit and debugging only. **Not** replayed into the prompt |
+| **What has been done** | `conversations.lead_id`, `consultation_requests` | A short "already done in this conversation" section in the prompt (contact saved; each request with its live status), so the model doesn't repeat an action when the customer says "yes" again |
 
 **Why the facts come from the conversation, not the `leads` row.** Leads are matched by email or phone, and anyone can type anyone's email. If the agent's memory were the matched lead row, a visitor could type `sara@x.com` and then ask "what phone number do you have for me?", and the agent would read out Sara's phone. Facts from `customer_facts` are only ever what *this* visitor said in *this* conversation, so the agent can never reveal stored data it wasn't told.
 
@@ -423,10 +427,15 @@ A text turn is: store the user message → run the agent → store the assistant
 | State found | Response |
 |---|---|
 | A reply exists (`reply_to_message_id` = that message) | Return the stored reply. No model call, no tool calls |
-| No reply, and the user message is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
-| No reply, and the user message is **≥ 60 s old** | The original died. Run the agent again for that message |
+| No reply, and the turn is marked failed (`reply_failed_at`) | The original gave up (model error or deadline). Run the agent again at once |
+| No reply, and the latest attempt (`reply_attempt_at`) is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
+| No reply, and the latest attempt is **≥ 60 s old** | The original died. Run the agent again for that message |
 
 **Turn deadline.** A whole turn (all model calls and tool calls) has a hard limit of **45 s**; when it expires the turn stops and stores the fallback reply. Without this, a slow but live turn could pass the 60 s mark and a retry would start a second copy of it in parallel. The deadline is shorter than the window, so "≥ 60 s with no reply" reliably means the original is dead.
+
+**One turn at a time per conversation.** A new customer message goes through `begin_user_message()`, which locks the conversation row, refuses (409) if another turn in the conversation is still in progress, and only then inserts. Without it, a second message sent before the first was answered would run in parallel on stale history and state, and could create a second request. "In progress" is defined once, in `turn_in_progress()`, and used by both entry points.
+
+**Re-runs are claimed atomically.** A re-run is only started by the caller that wins `claim_reply_attempt()`: one conditional `UPDATE` that clears the failure flag and restarts `reply_attempt_at`, only if the message is failed or its last attempt is older than the window, and has no reply. Two concurrent retries can't both win: the second waits on the row lock, re-checks the condition after the first commits, finds it false and gets 409. The window is measured from the latest attempt, not from when the message was sent, so a re-run of an old message is itself "in progress" for 60 s.
 
 **Why re-running is safe:** the tools are idempotent at the database level (I2, I4), so a re-run cannot create a second lead or consultation request. `UNIQUE (reply_to_message_id)` guarantees at most one stored reply, so if two runs do overlap, the second reply insert fails and is discarded.
 

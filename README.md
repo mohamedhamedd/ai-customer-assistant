@@ -40,6 +40,7 @@ The server validates its configuration at startup. If anything is missing or inv
 | `npm run db:reset` | Recreate the local database from migrations + seed |
 | `npm run db:status` | Show local Supabase URLs and keys |
 | `npm test` / `npm run test:db` | Unit tests (Node) / database tests (pgTAP in `supabase/tests/`, needs Supabase running) |
+| `npm run test:integration` | Turn orchestration against the local database with a fake model (`*.itest.ts`, needs Supabase running; no OpenAI calls) |
 | `npm run db:types` | Regenerate `src/lib/db/database.types.ts` from the local schema (run after every migration) |
 
 ## Database
@@ -81,6 +82,16 @@ Chunker unit tests: `npm test`.
 **Why hybrid, and why no plain similarity threshold.** Measured on the sample clinic (`npm run eval:retrieval`), the weakest correct answer scored 0.27 cosine similarity while the best *wrong* chunk for an out-of-scope question scored 0.41. No single threshold can separate those; it would either refuse real questions or admit noise. Keywords can: an exact topic word either occurs in the knowledge base or it doesn't. So a result counts as found when the top candidate matches a topic keyword and clears a low noise floor (0.2), or when similarity alone is unambiguous (≥ 0.55). "Topic keyword" excludes question-frame verbs (*offer, provide, have…*), which otherwise match FAQ headings like "Do you offer sedation?", and prefers words that are specific to the corpus (not in more than 25% of the business's chunks, with a floor of 3 chunks so small knowledge bases keep their keywords). A broad question made only of common words ("What treatments do you have?") falls back to those words, since the corpus evidently covers the topic. Search also refuses to run if the configured embedding model differs from the one the knowledge base was indexed with.
 
 This gate filters noise. The system prompt remains the main defence: the model answers only from the retrieved text and says so when that text doesn't cover the question.
+
+## Chat API
+
+`POST /api/chat` with `{ sessionId, clientMessageId, message }` streams the reply as NDJSON (one JSON event per line): `start`, `delta` (text), `tool` (started/finished), `action` (lead saved, consultation requested, failed), `sources`, `done`, or `error`. `GET /api/chat?sessionId=…` returns the conversation history.
+
+- **Memory:** the browser sends only the new message. The server loads the last 20 messages, what the customer told us (`customer_facts`) and what was already done in the conversation (contact saved, requests with their live status). A client can't inject fake history.
+- **Agent loop** (`src/lib/agent/loop.ts`): hand-written over Chat Completions. Model → tool calls (run in order) → results back → repeat, at most 5 tool rounds, then one call with tools off so it must answer. The whole turn has a 45 s deadline, and a tool is only started if its 15 s timeout fits in what's left.
+- **One turn at a time:** a second message while the first is still being answered gets 409, enforced in the database with a row lock on the conversation.
+- **Retries:** each message carries a `clientMessageId`. Resending it replays a stored reply (no model call), returns 409 while the original is still running, or re-runs it if the original failed or died.
+- **Failures:** if the model call fails, the customer gets a friendly message, the message stays saved and is marked failed, and one structured log line records the reason.
 
 ## Agent: prompt and tools
 

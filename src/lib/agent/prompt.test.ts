@@ -61,3 +61,30 @@ test("consultations: opening hours are checked, and an unknown outcome is retrie
   assert.match(p, /check the opening hours with search_knowledge/);
   assert.match(p, /outcome_unknown. Call the same tool again once/);
 });
+
+test("grounding: 'do you offer X' must be searched, and claiming a check needs a real search", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /Whether the business offers something .* is a question about the business: search first/);
+  assert.match(p, /Never say you checked/);
+  assert.match(p, /found: false means UNKNOWN, not no/);
+});
+
+test("already-done section lists saved contact and requests, and only when there are any", () => {
+  const none = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, state: { contactSaved: false, requests: [] } });
+  assert.doesNotMatch(none, /# Already done in this conversation/);
+  const p = buildSystemPrompt({
+    business,
+    now,
+    channel: "text",
+    customerFacts: {},
+    state: { contactSaved: true, requests: [{ service: "teeth whitening", preferredTime: "Tuesday, October 13, 2026 at 3:00 PM", status: "pending" }] },
+  });
+  assert.match(p, /# Already done in this conversation\n- The customer's contact details are saved\.\n- Consultation request: teeth whitening, Tuesday, October 13, 2026 at 3:00 PM, status pending\./);
+  assert.ok(p.indexOf("# Already done") > p.indexOf("# Date and time"), "dynamic: after the cacheable prefix");
+});
+
+test("actions are confirmed in an earlier reply than the one that performs them", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /Never call save_lead in the same reply in which the details were first given or changed/);
+  assert.match(p, /Never call create_consultation_request in the same reply/);
+});

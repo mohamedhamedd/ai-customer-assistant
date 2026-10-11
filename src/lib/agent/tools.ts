@@ -92,6 +92,8 @@ export const searchKnowledgeSchema = z.object({
   query: z.string().trim().min(2, "query is too short").max(500, "query is too long"),
 });
 
+export const MAX_CITATIONS_PER_SEARCH = 3;
+
 const searchKnowledge = defineTool({
   name: "search_knowledge",
   writes: false,
@@ -109,7 +111,14 @@ const searchKnowledge = defineTool({
   async run({ query }, ctx) {
     const result = await retrieve(ctx.businessId, query);
     if (!result.found) {
-      return { output: { ok: true, found: false, message: "Nothing in the business's documents covers this." } };
+      return {
+        output: {
+          ok: true,
+          found: false,
+          message:
+            "Nothing in the business's documents covers this. This means unknown, not no: say you don't have that information and offer to have the team contact the customer.",
+        },
+      };
     }
     return {
       output: {
@@ -117,7 +126,9 @@ const searchKnowledge = defineTool({
         found: true,
         results: result.chunks.map((c) => ({ source: c.documentTitle, section: c.heading, text: c.content })),
       },
-      sources: result.sources,
+      // Citations: the top sections only. The model reads all of them, but
+      // six chips under an answer bury the ones that support it.
+      sources: result.sources.slice(0, MAX_CITATIONS_PER_SEARCH),
     };
   },
 });
@@ -246,14 +257,15 @@ const createConsultationRequest = defineTool({
     }
     if (error) throw new Error(`create_consultation_request failed: ${error.message}`);
 
-    const row = data as { request_id: string; status: string; created: boolean };
+    const row = data as { request_id: string; status: string; service: string; created: boolean };
     return {
       output: {
         ok: true,
         request_id: row.request_id,
         status: row.status,
         already_requested: !row.created,
-        service: args.service,
+        // On a repeat, the service as first requested (the wording may differ).
+        service: row.service ?? args.service,
         preferred_time: formatHuman(when.at, ctx.timeZone),
         preferred_datetime: formatLocal(when.at, ctx.timeZone),
         note: "This is a request. The team will contact the customer to confirm.",

@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 
-select plan(22);
+select plan(34);
 
 insert into businesses (id, slug, name) values ('00000000-0000-0000-0000-0000000000b1', 'test-tools', 'Tools');
 insert into conversations (id, business_id, session_id) values
@@ -78,6 +78,9 @@ select is((select contact_name || '|' || coalesce(contact_phone, '') from consul
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
                                        'teeth whitening', '2026-10-20 22:00+00'))->>'created',
           'false', 'the same request again (different case) returns the existing one');
+select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
+                                       'whitening consultation', '2026-10-20 22:00+00'))->>'service',
+          'Teeth Whitening', 'the same slot with different service wording is the same request, reported as first named');
 
 -- Staff cancel it; asking for the same slot again creates a NEW request.
 update consultation_requests set status = 'cancelled' where conversation_id = '00000000-0000-0000-0000-0000000000c2';
@@ -87,6 +90,44 @@ select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '
 select is((select count(*)::int from consultation_requests
             where conversation_id = '00000000-0000-0000-0000-0000000000c2' and status = 'pending'), 1,
           'one pending request alongside the cancelled one');
+
+-- claim_reply_attempt: exactly one retry wins ---------------------------------
+insert into messages (id, conversation_id, role, content, client_message_id, reply_attempt_at)
+overriding system value values
+  (900001, '00000000-0000-0000-0000-0000000000c1', 'user', 'fresh',    'm-fresh', now()),
+  (900002, '00000000-0000-0000-0000-0000000000c2', 'user', 'old',      'm-old',   now() - interval '5 minutes'),
+  (900003, '00000000-0000-0000-0000-0000000000c3', 'user', 'answered', 'm-ans',   now() - interval '5 minutes');
+insert into messages (conversation_id, role, content, reply_to_message_id)
+values ('00000000-0000-0000-0000-0000000000c3', 'assistant', 'the answer', 900003);
+update messages set reply_failed_at = now() where id = 900001;
+
+select is(claim_reply_attempt(900001, 60), true,  'a failed turn can be claimed at once');
+select is(claim_reply_attempt(900001, 60), false, 'a second claim right after loses (the attempt is fresh again)');
+select is(claim_reply_attempt(900002, 60), true,  'an attempt older than the window can be claimed');
+select is(claim_reply_attempt(900003, 60), false, 'a message that already has a reply is never re-run');
+select ok((select reply_failed_at is null and reply_attempt_at > now() - interval '1 minute' from messages where id = 900001),
+          'claiming clears the failure flag and restarts the window');
+
+-- begin_user_message: one turn at a time per conversation ----------------------
+-- c1 now has 900001 in progress (just claimed, no reply).
+select is((begin_user_message('00000000-0000-0000-0000-0000000000c1', 'm-next', 'next question', 60))->>'status',
+          'busy', 'a new message while another turn runs in the conversation is refused');
+select is((select count(*)::int from messages where client_message_id = 'm-next'), 0, 'and nothing is inserted');
+select is((begin_user_message('00000000-0000-0000-0000-0000000000c1', 'm-fresh', 'fresh', 60))->>'status',
+          'exists', 'a retry of a known message is reported as existing, not busy');
+insert into messages (conversation_id, role, content, reply_to_message_id)
+values ('00000000-0000-0000-0000-0000000000c1', 'assistant', 'answer to fresh', 900001);
+select is((begin_user_message('00000000-0000-0000-0000-0000000000c1', 'm-next', 'next question', 60))->>'status',
+          'created', 'once the running turn has its reply, the next message is accepted');
+insert into messages (id, conversation_id, role, content, client_message_id, reply_attempt_at)
+overriding system value values (900004, '00000000-0000-0000-0000-0000000000c4', 'user', 'other', 'm-other', now() - interval '5 minutes');
+update messages set reply_failed_at = now() where id = 900004;
+select is((begin_user_message('00000000-0000-0000-0000-0000000000c4', 'm-after-fail', 'new', 60))->>'status',
+          'created', 'a failed turn does not block new messages');
+-- c1: 'm-next' is now running; a retry of an older message there must wait.
+update messages set reply_failed_at = now() where id = 900001;
+delete from messages where reply_to_message_id = 900001;
+select is(claim_reply_attempt(900001, 60), false, 'a re-run is refused while another turn in the conversation runs');
 
 select ok(not has_function_privilege('anon', 'public.save_lead(uuid, uuid, text, text, text, text, text)', 'execute')
       and not has_function_privilege('anon', 'public.create_consultation_request(uuid, uuid, text, timestamptz, text)', 'execute'),

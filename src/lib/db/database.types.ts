@@ -145,14 +145,14 @@ isOneToOne: false
                   ]
                 },"messages": {
                   Row: {
-                    "channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
+                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_attempt_at": string,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
                   }
                   ComputedFields: never
                   Insert: {
-                    "channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
                   }
                   Update: {
-                    "channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
                   }
                   Relationships: [
                     {
@@ -195,7 +195,13 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "commit_document_chunks":
+            "begin_user_message":
+{ Args: { "p_channel"?: string,"p_client_message_id": string,"p_content": string,"p_conversation_id": string,"p_window_seconds": number }; Returns: Json
+                           },
+"claim_reply_attempt":
+{ Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
+                           },
+"commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
                            },
 "create_consultation_request":
@@ -216,6 +222,9 @@ isOneToOne: false
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
+                           },
+"turn_in_progress":
+{ Args: { "p_conversation_id": string,"p_except_message_id": number,"p_window_seconds": number }; Returns: boolean
                            }
           }
           Enums: {
