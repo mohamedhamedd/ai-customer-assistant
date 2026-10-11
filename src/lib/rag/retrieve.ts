@@ -1,5 +1,6 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
+import { env } from "@/lib/env";
 import { embedTexts } from "./embed";
 
 // The "found" decision (design D-03, layer 2). Numbers come from the eval
@@ -26,6 +27,20 @@ export interface FoundRule {
 }
 
 export const DEFAULT_FOUND_RULE: FoundRule = { minSimilarity: 0.2, strongSimilarity: 0.55 };
+
+// Chunks handed to the model per search. The eval script's pass criterion is
+// "expected section within this many", so it imports this constant.
+export const DEFAULT_MATCH_COUNT = 6;
+
+// A question longer than this carries no extra retrieval signal, and the
+// embeddings API rejects inputs over 8,191 tokens.
+const MAX_QUERY_CHARS = 1000;
+
+// Vectors from different models are not comparable (design L5). Ingestion
+// refuses to mix models; search must refuse too, or results are silently
+// random. Checked once a minute per business.
+const INDEXED_MODEL_TTL_MS = 60_000;
+const indexedModelCache = new Map<string, { mismatch: string | null; checkedAt: number }>();
 
 export interface RetrievedChunk {
   chunkId: number;
@@ -59,13 +74,40 @@ export interface RetrieveOptions {
 }
 
 export async function retrieve(businessId: string, query: string, options: RetrieveOptions = {}): Promise<RetrievalResult> {
-  const text = query.trim();
+  const text = query.trim().slice(0, MAX_QUERY_CHARS);
   if (text.length < 2) return { found: false, chunks: [], sources: [] };
 
+  await assertIndexedModel(businessId);
   const [embedding] = await embedTexts([text]);
-  const chunks = await searchChunks(businessId, embedding, text, options.matchCount ?? 6);
+  const chunks = await searchChunks(businessId, embedding, text, options.matchCount ?? DEFAULT_MATCH_COUNT);
   const found = isFound(chunks, options.rule ?? DEFAULT_FOUND_RULE);
   return { found, chunks, sources: found ? toSources(chunks) : [] };
+}
+
+export async function assertIndexedModel(businessId: string): Promise<void> {
+  const configured = env().OPENAI_EMBEDDING_MODEL;
+  const cached = indexedModelCache.get(businessId);
+  let mismatch: string | null;
+  if (cached && Date.now() - cached.checkedAt < INDEXED_MODEL_TTL_MS) {
+    mismatch = cached.mismatch;
+  } else {
+    const { data, error } = await db()
+      .from("documents")
+      .select("embedding_model")
+      .eq("business_id", businessId)
+      .eq("status", "ready")
+      .neq("embedding_model", configured)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`Retrieval failed: ${error.message}`);
+    mismatch = data?.embedding_model ?? null;
+    indexedModelCache.set(businessId, { mismatch, checkedAt: Date.now() });
+  }
+  if (mismatch) {
+    throw new Error(
+      `The knowledge base was indexed with ${mismatch} but OPENAI_EMBEDDING_MODEL is ${configured}. Re-index all documents with one model.`,
+    );
+  }
 }
 
 // Exposed separately so the eval script can reuse one query embedding.

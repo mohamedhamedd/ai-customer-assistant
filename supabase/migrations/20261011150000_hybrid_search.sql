@@ -16,14 +16,22 @@ create index chunks_fts_idx on public.chunks using gin (fts);
 
 -- Builds an OR-query over the question's stemmed lexemes, so a single matching
 -- topic word ("tuesday") counts. websearch_to_tsquery would AND every term and
--- miss most natural questions. Two kinds of lexeme are left out because they
--- match without saying anything about the topic:
---   1. words found in more than 25% of this business's chunks (IDF-style:
---      "treatment", "patient", "visit" in a dental corpus);
---   2. question-frame verbs ("do you offer / provide / accept / have X"),
---      which otherwise hit FAQ headings like "Do you offer sedation?".
---   Domain actions (pay, open, take, call, book, cancel) are kept on purpose:
---   "How can I pay?" and "When are you open?" are real questions.
+-- miss most natural questions.
+--
+-- Question-frame verbs ("do you offer / provide / accept / have X") are always
+-- dropped: they match FAQ headings like "Do you offer sedation?" without
+-- saying anything about the topic. Domain actions (pay, open, take, call,
+-- book, cancel) are kept on purpose: "How can I pay?" is a real question.
+--
+-- Of the rest, "specific" words are preferred: present in the corpus but not
+-- in more than 25% of this business's chunks (IDF-style; never fewer than 3
+-- chunks, so small knowledge bases keep their keywords). If nothing specific
+-- remains but common words do ("What treatments do you have?"), that is a
+-- broad question the corpus covers, so the common words are used instead.
+-- Words absent from the corpus never form a query: "laser eye surgery".
+--
+-- Lexemes are already stemmed, so the query is built with a ::tsquery cast
+-- rather than to_tsquery(), which would stem them a second time.
 create or replace function public.keyword_query(p_business_id uuid, p_text text)
 returns tsquery
 language sql stable
@@ -38,19 +46,26 @@ as $$
   total as (
     select greatest(count(*), 1)::float as n from public.chunks where business_id = p_business_id
   ),
-  kept as (
-    select l
-      from lexemes, total
-     where (select count(*) from public.chunks c
+  df as (
+    select l,
+           (select count(*) from public.chunks c
              where c.business_id = p_business_id
-               and c.fts @@ to_tsquery('english', '''' || replace(l, '''', '''''') || ''''))
-           <= 0.25 * total.n
+               and c.fts @@ ('''' || replace(l, '''', '''''') || '''')::tsquery) as n
+      from lexemes
+  ),
+  specific as (
+    select l from df, total where df.n > 0 and df.n <= greatest(0.25 * total.n, 3)
+  ),
+  chosen as (
+    select l from specific
+    union all
+    select l from df where df.n > 0 and not exists (select 1 from specific)
   )
   select case
     when count(*) = 0 then null
-    else to_tsquery('english', string_agg('''' || replace(l, '''', '''''') || '''', ' | '))
+    else string_agg('''' || replace(l, '''', '''''') || '''', ' | ')::tsquery
   end
-  from kept;
+  from chosen;
 $$;
 
 create or replace function public.hybrid_search(

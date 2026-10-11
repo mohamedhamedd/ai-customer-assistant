@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { embedTexts } from "@/lib/rag/embed";
-import { DEFAULT_FOUND_RULE, isFound, searchChunks, type RetrievedChunk } from "@/lib/rag/retrieve";
+import { DEFAULT_FOUND_RULE, DEFAULT_MATCH_COUNT, isFound, searchChunks, type RetrievedChunk } from "@/lib/rag/retrieve";
 
 interface Expect {
   title: string;
@@ -23,7 +23,7 @@ interface Question {
   gap?: boolean;
 }
 
-const K = 6;
+const K = DEFAULT_MATCH_COUNT;
 
 async function main() {
   const file = process.argv[2] ?? "data/sample-clinic/eval.json";

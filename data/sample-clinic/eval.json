@@ -15,6 +15,7 @@
     { "q": "What is the Smile Plan?", "expect": { "title": "Insurance", "heading": "Smile Plan" } },
     { "q": "Is an online request a confirmed appointment?", "expect": { "title": "Policies", "heading": "requests made online" } },
     { "q": "Can I pay with cryptocurrency?", "expect": { "title": "Insurance", "heading": "Payment" }, "$comment": "A grounded 'no': the accepted payment methods are listed, so this is answerable" },
+    { "q": "What treatments do you have?", "expect": { "title": "Services", "heading": "" }, "$comment": "Broad question made only of corpus-generic words; any Services section is an acceptable hit" },
     { "q": "Do you offer laser eye surgery?", "gap": true },
     { "q": "Do you do Botox or dermal fillers?", "gap": true },
     { "q": "Do you have a branch in Portland?", "gap": true },
