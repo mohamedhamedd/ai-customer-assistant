@@ -73,6 +73,16 @@ Supported: `.txt`, `.md`, text-based `.pdf`. Scanned PDFs and images are rejecte
 
 Chunker unit tests: `npm test`.
 
+## Retrieval
+
+`retrieve(businessId, question)` in `src/lib/rag/retrieve.ts` embeds the question and calls `hybrid_search()`: the top vector matches and the top full-text matches, fused by reciprocal rank. It returns the chunks plus a `found` flag and self-contained citation snapshots (`sources`).
+
+**Why hybrid, and why no plain similarity threshold.** Measured on the sample clinic (`npm run eval:retrieval`), the weakest correct answer scored 0.27 cosine similarity while the best *wrong* chunk for an out-of-scope question scored 0.41. No single threshold can separate those; it would either refuse real questions or admit noise. Keywords can: an exact topic word either occurs in the knowledge base or it doesn't. So a result counts as found when the top candidate matches a topic keyword and clears a low noise floor (0.2), or when similarity alone is unambiguous (≥ 0.55). "Topic keyword" excludes words found in more than 25% of the business's chunks and question-frame verbs (*offer, provide, have…*), which otherwise match FAQ headings like "Do you offer sedation?".
+
+This gate filters noise. The system prompt remains the main defence: the model answers only from the retrieved text and says so when that text doesn't cover the question.
+
+The evaluation set is `data/sample-clinic/eval.json` (13 answerable questions with their expected section, 5 out-of-scope ones). The script reports top-1 / top-3 hit rates for vector-only and hybrid retrieval, whether the found rule agrees, and the similarity margin.
+
 ## Project structure
 
 ```

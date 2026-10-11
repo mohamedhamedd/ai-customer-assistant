@@ -21,14 +21,14 @@ export type Database = {
                   ]
                 },"chunks": {
                   Row: {
-                    "business_id": string,"chunk_index": number,"content": string,"document_id": string,"embedding": string,"heading": string,"id": number,"token_count": number
+                    "business_id": string,"chunk_index": number,"content": string,"document_id": string,"embedding": string,"fts": unknown,"heading": string,"id": number,"token_count": number
                   }
                   ComputedFields: never
                   Insert: {
-                    "business_id": string,"chunk_index": number,"content": string,"document_id": string,"embedding": string,"heading"?: string,"id"?: never,"token_count": number
+                    "business_id": string,"chunk_index": number,"content": string,"document_id": string,"embedding": string,"fts"?: never,"heading"?: string,"id"?: never,"token_count": number
                   }
                   Update: {
-                    "business_id"?: string,"chunk_index"?: number,"content"?: string,"document_id"?: string,"embedding"?: string,"heading"?: string,"id"?: never,"token_count"?: number
+                    "business_id"?: string,"chunk_index"?: number,"content"?: string,"document_id"?: string,"embedding"?: string,"fts"?: never,"heading"?: string,"id"?: never,"token_count"?: number
                   }
                   Relationships: [
                     {
@@ -197,6 +197,14 @@ isOneToOne: false
           Functions: {
             "commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
+                           },
+"hybrid_search":
+{ Args: { "p_business_id": string,"p_candidates"?: number,"p_match_count"?: number,"p_query_embedding": string,"p_query_text": string }; Returns: {
+              "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"keyword_rank": number,"score": number,"similarity": number
+            }[]
+                           },
+"keyword_query":
+{ Args: { "p_business_id": string,"p_text": string }; Returns: unknown
                            },
 "match_chunks":
 { Args: { "p_business_id": string,"p_match_count": number,"p_min_similarity": number,"p_query_embedding": string }; Returns: {
