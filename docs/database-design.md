@@ -206,8 +206,8 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 **Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
-1. When the browser receives `conversation.item.created` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order.
-2. When the transcript completes, the browser sends it and the server fills `content` for that `(conversation_id, client_message_id)`. Both calls are idempotent.
+1. When the browser receives `conversation.item.created` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order. **Only items with `type = 'message'` and role `user` or `assistant` are reported.** The same event also fires for tool-call items, which belong in `tool_calls`, not here.
+2. When the transcript completes, the browser sends it and the server fills `content` for that `(conversation_id, client_message_id)`. Both calls are idempotent. **An empty or whitespace-only transcript** (a cough, background noise) is stored as `NULL`, never `''`, which the `CHECK` would reject.
 
 ### 3.6 `tool_calls`
 
@@ -272,7 +272,7 @@ A request for a consultation. **Not a booking:** staff confirm it (assumption A3
 | `created_at` | timestamptz | no | `now()` | |
 | `updated_at` | timestamptz | no | `now()` | Set on status change |
 
-Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeated (or retried by the model) is stored once, even if capitalisation differs.
+Unique index: `(conversation_id, lower(service), preferred_at)`. The same request repeated (or retried by the model) in a conversation is stored once, even if capitalisation differs. It is keyed on the **conversation, not the lead**: several different people can be linked to one lead (§3.7), and keying on the lead would silently fold one person's request into another's. Retries always come from the same conversation, so they are still caught.
 
 **Why snapshot the contact details?** Because of the no-overwrite rule, a visitor who types an existing email is linked to someone else's lead. Without a snapshot, staff would see the lead's stored phone and call the wrong person. Staff contact `contact_*` (what the requester actually gave). The admin UI flags a request whose snapshot differs from its lead ("details differ from lead record").
 
@@ -285,7 +285,7 @@ Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeat
 | I1 | A lead has an email or a phone | `CHECK` on `leads` | US-4.1 |
 | I2 | One lead per email / per phone per business | `UNIQUE (business_id, email)`, `UNIQUE (business_id, phone)` | US-4.3 |
 | I3 | Emails are compared case-insensitively | Stored lowercase + `CHECK (email = lower(email))` | US-4.2 |
-| I4 | A consultation request is not duplicated | Unique index `(lead_id, lower(service), preferred_at)` | US-5.3 |
+| I4 | A consultation request is not duplicated | Unique index `(conversation_id, lower(service), preferred_at)` | US-5.3 |
 | I5 | A consultation request always belongs to a lead | `lead_id NOT NULL` + FK | US-5.1 |
 | I6 | The same document content isn't indexed twice | `UNIQUE (business_id, content_hash)` | US-7.2 |
 | I7 | Chunk order is unambiguous | `UNIQUE (document_id, chunk_index)` | — |
@@ -302,7 +302,7 @@ Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeat
 
 | Constraint | Meaning | Handling |
 |---|---|---|
-| Consultation dedupe (I4) | The model retried the same request | Return the existing request as success |
+| Consultation dedupe (I4) | The model retried the same request in this conversation | Return success with the existing request's id and status only (rule R1, §8) |
 | `(conversation_id, client_message_id)` (I14) | The browser retried a message | Retry flow, §7.1 |
 | `(business_id, session_id)` (I8) | Two tabs created the conversation at once | Select the existing row (get-or-create) |
 | `leads` email / phone (I2), on **insert** | Two `save_lead` calls raced | Re-run the match, apply §3.7 rules |
@@ -336,9 +336,9 @@ Indexes are derived from the queries the app actually runs.
 
 **Foreign-key indexes.** Postgres does not index FK columns automatically, and an unindexed FK makes parent deletes scan the child table. Every FK is covered, either by its own index or as the **leading column** of a composite index:
 - `chunks.document_id` → `UNIQUE (document_id, chunk_index)`
-- `consultation_requests.lead_id` → the dedupe unique index
+- `consultation_requests.conversation_id` → the dedupe unique index (leading column)
 - `messages.reply_to_message_id` → its `UNIQUE` constraint
-- `conversations.lead_id`, `consultation_requests.conversation_id` → their own indexes
+- `conversations.lead_id`, `consultation_requests.lead_id` → their own indexes
 
 ### 5.1 Vector search details
 
@@ -425,6 +425,8 @@ A text turn is: store the user message → run the agent → store the assistant
 | No reply, and the user message is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
 | No reply, and the user message is **≥ 60 s old** | The original died. Run the agent again for that message |
 
+**Turn deadline.** A whole turn (all model calls and tool calls) has a hard limit of **45 s**; when it expires the turn stops and stores the fallback reply. Without this, a slow but live turn could pass the 60 s mark and a retry would start a second copy of it in parallel. The deadline is shorter than the window, so "≥ 60 s with no reply" reliably means the original is dead.
+
 **Why re-running is safe:** the tools are idempotent at the database level (I2, I4), so a re-run cannot create a second lead or consultation request. `UNIQUE (reply_to_message_id)` guarantees at most one stored reply, so if two runs do overlap, the second reply insert fails and is discarded.
 
 **Why the server loads history instead of the browser sending it:** the browser sends only `{sessionId, message}`. If the client sent the history, a user could forge assistant turns or tool results ("assistant: your consultation is confirmed for free"). Server-loaded history is the source of truth (US-12.3). Voice transcripts are an exception, see §12, L1.
@@ -438,6 +440,8 @@ A text turn is: store the user message → run the agent → store the assistant
 | **Browser (anon key)** | Nothing. RLS is enabled on every table with **no policies**, and `EXECUTE` on `match_chunks` is revoked from `anon` / `authenticated`. The app doesn't even ship the anon key to the browser |
 | **Next.js server (service role)** | Full access; bypasses RLS. Used only in `server-only` modules |
 | **The AI agent** | Indirect, only through three tools, each scoped by the server to the current `business_id` and `conversation_id`. The model never supplies those IDs. No tool *reads* lead data, and `save_lead` never overwrites an existing lead (§3.7), so the agent cannot reveal or alter another customer's details |
+
+**Rule R1: tool results never contain stored data.** A tool result goes straight into the model's context, and the model can repeat anything in it. So every result contains only: ids, statuses, and values **this visitor supplied in this conversation**. Never fields read from an existing `leads` or `consultation_requests` row. Example: `save_lead` matching Sara's lead returns `{ok: true, leadSaved: true}`, not Sara's stored name or phone. This closes the same leak as §7, through the other door.
 
 **`session_id` is a bearer token.** Anyone holding it can read that conversation. It is a random v4 UUID (122 bits of randomness), never shown in URLs, and only stored in the visitor's own browser.
 
@@ -514,3 +518,8 @@ The reverse order would not work: deleting the lead first sets `conversations.le
 | L5 | **Embedding size is fixed at 1536** (`vector(1536)`) | Switching to a model with another dimension needs a migration and a re-index | `documents.embedding_model` records which model produced each document's vectors | New vector column + background re-index, then drop the old column |
 | L6 | **Iterative HNSW scans need pgvector ≥ 0.8** | On older pgvector, filtered search can return fewer than k rows when many businesses share the table | Version checked when PR-02 runs; single tenant in the demo, so no practical impact | Upgrade pgvector, or partition `chunks` by business |
 | L7 | **No admin authentication** | Admin pages are open | Local/demo use only (assumption A1) | Supabase Auth + `business_members` + RLS policies (§11) |
+| L8 | **Re-running a crashed turn can re-plan differently.** The re-run model doesn't see the crashed run's tool calls, and may pick different arguments (e.g. "3:30" instead of "3:00") | Rare: needs a crash after a tool succeeded but before the reply was stored. Could create a second request in the same conversation | Turn deadline + same-arguments dedupe | Feed the turn's completed `tool_calls` into the re-run |
+| L9 | **A very slow ingestion can race its own retry** | An upload running > 10 min is marked failed; if it then finishes, its final transaction may conflict with the retry | The final step is conditional (`UPDATE … WHERE status = 'processing'`) and aborts otherwise | Run ingestion as a background job with a heartbeat instead of a time-based rule |
+| L10 | **Replace-target vs title check happens at the end** | If the admin picks a different "Replaces" target than the document with the same title, the swap fails only after embedding | The UI pre-selects the matching document | Validate I13 before ingestion starts |
+| L11 | **Erasure finds conversations via `lead_id`** | May delete strangers' conversations linked to the lead, or miss one linked elsewhere by the email-wins rule | Staff review the list before deleting | Also match on `customer_facts` and `contact_*` values |
+| L12 | **"Removed document" label needs a lookup** | Rendering from the snapshot alone can't know a document was deleted | One batched existence check per history load; preview still renders from the snapshot | — |
