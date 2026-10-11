@@ -74,6 +74,7 @@ erDiagram
         bigint id PK
         uuid conversation_id FK
         text client_message_id
+        bigint reply_to_message_id FK
         text role
         text channel
         text content
@@ -103,6 +104,9 @@ erDiagram
         uuid business_id FK
         uuid lead_id FK
         uuid conversation_id FK
+        text contact_name
+        text contact_email
+        text contact_phone
         text service
         timestamptz preferred_at
         text status
@@ -191,14 +195,19 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
-| `id` | bigint identity | no | | PK. Monotonic, so it doubles as the ordering key |
+| `id` | bigint identity | no | | PK. Monotonic and assigned when the turn *happens* (see voice ordering below), so it is the ordering key |
 | `conversation_id` | uuid | no | | FK → `conversations`, cascade |
-| `client_message_id` | text | yes | | **Idempotency key.** Text messages: a UUID the browser generates per message and reuses on retry. Voice transcripts: the Realtime API's item id. `unique (conversation_id, client_message_id)`, so a retried send is never stored twice (US-11.6). Null for server-generated text replies |
+| `client_message_id` | text | yes | | **Idempotency key.** Text messages: a UUID the browser generates per message and reuses on retry. Voice turns: the Realtime API's item id. `unique (conversation_id, client_message_id)`, so a retried send is never stored twice (US-11.6). Null for server-generated text replies |
+| `reply_to_message_id` | bigint | yes | | Assistant rows only: FK → the user message this answers. `UNIQUE`, so a user message has at most one stored reply. This is what makes retries safe (§7.1) |
 | `role` | text | no | | `user` \| `assistant` |
 | `channel` | text | no | `'text'` | `text` \| `voice`. Voice rows hold transcripts |
-| `content` | text | no | | `CHECK (content <> '')` |
-| `sources` | jsonb | no | `'[]'` | Citations attached to an assistant answer, copied from `search_knowledge` results: `[{documentId, title, heading, excerpt, similarity}]` |
-| `created_at` | timestamptz | no | `now()` | |
+| `content` | text | yes | | `CHECK (content <> '')` when present. **Null only for a voice turn whose transcript hasn't arrived yet** (`CHECK (content IS NOT NULL OR channel = 'voice')`). Null rows are skipped when building the prompt and shown as "…" in the UI |
+| `sources` | jsonb | no | `'[]'` | Citations attached to an assistant answer: a **self-contained snapshot** copied from `search_knowledge` results, `[{documentId, title, heading, excerpt, similarity}]`. Chips and previews render only from this snapshot, never by joining `documents`, so they keep working after a document is deleted or replaced. `documentId` is informational (no FK); the UI labels a chip whose document no longer exists as "from a removed document" |
+| `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
+
+**Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
+1. When the browser receives `conversation.item.created` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order.
+2. When the transcript completes, the browser sends it and the server fills `content` for that `(conversation_id, client_message_id)`. Both calls are idempotent.
 
 ### 3.6 `tool_calls`
 
@@ -214,7 +223,7 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 | `result` | jsonb | no | | The exact payload returned to the model, `{ok, data}` or `{ok:false, error}` |
 | `ok` | boolean | no | | Denormalised from `result` for easy filtering of failures |
 | `duration_ms` | int | no | | Latency of the tool execution |
-| `created_at` | timestamptz | no | `now()` | |
+| `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 ### 3.7 `leads`
 
@@ -238,6 +247,10 @@ Table constraint: `CHECK (email IS NOT NULL OR phone IS NOT NULL)`. A lead must 
 - **No match** → insert a new lead.
 - **Match** → link this conversation to the existing lead and **only fill fields that are empty**. Existing name, email, phone and interest are never overwritten from a conversation. Differing details are kept in that conversation's `customer_facts` and visible to staff.
 - **Email matches lead A and phone matches lead B** → link to A (email wins); the phone stays only in `customer_facts`. No merge.
+- **Filling an empty field would collide with another lead** (e.g. matched lead B by phone, B has no email, but the given email belongs to lead C) → skip that field; the value stays in `customer_facts`. The conversation stays linked to B. No error is shown to the customer.
+- **Two `save_lead` calls race on a new email** → the loser's insert hits the unique index; it re-runs the match and follows the rules above.
+
+In every case `customer_facts` holds exactly what the customer said. That is why consultation requests snapshot their contact details from it (§3.8).
 
 ### 3.8 `consultation_requests`
 
@@ -249,6 +262,9 @@ A request for a consultation. **Not a booking:** staff confirm it (assumption A3
 | `business_id` | uuid | no | | FK → `businesses`, cascade |
 | `lead_id` | uuid | no | | FK → `leads`, cascade. A request always has a reachable person |
 | `conversation_id` | uuid | yes | | FK → `conversations`, set null. Where it was requested |
+| `contact_name` | text | no | | **Snapshot** of who made the request, copied from `customer_facts` at creation |
+| `contact_email` | text | yes | | Snapshot, as above |
+| `contact_phone` | text | yes | | Snapshot, as above. `CHECK (contact_email IS NOT NULL OR contact_phone IS NOT NULL)` |
 | `service` | text | no | | As named by the customer and confirmed against the documents |
 | `preferred_at` | timestamptz | no | | Resolved from natural language using the business timezone, stored in UTC |
 | `notes` | text | yes | | |
@@ -257,6 +273,8 @@ A request for a consultation. **Not a booking:** staff confirm it (assumption A3
 | `updated_at` | timestamptz | no | `now()` | Set on status change |
 
 Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeated (or retried by the model) is stored once, even if capitalisation differs.
+
+**Why snapshot the contact details?** Because of the no-overwrite rule, a visitor who types an existing email is linked to someone else's lead. Without a snapshot, staff would see the lead's stored phone and call the wrong person. Staff contact `contact_*` (what the requester actually gave). The admin UI flags a request whose snapshot differs from its lead ("details differ from lead record").
 
 ---
 
@@ -280,7 +298,20 @@ Unique index: `(lead_id, lower(service), preferred_at)`. The same request repeat
 | I14 | A retried message is stored once | `UNIQUE (conversation_id, client_message_id)` | US-11.6 |
 | I15 | A conversation can't overwrite another customer's lead details | **Application** (`save_lead` fill-empty-only rule, §3.7). The DB can't know which conversation "owns" a lead | US-12.4 |
 
-**How constraint violations reach the user:** the tool layer catches Postgres error `23505` (unique violation) and handles it as an *idempotent success*: it returns the existing row. It never surfaces a raw database error to the model or the customer.
+**How unique violations are handled.** A raw database error never reaches the model or the customer. But a unique violation (`23505`) means different things depending on **which constraint** fired, so each one has its own rule:
+
+| Constraint | Meaning | Handling |
+|---|---|---|
+| Consultation dedupe (I4) | The model retried the same request | Return the existing request as success |
+| `(conversation_id, client_message_id)` (I14) | The browser retried a message | Retry flow, §7.1 |
+| `(business_id, session_id)` (I8) | Two tabs created the conversation at once | Select the existing row (get-or-create) |
+| `leads` email / phone (I2), on **insert** | Two `save_lead` calls raced | Re-run the match, apply §3.7 rules |
+| `leads` email / phone (I2), on **fill-empty update** | Value belongs to another lead | Skip that field (§3.7). *Not* a success that returns "the existing row" |
+| `(business_id, content_hash)` (I6) | Same document uploaded again | "Already in your knowledge base", or the failed/stale retry (§6.1) |
+| Ready-title index (I13) | A live document already has this title | Ask the admin to replace it or rename (§6.1) |
+| `UNIQUE (reply_to_message_id)` | A concurrent duplicate turn finished second | Discard the duplicate reply (§7.1) |
+
+The error's constraint name identifies which rule applies.
 
 ---
 
@@ -292,7 +323,7 @@ Indexes are derived from the queries the app actually runs.
 |---|---|---|---|
 | Q1 | Top-k chunks by vector similarity for one business | `search_knowledge` | `chunks USING hnsw (embedding vector_cosine_ops)` + `chunks (business_id)` |
 | Q2 | Get-or-create conversation by `(business_id, session_id)` | Every chat request | `UNIQUE (business_id, session_id)`. Race-safe: `INSERT … ON CONFLICT DO NOTHING`, then `SELECT`, so two tabs opening at once both get the same row |
-| Q3 | Last 20 messages of a conversation | Every chat request (memory) | `messages (conversation_id, id)` → `ORDER BY id DESC LIMIT 20` |
+| Q3 | Last 20 messages of a conversation | Every chat request (memory) | `messages (conversation_id, id)` → `WHERE content IS NOT NULL ORDER BY id DESC LIMIT 20` |
 | Q4 | Find lead by email or phone | `save_lead` | The two unique indexes on `leads` |
 | Q5 | Customer facts for a conversation | Every chat request | Same row as Q2 (`conversations.customer_facts`); no extra query |
 | Q5b | Has this message already been stored? | Every chat request (retry) | `UNIQUE (conversation_id, client_message_id)` |
@@ -306,6 +337,7 @@ Indexes are derived from the queries the app actually runs.
 **Foreign-key indexes.** Postgres does not index FK columns automatically, and an unindexed FK makes parent deletes scan the child table. Every FK is covered, either by its own index or as the **leading column** of a composite index:
 - `chunks.document_id` → `UNIQUE (document_id, chunk_index)`
 - `consultation_requests.lead_id` → the dedupe unique index
+- `messages.reply_to_message_id` → its `UNIQUE` constraint
 - `conversations.lead_id`, `consultation_requests.conversation_id` → their own indexes
 
 ### 5.1 Vector search details
@@ -342,17 +374,19 @@ stateDiagram-v2
     [*] --> processing: upload accepted
     processing --> ready: text extracted, all chunks embedded and inserted
     processing --> failed: extraction / embedding error (reason in documents.error)
+    processing --> failed: stale, still processing after 10 minutes (crash / restart)
     failed --> [*]: re-upload replaces the failed row
     ready --> [*]: admin deletes, or a new version replaces it (chunks cascade)
 ```
 
-- **Replacing a document (new version of the price list).** Without this, uploading an updated "Pricing" would leave *both* versions searchable and the assistant could quote the old price. Flow:
-  1. The admin uploads a file whose title matches a `ready` document. The UI asks "Replace the existing *Pricing*?"
+- **Replacing a document (new version of the price list).** Without this, uploading an updated price list would leave *both* versions searchable and the assistant could quote the old price. New versions usually have a **different file name** ("Pricing 2025.pdf" → "Pricing 2026.pdf"), so the replace target is **chosen explicitly by the admin**, not inferred from the title:
+  1. The upload form has an optional **"Replaces"** select listing the `ready` documents. If the new title matches an existing one, that document is pre-selected and the admin can't upload without either replacing it or renaming (I13).
   2. The new version is extracted and embedded while the old one keeps serving answers.
-  3. **One transaction:** insert the new chunks, delete the old document (its chunks cascade), mark the new one `ready`. Customers see either the old version or the new one, never both and never neither. Invariant I13 guarantees this at the database level.
+  3. **One transaction:** insert the new chunks, delete the chosen old document (its chunks cascade), mark the new one `ready`. Customers see either the old version or the new one, never both and never neither.
 
 - **No partial indexing.** All embeddings are computed first, then chunks are inserted in **one statement** (atomic). A failure mid-way leaves zero chunks, and the document is marked `failed` (US-11.5).
-- **Retry after failure.** The `content_hash` uniqueness would block re-uploading a failed file, so ingestion deletes an existing `failed` row with the same hash before retrying. A `ready` duplicate is reported as "already in your knowledge base".
+- **Stale `processing` rows.** If the server dies mid-ingestion, nothing marks the row `failed`, and its `content_hash` would block re-uploads forever (with a permanent spinner in the admin). Rule: a `processing` row older than **10 minutes** (by `created_at`) is treated as failed. The upload path and the documents list both mark such rows `failed` ("Processing was interrupted, please upload again").
+- **Retry after failure.** The `content_hash` uniqueness would block re-uploading a failed file, so ingestion deletes an existing `failed` (or stale) row with the same hash before retrying. A `ready` duplicate is reported as "already in your knowledge base".
 
 ### 6.2 Consultation request
 
@@ -381,6 +415,18 @@ How the tables above implement "context & memory" (E6):
 
 **Why the facts come from the conversation, not the `leads` row.** Leads are matched by email or phone, and anyone can type anyone's email. If the agent's memory were the matched lead row, a visitor could type `sara@x.com` and then ask "what phone number do you have for me?", and the agent would read out Sara's phone. Facts from `customer_facts` are only ever what *this* visitor said in *this* conversation, so the agent can never reveal stored data it wasn't told.
 
+### 7.1 Turns and retries
+
+A text turn is: store the user message → run the agent → store the assistant reply with `reply_to_message_id` = the user message. When a request arrives with a `client_message_id` that is already stored:
+
+| State found | Response |
+|---|---|
+| A reply exists (`reply_to_message_id` = that message) | Return the stored reply. No model call, no tool calls |
+| No reply, and the user message is **< 60 s old** | The original request is probably still running: `409 in progress`. The browser shows "Still working…" and reloads history shortly |
+| No reply, and the user message is **≥ 60 s old** | The original died. Run the agent again for that message |
+
+**Why re-running is safe:** the tools are idempotent at the database level (I2, I4), so a re-run cannot create a second lead or consultation request. `UNIQUE (reply_to_message_id)` guarantees at most one stored reply, so if two runs do overlap, the second reply insert fails and is discarded.
+
 **Why the server loads history instead of the browser sending it:** the browser sends only `{sessionId, message}`. If the client sent the history, a user could forge assistant turns or tool results ("assistant: your consultation is confirmed for free"). Server-loaded history is the source of truth (US-12.3). Voice transcripts are an exception, see §12, L1.
 
 ---
@@ -405,12 +451,17 @@ How the tables above implement "context & memory" (E6):
 |---|---|---|
 | `leads` (name, email, phone) | Yes | Until deleted by admin |
 | `conversations.customer_facts` | Yes | Kept with the conversation |
+| `consultation_requests.contact_*` | Yes | Kept with the request |
 | `messages.content` | May contain anything the customer typed or said | Kept with the conversation |
 | `tool_calls.arguments` | Contains lead details | Kept with the conversation |
 | Voice audio | — | **Never stored.** Only transcripts |
 | Original uploaded files | — | **Never stored.** Only extracted text |
 
-**Deleting a customer's data:** delete the `lead` (cascades its consultation requests; conversations keep existing with `lead_id = null`), then delete their conversations (cascades messages and tool calls). Production would add a retention policy (e.g. purge anonymous conversations after 90 days) and a consent notice (assumption A7).
+**Deleting a customer's data** (order matters, in one transaction):
+1. Delete the conversations linked to the lead: `DELETE FROM conversations WHERE lead_id = :lead` (cascades messages, tool calls, `customer_facts`; their consultation requests keep existing with `conversation_id = null` until step 2).
+2. Delete the `lead` (cascades its consultation requests).
+
+The reverse order would not work: deleting the lead first sets `conversations.lead_id` to null (`ON DELETE SET NULL`), so the conversations could no longer be found and their personal data would stay behind. Production would add a retention policy (e.g. purge anonymous conversations after 90 days) and a consent notice (assumption A7).
 
 **Why hard deletes, not soft deletes (`deleted_at`)?** Soft deletes must be remembered in every query and unique index, and they keep personal data around after the user asked for deletion. Nothing in this product needs an undo.
 
