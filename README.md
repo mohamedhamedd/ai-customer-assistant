@@ -95,7 +95,7 @@ This gate filters noise. The system prompt remains the main defence: the model a
 
 ## Customer chat
 
-`/b/[slug]` is the chat for one business (`/` opens the demo business until the home page lands). The name comes from the database, so the same page serves any business. Code: `src/components/chat/`.
+`/b/[slug]` is the chat for one business (`/` lists them all, see Multiple businesses). The name comes from the database, so the same page serves any business. Code: `src/components/chat/`.
 
 - **`thread.ts`**: the thread as plain data and every rule that changes it, unit-tested without a browser. A retryable error drops partially streamed text (the server never saves it), so the screen matches what a reload shows; only the **latest** failed message offers Retry (an older one's answer would land out of order); a repeated "details saved" card is shown once.
 - **`use-chat.ts`**: the network side. An anonymous session id in `localStorage` (one per business), a fresh `clientMessageId` per message (reused on retry, also after a reload), NDJSON streaming, 409 / offline / "AI unavailable" handling, and re-sending a message that failed while offline when the browser is back online.
@@ -116,7 +116,7 @@ Known limits: the browser reports transcripts, so a visitor with a live call cou
 
 ## Admin: knowledge base
 
-The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the business is in the URL, ready for the switcher in PR-15). Code: `src/components/admin/`, `src/lib/admin/`, `src/app/api/admin/[slug]/`.
+The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the business is in the URL; the sidebar switches between businesses). Code: `src/components/admin/`, `src/lib/admin/`, `src/app/api/admin/[slug]/`.
 
 - **Upload** by drag and drop or the file picker: `.txt`, `.md` and text-based `.pdf`, up to 10 MB each, several at once. The browser refuses a wrong type, an empty file or an oversized one before uploading (the server checks again, with the same rules from `src/lib/rag/file-types.ts`), and the server stops reading any request body past the cap, with or without a `Content-Length`.
 - **Replace:** a new file with an existing document's title (an updated price list) is caught before anything is embedded, and the row offers *Replace*: the new version takes the old one's place in one transaction. Each file shows *Uploading… n%* → *Processing* → *Ready · n sections*, *Already in your knowledge base* (same content, detected by hash), or *Failed* with the reason (e.g. a scanned PDF).
@@ -146,11 +146,22 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 - The list comes from one SQL function, `admin_conversations()` (per conversation: two lookups on the messages index); the unanswered searches use a partial index on just those tool calls. A long conversation shows its latest 500 messages and says so. A conversation of another business is "not found".
 - The audit trail is the `tool_calls` table, written for every call, successful or not, without ever breaking the customer's conversation (see Reliability).
 
+## Multiple businesses
+
+One assistant, many businesses as data: nothing in the code is specific to one of them. Each business has its own documents, leads, requests, conversations, timezone and rules, and every query is filtered by its id.
+
+- **Home** (`/`): one card per business (name, description, ready documents), each opening its chat. This list is a demo device: in production a customer reaches a business's chat from that business's own website.
+- **New business** (`/admin/new`, from the sidebar's business switcher): name, slug (suggested from the name), short description, timezone, assistant guidelines. On create, the admin opens its empty knowledge base to upload documents. The sample gym in `data/sample-gym/` has a profile to paste and documents to upload; it is not seeded, so the demo can create it live.
+- **Settings** (`/admin/[slug]/settings`): edit the same fields. Saved changes apply to the next customer message, no redeploy: the server's cached profile is dropped on save (another server process would see it within a minute). A new slug moves the chat to a new link, and the old one stops working; conversations are kept, since they belong to the business, not the URL.
+- **Assistant guidelines** are a business's own rules ("never give a diagnosis", "for a gas leak, leave the building"). They used to be part of the shared prompt, which made every business a dental clinic; now the shared prompt fits any business (a test checks it has no clinic rule or dental example), and Lakeside's rules are its guidelines. They are added after the shared rules, and the shared rules win a conflict: a business can add rules, not switch off grounding or honest tool results.
+- **Limits** are checked by the form, the server (one zod schema, `src/lib/admin/profile.ts`) and the database (check constraints), so no path can store a longer name or a malformed slug. A taken slug is shown on the slug field; the form keeps what was typed. Timezones are any IANA name `Intl` accepts (old or new spelling), never a raw offset. `new` is a reserved slug (`/admin/new`).
+- Creating businesses and saving profiles are rate-limited, since the admin is public in this demo.
+
 ## Agent: prompt and tools
 
 `src/lib/agent/` holds everything the model is given, shared by text chat and voice:
 
-- **`prompt.ts`**: the system prompt. It contains the business name and description, the current time in the business's timezone with a 14-day calendar (so "next Tuesday" is a lookup, not arithmetic), and the rules. It contains **no business facts**: prices, hours and services only reach the model through `search_knowledge`, so every factual answer has a retrieved source.
+- **`prompt.ts`**: the system prompt. It contains the business name and description, the business's own guidelines, the current time in the business's timezone with a 14-day calendar (so "next Tuesday" is a lookup, not arithmetic), and the rules. It contains **no business facts**: prices, hours and services only reach the model through `search_knowledge`, so every factual answer has a retrieved source.
 - **`tools.ts`**: three tools, each a JSON schema for the model plus a zod schema that validates and normalises the arguments (lowercase email, digits-only phone, local date → UTC in the business timezone).
   - `search_knowledge`: hybrid retrieval; returns the matching sections, or `found: false`.
   - `save_lead`: records what the customer said on the conversation, then matches or creates the lead. An existing lead is never overwritten (anyone can type any email).

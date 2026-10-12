@@ -51,11 +51,15 @@ export interface Business {
   name: string;
   description: string;
   timezone: string;
+  // The business's own rules for its assistant (added to the prompt).
+  guidelines: string;
 }
 
 // Each chat page serves one business, picked by the slug in its URL
 // (/b/[slug], decision D-14). Cached briefly per slug: every message needs it,
-// and a business's profile rarely changes.
+// and a business's profile rarely changes. Saving a profile drops its entry
+// (forgetBusiness), so the next message uses the new profile; another
+// server process would see it within the TTL.
 //
 // Only businesses that exist are cached, so the cache is bounded by the
 // number of businesses: a stream of made-up slugs from the internet can't
@@ -69,13 +73,23 @@ export async function findBusiness(slug: string): Promise<Business | null> {
   if (hit && hit.expires > Date.now()) return hit.value;
   const { data, error } = await db()
     .from("businesses")
-    .select("id, slug, name, description, timezone")
+    .select("id, slug, name, description, timezone, assistant_guidelines")
     .eq("slug", slug)
     .maybeSingle();
   if (error) throw new Error(`Loading business failed: ${error.message}`);
-  if (data) businessCache.set(slug, { value: data, expires: Date.now() + BUSINESS_TTL_MS });
-  else businessCache.delete(slug);
-  return data;
+  if (!data) {
+    businessCache.delete(slug);
+    return null;
+  }
+  const { assistant_guidelines, ...rest } = data;
+  const business = { ...rest, guidelines: assistant_guidelines };
+  businessCache.set(slug, { value: business, expires: Date.now() + BUSINESS_TTL_MS });
+  return business;
+}
+
+// After a profile is saved: under its old slug and its new one.
+export function forgetBusiness(...slugs: string[]) {
+  for (const slug of slugs) businessCache.delete(slug);
 }
 
 export const UNKNOWN_BUSINESS = "This assistant doesn't exist.";

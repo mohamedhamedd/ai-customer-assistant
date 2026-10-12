@@ -36,6 +36,11 @@ export const LIMITS = {
   // Each upload is embedded and each test search embeds the question.
   uploadBusiness: (slug: string): Limit => ({ key: `upload:business:${slug}`, windowSeconds: 600, max: 30 }),
   searchBusiness: (slug: string): Limit => ({ key: `search:business:${slug}`, windowSeconds: 60, max: 30 }),
+  // The admin is public in this demo (A1): bound how fast anyone can add
+  // businesses or rewrite a profile.
+  createBusiness: (): Limit => ({ key: "business:create", windowSeconds: 3600, max: 20 }),
+  createBusinessIp: (ip: string): Limit => ({ key: `business:create:ip:${ip}`, windowSeconds: 3600, max: 5 }),
+  saveProfile: (businessId: string): Limit => ({ key: `profile:business:${businessId}`, windowSeconds: 600, max: 30 }),
 };
 
 export const TOO_MANY = "You're sending messages quickly. Please wait a moment and try again.";

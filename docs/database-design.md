@@ -141,7 +141,10 @@ Conventions used in every table:
 | `name` | text | no | | Shown in chat header and system prompt |
 | `description` | text | no | `''` | One-paragraph summary used in the system prompt |
 | `timezone` | text | no | `'America/Los_Angeles'` | IANA name. Used to resolve "next Tuesday at 3pm" and to display times |
+| `assistant_guidelines` | text | no | `''` | The business's own rules for its assistant, added to the system prompt after the shared rules (PR-15). Max 2,000 characters |
 | `created_at` | timestamptz | no | `now()` | |
+
+Checks (PR-15): `slug` lowercase words joined by single dashes, at most 64 characters (the chat URL rule); `name` 1–100 characters after trimming; `description` at most 500. The admin form and the server validate the same limits; the checks make sure no other path stores more.
 
 ### 3.2 `documents`
 
