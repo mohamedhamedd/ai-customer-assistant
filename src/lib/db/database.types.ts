@@ -171,14 +171,14 @@ isOneToOne: true
                   ]
                 },"tool_calls": {
                   Row: {
-                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"name": string,"ok": boolean,"result": NonNullable<Json>
+                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"name": string,"ok": boolean,"result": NonNullable<Json>,"sources": NonNullable<Json>
                   }
                   ComputedFields: never
                   Insert: {
-                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at"?: string,"duration_ms": number,"id"?: never,"name": string,"ok": boolean,"result": NonNullable<Json>
+                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at"?: string,"duration_ms": number,"id"?: never,"name": string,"ok": boolean,"result": NonNullable<Json>,"sources"?: NonNullable<Json>
                   }
                   Update: {
-                    "arguments"?: NonNullable<Json>,"channel"?: string,"conversation_id"?: string,"created_at"?: string,"duration_ms"?: number,"id"?: never,"name"?: string,"ok"?: boolean,"result"?: NonNullable<Json>
+                    "arguments"?: NonNullable<Json>,"channel"?: string,"conversation_id"?: string,"created_at"?: string,"duration_ms"?: number,"id"?: never,"name"?: string,"ok"?: boolean,"result"?: NonNullable<Json>,"sources"?: NonNullable<Json>
                   }
                   Relationships: [
                     {

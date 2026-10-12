@@ -202,14 +202,14 @@ async function streamStep(
 // The model sometimes calls save_lead again with the same details. The save
 // is harmless (it matches the same lead), but a second "details saved"
 // action would be stored, shown and audited as if something new happened.
-function repeatsAction(actions: Action[], action: Action): boolean {
+export function repeatsAction(actions: Action[], action: Action): boolean {
   if (action.kind !== "lead_saved") return false;
   const details = JSON.stringify(action.details);
   return actions.some((a) => a.kind === "lead_saved" && JSON.stringify(a.details) === details);
 }
 
 // Cards shown in the thread come from tool results, never from model text.
-function toAction(outcome: ToolOutcome): Action | null {
+export function toAction(outcome: Pick<ToolOutcome, "name" | "output">): Action | null {
   const o = outcome.output as Record<string, unknown>;
   if (outcome.name === "save_lead" && o.ok) {
     return { kind: "lead_saved", details: (o.details as Record<string, unknown>) ?? {} };

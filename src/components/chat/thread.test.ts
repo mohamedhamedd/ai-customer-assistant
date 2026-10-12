@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import {
   applyEvent,
   canRetry,
+  endVoice,
+  voiceAssistantItem,
+  voiceCaption,
+  voiceCaptionDone,
+  voiceUserItem,
+  voiceUserTranscript,
   isAnsweredElsewhere,
   isBusy,
   stopWaiting,
@@ -109,9 +115,9 @@ test("Retry depends on the error, and a retry keeps the clientMessageId", () => 
 
 test("history pairs each reply with its question, oldest first", () => {
   const turns = turnsFromHistory([
-    { id: 1, role: "user", content: "q1", sources: [], actions: [], replyFailed: false, clientMessageId: "c1" },
-    { id: 2, role: "assistant", content: "a1", sources: [], actions: [request], replyFailed: false, clientMessageId: null },
-    { id: 3, role: "user", content: "q2", sources: [], actions: [], replyFailed: true, clientMessageId: "c3" },
+    { id: 1, channel: "text", role: "user", content: "q1", sources: [], actions: [], replyFailed: false, clientMessageId: "c1" },
+    { id: 2, channel: "text", role: "assistant", content: "a1", sources: [], actions: [request], replyFailed: false, clientMessageId: null },
+    { id: 3, channel: "text", role: "user", content: "q2", sources: [], actions: [], replyFailed: true, clientMessageId: "c3" },
   ]);
   assert.equal(turns.length, 2);
   assert.equal(turns[0].reply?.text, "a1");
@@ -123,8 +129,8 @@ test("history pairs each reply with its question, oldest first", () => {
 
 test("history: a failed message answered by a later re-run shows the answer", () => {
   const turns = turnsFromHistory([
-    { id: 1, role: "user", content: "q", sources: [], actions: [], replyFailed: true, clientMessageId: "c1" },
-    { id: 2, role: "assistant", content: "a", sources: [], actions: [], replyFailed: false, clientMessageId: null },
+    { id: 1, channel: "text", role: "user", content: "q", sources: [], actions: [], replyFailed: true, clientMessageId: "c1" },
+    { id: 2, channel: "text", role: "assistant", content: "a", sources: [], actions: [], replyFailed: false, clientMessageId: null },
   ]);
   assert.equal(turns.length, 1);
   assert.equal(turns[0].reply?.phase, "done");
@@ -133,8 +139,8 @@ test("history: a failed message answered by a later re-run shows the answer", ()
 
 test("reloading mid-answer shows the last question as still being answered", () => {
   const turns = turnsFromHistory([
-    { id: 1, role: "user", content: "old, abandoned", sources: [], actions: [], replyFailed: false, clientMessageId: "c1" },
-    { id: 2, role: "user", content: "q", sources: [], actions: [], replyFailed: false, clientMessageId: "c2" },
+    { id: 1, channel: "text", role: "user", content: "old, abandoned", sources: [], actions: [], replyFailed: false, clientMessageId: "c1" },
+    { id: 2, channel: "text", role: "user", content: "q", sources: [], actions: [], replyFailed: false, clientMessageId: "c2" },
   ]);
   assert.equal(turns[0].reply, null, "only the last can be in progress");
   assert.equal(turns[1].reply?.phase, "waiting");
@@ -171,4 +177,49 @@ test("contact details are masked on cards", () => {
   assert.equal(maskEmail("sarah@example.com"), "s***@example.com");
   assert.equal(maskEmail("not-an-email"), "not-an-email");
   assert.equal(maskPhone("+1 (416) 555-0199"), "••• 0199");
+});
+
+test("voice: the question's caption fills in after the answer has started", () => {
+  let turns = voiceUserItem([], "item_q");
+  turns = voiceAssistantItem(turns, "item_a", { sources: [], actions: [request] });
+  turns = voiceCaption(turns, "item_a", "We're open ");
+  turns = voiceCaption(turns, "item_a", "nine to five.");
+  turns = voiceUserTranscript(turns, "item_q", " When are you open? ");
+  turns = voiceCaptionDone(turns, "item_a", "We're open nine to five.");
+
+  assert.equal(turns.length, 1, "question and answer are one turn");
+  assert.equal(turns[0].userText, "When are you open?");
+  assert.equal(turns[0].transcribing, false);
+  assert.equal(turns[0].reply?.text, "We're open nine to five.");
+  assert.equal(turns[0].reply?.phase, "done");
+  assert.deepEqual(turns[0].reply?.actions, [request]);
+  assert.equal(canRetry(turns, 0), false, "voice turns aren't retried");
+});
+
+test("voice: a second answer in a row gets its own turn; repeated events are ignored", () => {
+  let turns = voiceUserItem([], "item_q");
+  turns = voiceUserItem(turns, "item_q");
+  turns = voiceAssistantItem(turns, "item_a1", { sources: [], actions: [] });
+  turns = voiceAssistantItem(turns, "item_a1", { sources: [], actions: [] });
+  turns = voiceAssistantItem(turns, "item_a2", { sources: [], actions: [] });
+  assert.equal(turns.length, 2);
+  assert.equal(turns[1].userText, "");
+  assert.equal(turns[1].reply?.voiceItemId, "item_a2");
+});
+
+test("voice: ending the call settles captions and adds a notice", () => {
+  let turns = voiceUserItem([], "item_q");
+  turns = voiceAssistantItem(turns, "item_a", { sources: [], actions: [] });
+  turns = endVoice(turns, "end-1");
+  assert.equal(turns[0].reply?.phase, "done");
+  assert.equal(turns[0].transcribing, false);
+  assert.equal(turns[1].notice, "Voice session ended");
+  assert.equal(isBusy(turns), false, "typing works again");
+});
+
+test("history: an unanswered voice question isn't treated as in progress or retryable", () => {
+  const turns = turnsFromHistory([{ id: 1, channel: "voice", role: "user", content: "Hello?", sources: [], actions: [], replyFailed: false, clientMessageId: "item_abc" }]);
+  assert.equal(turns[0].reply, null);
+  assert.equal(turns[0].clientMessageId, null);
+  assert.equal(isAnsweredElsewhere(turns), false);
 });

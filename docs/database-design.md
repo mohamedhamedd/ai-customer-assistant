@@ -209,7 +209,7 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 **Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
-1. When the browser receives `conversation.item.created` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order. **Only items with `type = 'message'` and role `user` or `assistant` are reported.** The same event also fires for tool-call items, which belong in `tool_calls`, not here.
+1. When the browser receives `conversation.item.added` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order. **Only items with `type = 'message'` and role `user` or `assistant` are reported.** The same event also fires for tool-call items, which belong in `tool_calls`, not here.
 2. When the transcript completes, the browser sends it and the server fills `content` for that `(conversation_id, client_message_id)`. Both calls are idempotent. **An empty or whitespace-only transcript** (a cough, background noise) is stored as `NULL`, never `''`, which the `CHECK` would reject.
 
 ### 3.6 `tool_calls`
@@ -226,6 +226,7 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 | `result` | jsonb | no | | The exact payload returned to the model, `{ok, data}` or `{ok:false, error}` |
 | `ok` | boolean | no | | Denormalised from `result` for easy filtering of failures |
 | `duration_ms` | int | no | | Latency of the tool execution |
+| `sources` | jsonb | no | `'[]'` | Citations the call produced (`search_knowledge`). A voice answer's `sources` and `actions` are copied from the voice tool calls since the previous answer, by the server, so the browser can't forge them (PR-09) |
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 ### 3.7 `leads`
@@ -433,7 +434,7 @@ A text turn is: store the user message → run the agent → store the assistant
 
 **Turn deadline.** A whole turn (all model calls and tool calls) has a hard limit of **45 s**; when it expires the turn stops and stores the fallback reply. Without this, a slow but live turn could pass the 60 s mark and a retry would start a second copy of it in parallel. The deadline is shorter than the window, so "≥ 60 s with no reply" reliably means the original is dead.
 
-**One turn at a time per conversation.** A new customer message goes through `begin_user_message()`, which locks the conversation row, refuses (409) if another turn in the conversation is still in progress, and only then inserts. Without it, a second message sent before the first was answered would run in parallel on stale history and state, and could create a second request. "In progress" is defined once, in `turn_in_progress()`, and used by both entry points.
+**One turn at a time per conversation.** A new customer message goes through `begin_user_message()`, which locks the conversation row, refuses (409) if another turn in the conversation is still in progress, and only then inserts. Without it, a second message sent before the first was answered would run in parallel on stale history and state, and could create a second request. "In progress" is defined once, in `turn_in_progress()`, and used by both entry points. Only **text** questions count: a voice question is answered by the Realtime session and its answer isn't linked through `reply_to_message_id`, so counting it blocked typing for 60 s after a voice call (found in live testing, PR-09).
 
 **Re-runs are claimed atomically.** A re-run is only started by the caller that wins `claim_reply_attempt()`: one conditional `UPDATE` that clears the failure flag and restarts `reply_attempt_at`, only if the message is failed or its last attempt is older than the window, and has no reply. Two concurrent retries can't both win: the second waits on the row lock, re-checks the condition after the first commits, finds it false and gets 409. The window is measured from the latest attempt, not from when the message was sent, so a re-run of an old message is itself "in progress" for 60 s.
 

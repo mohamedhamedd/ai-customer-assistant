@@ -101,6 +101,18 @@ This gate filters noise. The system prompt remains the main defence: the model a
 - **`use-chat.ts`**: the network side. An anonymous session id in `localStorage` (one per business), a fresh `clientMessageId` per message (reused on retry, also after a reload), NDJSON streaming, 409 / offline / "AI unavailable" handling, and re-sending a message that failed while offline when the browser is back online.
 - **UI**: streaming markdown (tables, lists; raw HTML is ignored), a tool status line ("Searching {business} information…"), source chips with the passage in a popover (a bottom sheet on mobile), action cards built from tool results (never from the model's text), and a consultation card that always says *Pending*, with the time in the business's timezone. Composer: Enter sends, Shift+Enter adds a line, counter from 1,800 characters, limit 2,000. Works from 360 px wide, by keyboard, and in dark mode; screen readers hear each finished answer once instead of every streamed fragment.
 
+## Voice
+
+Voice uses the OpenAI Realtime API over WebRTC: audio goes straight between the browser and OpenAI, with server-side turn detection (natural pauses, and talking over the assistant interrupts it). Code: `src/lib/voice/`, `src/app/api/voice/`, `src/components/chat/use-voice.ts`.
+
+- **No key or token in the browser.** The browser sends its WebRTC offer to `POST /api/voice/session`; the server opens the call with the session config (same prompt with a spoken style, same three tools, the conversation so far) and returns OpenAI's answer.
+- **One tool layer.** The model's tool calls arrive in the browser, which relays them to `POST /api/voice/tool`; the server runs them with its own business and conversation context, through the same executor, validation and SQL functions as text chat.
+- **One conversation.** Transcripts are stored as `channel = 'voice'` messages in the same conversation (`POST /api/voice/items`, reported when an item starts and again when its transcript is ready, so the order is right). Typing after a call continues with the voice context, and vice versa.
+- **Cards and citations come from the server.** A voice answer's sources and action cards are copied from the tool calls the server ran since the previous answer, never taken from the browser.
+- **UI:** a permission explainer, a compact panel with an orb that follows the audio level, Listening / Thinking / Checking / Speaking / Muted states, Mute, End, and clear states for a blocked microphone or a dropped connection. Captions appear live in the thread with mic and speaker icons.
+
+Known limits: the browser reports transcripts, so a visitor could write fake lines into their own transcript (never into leads or requests, which only tools write; design doc L1). A visitor could also send `session.update` on their own call; a server-side connection to the call is the production fix. Calls have no hard time limit yet (PR-13).
+
 ## Agent: prompt and tools
 
 `src/lib/agent/` holds everything the model is given, shared by text chat and voice:
@@ -123,13 +135,14 @@ The evaluation set is `data/sample-clinic/eval.json` (15 answerable questions wi
 ```
 src/
   app/            Next.js routes: customer chat (/b/[slug]), admin, API route handlers
-  components/chat/  Customer chat UI (client components)
+  components/chat/  Customer chat UI and voice mode (client components)
   lib/
     env.ts        Validated configuration (server-only)
     openai.ts     OpenAI client (server-only)
     db/           Supabase service-role client + data access (server-only)
     rag/          Document extraction, chunking, embeddings, retrieval
     agent/        System prompt, tool definitions, agent loop
+    voice/        Realtime session config, call setup, tool relay, transcripts
   instrumentation.ts  Fails fast at boot on bad configuration
 supabase/         Local Supabase config, migrations, seed
 data/sample-clinic/  Demo business documents and the demo question/answer map

@@ -30,6 +30,8 @@ export interface AuditRow {
   result: ToolOutput;
   ok: boolean;
   duration_ms: number;
+  // Citations (search_knowledge), so a voice answer can take them from here.
+  sources: Source[];
 }
 
 export interface ExecuteDeps {
@@ -62,7 +64,12 @@ class ToolTimeout extends Error {}
 async function auditToDb(row: AuditRow): Promise<void> {
   const { error } = await db()
     .from("tool_calls")
-    .insert({ ...row, arguments: row.arguments as NonNullable<Json>, result: row.result as NonNullable<Json> });
+    .insert({
+      ...row,
+      arguments: row.arguments as NonNullable<Json>,
+      result: row.result as NonNullable<Json>,
+      sources: row.sources as unknown as NonNullable<Json>,
+    });
   if (error) throw new Error(error.message);
 }
 
@@ -118,6 +125,7 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
       result: output,
       ok: output.ok,
       duration_ms: Date.now() - started,
+      sources,
     });
   } catch (err) {
     // The audit trail must never break the customer's conversation.

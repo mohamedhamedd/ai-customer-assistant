@@ -14,6 +14,8 @@ const schema = z.object({
   OPENAI_EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
   OPENAI_REALTIME_MODEL: z.string().min(1).default("gpt-realtime"),
   OPENAI_REALTIME_VOICE: z.string().min(1).default("alloy"),
+  // Transcribes the customer's speech for captions and the stored transcript.
+  OPENAI_TRANSCRIBE_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
 
   // Where / sends visitors until the home page lists every business (PR-15).
   DEMO_BUSINESS_SLUG: z.string().min(1).default("lakeside-dental"),

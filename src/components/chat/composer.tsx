@@ -18,12 +18,15 @@ export function Composer({
   text,
   setText,
   onSend,
+  onVoice,
 }: {
   busy: boolean;
   businessName: string;
   text: string;
   setText: (text: string) => void;
   onSend: (text: string) => boolean;
+  // Undefined when the browser can't do voice (no WebRTC or microphone API).
+  onVoice?: () => void;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const length = text.length;
@@ -85,13 +88,13 @@ export function Composer({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {/* Voice arrives with PR-09. */}
           <button
             type="button"
-            disabled
-            title="Voice is coming soon"
-            aria-label="Talk to the assistant (coming soon)"
-            className="inline-flex size-11 items-center justify-center rounded-full text-text-muted opacity-50 md:size-9"
+            onClick={onVoice}
+            disabled={!onVoice || busy}
+            title={onVoice ? "Talk to the assistant" : "Voice isn't supported in this browser. Try Chrome, Edge or Safari."}
+            aria-label={onVoice ? "Talk to the assistant" : "Voice isn't supported in this browser"}
+            className="inline-flex size-11 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-muted hover:text-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50 disabled:hover:bg-transparent md:size-9"
           >
             <Mic aria-hidden className="size-5" />
           </button>
