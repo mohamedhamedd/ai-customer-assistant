@@ -31,7 +31,8 @@ export interface ToolContext {
 // What the model sees. Always an object with ok.
 export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
-  | { ok: false; error: string; message: string };
+  // details: confirm_first only, what would be saved (confirm.ts).
+  | { ok: false; error: string; message: string; details?: Record<string, unknown> };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -47,15 +48,29 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
+// Confirm before write (confirm.ts): a write tool's first call with new
+// details only proposes them; the same details commit once the customer has
+// answered.
+export interface ConfirmSpec<A> {
+  // key: what identifies the write (the contact, or the time slot); the
+  // proposal and the commit must match on it. details: what would be saved,
+  // for the model to read back. Null when run() will reject the arguments
+  // anyway (nothing is written, and the model hears the real problem first).
+  propose(args: A, ctx: ToolContext): { key: string; details: Record<string, unknown> } | null;
+}
+
 export interface Tool extends ToolDefinition {
   // Writes data. A write that times out may still commit, so its outcome is
   // reported as unknown rather than failed (execute.ts).
   writes: boolean;
   schema: z.ZodType;
+  confirm?: ConfirmSpec<unknown>;
   run(args: unknown, ctx: ToolContext): Promise<ToolRunResult>;
 }
 
-function defineTool<S extends z.ZodType>(spec: ToolDefinition & { writes: boolean; schema: S; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> }): Tool {
+function defineTool<S extends z.ZodType>(
+  spec: ToolDefinition & { writes: boolean; schema: S; confirm?: ConfirmSpec<z.output<S>>; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> },
+): Tool {
   return spec as unknown as Tool;
 }
 
@@ -156,7 +171,7 @@ const saveLead = defineTool({
   name: "save_lead",
   writes: true,
   description:
-    "Save the customer's contact details so the team can follow up. Requires a name and at least one of email or phone. Read the details back to the customer and get confirmation before calling.",
+    "Save the customer's contact details so the team can follow up. Requires a name and at least one of email or phone. The first call with new details saves nothing: it returns them to read back to the customer. Call again with the same details after they confirm.",
   parameters: {
     type: "object",
     properties: {
@@ -169,6 +184,13 @@ const saveLead = defineTool({
     additionalProperties: false,
   },
   schema: saveLeadSchema,
+  confirm: {
+    // The contact itself; what they're interested in may be worded differently.
+    propose: (args) => ({
+      key: JSON.stringify([args.name.toLowerCase(), args.email ?? null, args.phone ?? null]),
+      details: { name: args.name, email: args.email, phone: args.phone, interest: args.interest },
+    }),
+  },
   async run(args, ctx) {
     const { error } = await (ctx.client ?? db()).rpc("save_lead", {
       p_business_id: ctx.businessId,
@@ -224,7 +246,7 @@ const createConsultationRequest = defineTool({
   name: "create_consultation_request",
   writes: true,
   description:
-    "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. Read the service and exact date and time back to the customer before calling.",
+    "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. The first call for a time saves nothing: it returns the details to read back to the customer. Call again with the same details after they confirm.",
   parameters: {
     type: "object",
     properties: {
@@ -239,6 +261,14 @@ const createConsultationRequest = defineTool({
     additionalProperties: false,
   },
   schema: consultationSchema,
+  confirm: {
+    // The time slot, as the dedupe does: the service may be worded differently.
+    propose: (args, ctx) => {
+      const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+      if (!when.ok) return null;
+      return { key: when.at.toISOString(), details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes } };
+    },
+  },
   async run(args, ctx) {
     const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);

@@ -138,12 +138,21 @@ test("an invented price is replaced: the rewrite fails too, so the safe reply st
 
 test("figures from this turn's tools or the customer pass; numbers in the rules don't count; a good rewrite replaces a bad answer", async () => {
   const { g, rewrites } = guards();
-  // From a tool result (save_lead returns the details it saved).
-  const tool = await turn(`I'm Sam, ${leadEmail}`, {
-    guards: g,
-    complete: scripted([{ tool: "save_lead", args: { name: "Sam", email: leadEmail, phone: "(503) 555-0199" } }, { text: "Saved. We'll call you at (503) 555-0199." }]),
-  });
-  assert.ok(!tool.events.some((e) => e.type === "replace"), "the phone is in the tool's result");
+  // From a tool result and the conversation: save_lead's first call proposes
+  // the details (returning them), the model reads them back, and the yes
+  // commits them (confirm.ts). That tool results count as evidence on their
+  // own is in loop.test.ts.
+  const sessionId = randomUUID();
+  const sam = { name: "Sam", email: leadEmail, phone: "(503) 555-0199" };
+  const readBack = await turn(
+    `I'm Sam, ${leadEmail}, 503 555 0199`,
+    { guards: g, complete: scripted([{ tool: "save_lead", args: sam }, { text: `Just to confirm: Sam, ${leadEmail}, (503) 555-0199. Is that right?` }]) },
+    sessionId,
+  );
+  assert.ok(!readBack.events.some((e) => e.type === "replace"), "the read-back's phone is the customer's own");
+  const tool = await turn("Yes", { guards: g, complete: scripted([{ tool: "save_lead", args: sam }, { text: "Saved. We'll call you at (503) 555-0199." }]) }, sessionId);
+  assert.ok(tool.events.some((e) => e.type === "action" && e.action.kind === "lead_saved"), "confirmed, so saved");
+  assert.ok(!tool.events.some((e) => e.type === "replace"), "the phone is in the tool's result and the conversation");
   // From the customer's own words.
   const own = await turn("I was quoted $480 last year, is that still the price?", { guards: g, complete: scripted([{ text: "I don't have this year's price for that, but you mentioned $480." }]) });
   assert.ok(!own.events.some((e) => e.type === "replace"));
@@ -273,4 +282,27 @@ test("a block the guard isn't sure of waits for review, even in an attack catego
     unsure.flags.map((f) => [f.category, f.status]),
     [["injection", "new"]],
   );
+});
+
+test("confirm before write: a read-back an answer check replaced was never seen, so the yes can't commit", async () => {
+  const email = `guard-itest-${randomUUID().slice(0, 8)}@example.com`;
+  const sara = { name: "Sara", email };
+  const sessionId = randomUUID();
+  try {
+    // The model proposes and reads back, but the scope check rejects the answer
+    // and the customer gets the standard reply instead (flagged on the answer).
+    const offScope = guards({ scope: async () => ({ inScope: false, reason: "Judged off-business." }), record: liveGuards.record });
+    const first = await turn(`I'm Sara, ${email}`, { guards: offScope.g, complete: scripted([{ tool: "save_lead", args: sara }, { text: `Just to confirm: Sara, ${email}?` }]) }, sessionId);
+    assert.equal(first.saved, declineReply(first.name));
+
+    // "yes" to a read-back they never saw: proposed again, nothing saved.
+    const { g } = guards();
+    const yes = await turn("yes", { guards: g, complete: scripted([{ tool: "save_lead", args: sara }, { text: "Just to confirm: …" }]) }, sessionId);
+    const { data: last } = await db().from("tool_calls").select("result").eq("conversation_id", yes.conversationId).order("id", { ascending: false }).limit(1).single();
+    assert.equal((last!.result as { error?: string }).error, "confirm_first");
+    const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("email", email);
+    assert.equal(count, 0);
+  } finally {
+    await db().from("leads").delete().eq("email", email);
+  }
 });

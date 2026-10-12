@@ -5,13 +5,18 @@ import type { Json } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
-import { TOOLS, type Tool, type ToolContext, type ToolOutput } from "./tools";
+import { confirmFirst, isConfirmed } from "./confirm";
+import { TOOLS, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
 
 // Runs one tool call from the model. The contract (design D-09): it NEVER
 // throws. Every failure becomes { ok: false, error, message } so the model can
 // recover (ask for a corrected email, apologise for an outage) and can never
 // mistake a failure for success. Every call, successful or not, is written to
 // tool_calls (US-9.2).
+//
+// A write tool's first call with new details only proposes them; the same
+// details commit once the customer has answered (confirm.ts). Same for text
+// and voice: the proposal is the call's own tool_calls row.
 
 // Inside the 45 s turn deadline (design §7.1), with room for the model.
 export const TOOL_TIMEOUT_MS = 15_000;
@@ -47,7 +52,20 @@ export interface ExecuteDeps {
   timeoutMs: number;
   // SIMULATE_DB_FAILURE: write tools fail as if the database were down.
   simulateDbFailure: () => boolean;
+  // What a write tool's confirmation is checked against (confirm.ts).
+  proposals: (ctx: ToolContext, tool: string) => Promise<Proposals>;
 }
+
+export interface Proposals {
+  // This tool's latest proposal in the conversation (a confirm_first call):
+  // its arguments as the model sent them, and when.
+  latest: { arguments: unknown; at: Date } | null;
+  // What followed it: the read-back and the customer's answer (confirm.ts).
+  readBack: { at: Date; delivered: boolean } | null;
+  answerAt: Date | null;
+}
+
+const NO_PROPOSAL: Proposals = { latest: null, readBack: null, answerAt: null };
 
 export const UNAVAILABLE: ToolOutput = {
   ok: false,
@@ -81,6 +99,50 @@ async function auditToDb(row: AuditRow): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// The answer checks that replace a text answer before the customer sees it
+// (PR-16). A voice answer is flagged after it was heard, so it still counts.
+const REPLACED = ["canary", "scope", "numbers"];
+// Messages after a proposal to look through: the read-back and the answer
+// come right after it.
+const FOLLOWING = 20;
+
+// The latest proposal, then what followed it. Both tables stamp rows with
+// clock_timestamp(), so the times compare across them.
+async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposals> {
+  const client = ctx.client ?? db();
+  const { data: proposal, error } = await client
+    .from("tool_calls")
+    .select("arguments, created_at")
+    .eq("conversation_id", ctx.conversationId)
+    .eq("name", tool)
+    .eq("result->>error", "confirm_first")
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`Loading the proposal failed: ${error.message}`);
+  if (!proposal) return NO_PROPOSAL;
+
+  const { data: after, error: afterError } = await client
+    .from("messages")
+    .select("role, channel, content, created_at, flags(layer)")
+    .eq("conversation_id", ctx.conversationId)
+    // The database's own timestamp string: a Date would drop the microseconds.
+    .gt("created_at", proposal.created_at)
+    .order("id")
+    .limit(FOLLOWING);
+  if (afterError) throw new Error(`Loading the read-back failed: ${afterError.message}`);
+  // A voice item without words yet (still transcribing, or silence) isn't a read-back.
+  const readBack = after.find((m) => m.role === "assistant" && m.content);
+  const answer = readBack && after.find((m) => m.role === "user" && m.created_at > readBack.created_at);
+  return {
+    latest: { arguments: proposal.arguments, at: new Date(proposal.created_at) },
+    readBack: readBack
+      ? { at: new Date(readBack.created_at), delivered: !(readBack.channel === "text" && readBack.flags.some((f) => REPLACED.includes(f.layer))) }
+      : null,
+    answerAt: answer ? new Date(answer.created_at) : null,
+  };
+}
+
 const defaultDeps: ExecuteDeps = {
   tools: TOOLS,
   audit: auditToDb,
@@ -88,6 +150,7 @@ const defaultDeps: ExecuteDeps = {
   trace: (fields) => console.log(JSON.stringify({ event: "tool_call", ...fields })),
   timeoutMs: TOOL_TIMEOUT_MS,
   simulateDbFailure: () => env().SIMULATE_DB_FAILURE,
+  proposals: proposalsFromDb,
 };
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
@@ -114,29 +177,37 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
     if (!parsed.success) {
       output = { ok: false, error: "invalid_input", message: describeIssues(parsed.error) };
     } else {
+      // Only a write that started can have an unknown outcome.
+      let writing = false;
+      let expired = false;
       try {
         // Thrown where a real database error would be, so a simulated
         // outage takes exactly the real path below.
         if (tool.writes && d.simulateDbFailure()) throw new Error("SIMULATE_DB_FAILURE: database unavailable");
-        const result = await withTimeout(tool.run(parsed.data, ctx), d.timeoutMs);
+        // One timeout for the confirmation check and the tool together: the
+        // turn only starts a tool when TOOL_TIMEOUT_MS still fits (loop.ts).
+        const result = await withTimeout(
+          (async (): Promise<ToolRunResult> => {
+            const proposal = tool.confirm?.propose(parsed.data, ctx);
+            // Null: invalid arguments, which run() rejects without writing.
+            if (proposal && !(await confirmed(tool, proposal.key, ctx, d))) return { output: confirmFirst(proposal.details) };
+            // A check that finished after the timeout answered must not write.
+            if (expired) return { output: UNAVAILABLE };
+            writing = tool.writes;
+            return tool.run(parsed.data, ctx);
+          })(),
+          d.timeoutMs,
+          () => (expired = true),
+        );
         output = result.output;
         sources = result.sources ?? [];
       } catch (err) {
         d.log(`${name} failed (conversation ${ctx.conversationId})`, err);
-        output = err instanceof ToolTimeout && tool.writes ? OUTCOME_UNKNOWN : UNAVAILABLE;
+        output = err instanceof ToolTimeout && writing ? OUTCOME_UNKNOWN : UNAVAILABLE;
       }
     }
   }
 
-  const outcome: ToolOutcome = { name, ok: output.ok, output, sources };
-  d.trace({
-    conversationId: ctx.conversationId,
-    channel: ctx.channel,
-    tool: name,
-    ok: output.ok,
-    ...(output.ok ? {} : { error: output.error }),
-    ms: Date.now() - started,
-  });
   try {
     await d.audit({
       conversation_id: ctx.conversationId,
@@ -153,8 +224,29 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
   } catch (err) {
     // The audit trail must never break the customer's conversation.
     d.log(`audit write failed for ${name}`, err);
+    // Except that a proposal lives in its audit row (confirm.ts): unrecorded,
+    // it could never be confirmed, and the customer would be asked forever.
+    // Nothing was saved, so it's reported like any write that failed.
+    if (!output.ok && output.error === "confirm_first") output = UNAVAILABLE;
   }
-  return outcome;
+  d.trace({
+    conversationId: ctx.conversationId,
+    channel: ctx.channel,
+    tool: name,
+    ok: output.ok,
+    ...(output.ok ? {} : { error: output.error }),
+    ms: Date.now() - started,
+  });
+  return { name, ok: output.ok, output, sources };
+}
+
+// The latest proposal's key comes from its stored arguments, parsed and
+// keyed like the new call's.
+async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
+  const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
+  const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
+  const proposed = parsed?.success ? tool.confirm?.propose(parsed.data, ctx) : null;
+  return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt });
 }
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words
@@ -163,10 +255,13 @@ function describeIssues(error: z.ZodError): string {
   return error.issues.map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ");
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new ToolTimeout(`timed out after ${ms} ms`)), ms);
+    timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new ToolTimeout(`timed out after ${ms} ms`));
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

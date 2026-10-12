@@ -88,6 +88,9 @@ export interface ToolSummary {
   // How it went, in a few words.
   outcome: string;
   tone: Tone;
+  // Something went wrong (shown red and open). Not the same as ok: false: a
+  // write that only proposed its details is the confirm step doing its job.
+  failed: boolean;
 }
 
 const record = (value: Json): Record<string, Json | undefined> => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
@@ -111,21 +114,24 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
     detail = [text(result.service) ?? text(args.service), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
   }
 
+  // Confirm before write (src/lib/agent/confirm.ts): a first call only
+  // proposes the details; the model reads them back before they're saved.
+  if (!call.ok && result.error === "confirm_first") return { detail, outcome: "proposed, waiting for a yes", tone: "neutral", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are
     // instructions for the model, so the code says enough here.
     const outcome = error === "invalid_input" && text(result.message) ? `invalid input: ${result.message}` : error.replace(/_/g, " ");
-    return { detail, outcome, tone: "danger" };
+    return { detail, outcome, tone: "danger", failed: true };
   }
   if (call.name === "search_knowledge") {
-    if (result.found === false) return { detail, outcome: "nothing found", tone: "warning" };
+    if (result.found === false) return { detail, outcome: "nothing found", tone: "warning", failed: false };
     const n = Array.isArray(result.results) ? result.results.length : 0;
-    return { detail, outcome: `${n} ${n === 1 ? "match" : "matches"}`, tone: "neutral" };
+    return { detail, outcome: `${n} ${n === 1 ? "match" : "matches"}`, tone: "neutral", failed: false };
   }
-  if (call.name === "save_lead") return { detail, outcome: "saved", tone: "success" };
+  if (call.name === "save_lead") return { detail, outcome: "saved", tone: "success", failed: false };
   if (call.name === "create_consultation_request") {
-    return { detail, outcome: result.already_requested === true ? "already requested" : "requested", tone: "success" };
+    return { detail, outcome: result.already_requested === true ? "already requested" : "requested", tone: "success", failed: false };
   }
-  return { detail, outcome: "done", tone: "success" };
+  return { detail, outcome: "done", tone: "success", failed: false };
 }
