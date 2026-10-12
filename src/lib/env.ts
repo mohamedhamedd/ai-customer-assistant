@@ -19,10 +19,14 @@ const schema = z.object({
   // Transcribes the customer's speech for captions and the stored transcript.
   OPENAI_TRANSCRIBE_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
 
-  // Set when the app runs behind a proxy you control that sets the client's
-  // address (Vercel, a load balancer, nginx). Without it, client-supplied
-  // X-Forwarded-For headers are ignored and per-IP rate limits are off.
-  TRUST_PROXY: z.stringbool().default(false),
+  // The header your own proxy puts the client's address in, lowercase:
+  // "x-forwarded-for" (the last entry is used: the one the proxy appended),
+  // or e.g. "cf-connecting-ip" (Cloudflare), "x-real-ip" (nginx, if it sets
+  // it). Unset: the app can't know the address, and per-IP limits are off.
+  TRUSTED_IP_HEADER: z
+    .string()
+    .regex(/^[a-z0-9-]+$/, "a lowercase header name")
+    .optional(),
 
   // Demo / testing only: the two write tools fail as if the database were
   // down (search still works), to show the assistant never claims a save

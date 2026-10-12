@@ -2,7 +2,7 @@ import { z } from "zod";
 import { readJsonCapped } from "@/lib/http";
 import { enforce, ipLimit, LIMITS } from "@/lib/rate-limit";
 import { BUSINESS_SLUG, MAX_MESSAGE_CHARS, MAX_SLUG_CHARS } from "@/lib/chat/limits";
-import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn, type ChatEvent } from "@/lib/chat/turn";
+import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, requireBusiness, runChatTurn, type ChatEvent } from "@/lib/chat/turn";
 
 // POST /api/chat   { businessSlug, sessionId, clientMessageId, message } -> NDJSON event stream
 // GET  /api/chat?business=...&sessionId=...                               -> { messages }
@@ -39,7 +39,10 @@ export async function POST(request: Request) {
 
   let prepared: Awaited<ReturnType<typeof prepareChatTurn>>;
   try {
-    await enforce([LIMITS.chatSession(input.sessionId), LIMITS.chatBusiness(input.businessSlug), ...ipLimit(request, LIMITS.chatIp)]);
+    // Per visitor first; the business's ceiling only for a real business.
+    await enforce([[LIMITS.chatSession(input.sessionId), ...ipLimit(request, LIMITS.chatIp)]]);
+    await requireBusiness(input.businessSlug);
+    await enforce([[LIMITS.chatBusiness(input.businessSlug)]]);
     prepared = await prepareChatTurn(input);
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });
@@ -97,6 +100,10 @@ export async function GET(request: Request) {
     return Response.json({ error: "sessionId must be a UUID" }, { status: 400 });
   }
   try {
+    const tooMany = "Too many requests. Please wait a moment and reload.";
+    await enforce([[LIMITS.historySession(sessionId), ...ipLimit(request, LIMITS.historyIp)]], tooMany);
+    await requireBusiness(slug.data);
+    await enforce([[LIMITS.historyBusiness(slug.data)]], tooMany);
     return Response.json({ messages: await loadHistory(slug.data, sessionId) }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });

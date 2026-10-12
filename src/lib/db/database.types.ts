@@ -217,14 +217,14 @@ isOneToOne: false
                   ]
                 },"voice_calls": {
                   Row: {
-                    "conversation_id": string,"created_at": string,"expires_at": string,"id": string,"openai_call_id": string | null,"token_hash": string
+                    "conversation_id": string,"created_at": string,"expires_at": string,"hangup_attempted_at": string | null,"id": string,"openai_call_id": string | null,"token_hash": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "conversation_id": string,"created_at"?: string,"expires_at": string,"id"?: string,"openai_call_id"?: string | null,"token_hash": string
+                    "conversation_id": string,"created_at"?: string,"expires_at": string,"hangup_attempted_at"?: string | null,"id"?: string,"openai_call_id"?: string | null,"token_hash": string
                   }
                   Update: {
-                    "conversation_id"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"openai_call_id"?: string | null,"token_hash"?: string
+                    "conversation_id"?: string,"created_at"?: string,"expires_at"?: string,"hangup_attempted_at"?: string | null,"id"?: string,"openai_call_id"?: string | null,"token_hash"?: string
                   }
                   Relationships: [
                     {

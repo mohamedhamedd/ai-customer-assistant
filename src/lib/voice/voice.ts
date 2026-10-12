@@ -92,7 +92,7 @@ async function liveCall(callToken: string): Promise<LiveCall> {
   if (new Date(data.expires_at).getTime() < Date.now()) {
     // Over the time limit: hang up at OpenAI, so the audio (and the bill)
     // stops even if the browser keeps the connection open.
-    if (data.openai_call_id) await hangUp(data.openai_call_id, data.conversation_id);
+    if (data.openai_call_id) await hangUp(data.id, data.openai_call_id, data.conversation_id);
     throw new ChatHttpError(401, CALL_TIME_LIMIT);
   }
   return {
@@ -220,9 +220,22 @@ function cardsFrom(calls: UsedToolCall[]): { sources: Source[]; actions: Action[
   return { sources, actions };
 }
 
-// Best effort and idempotent in effect: a call that already ended just
-// returns an error, which is logged and ignored.
-async function hangUp(openaiCallId: string, conversationId: string) {
+const HANGUP_RETRY_MS = 60_000;
+
+// Best effort, at most one attempt per call per minute: the attempt is
+// claimed atomically (hangup_attempted_at), so concurrent late requests
+// don't each call OpenAI. A real hang-up succeeds the first time; a brief
+// OpenAI outage is retried a minute later; a call OpenAI no longer knows
+// (it answers 404 or 503 for those) costs one request a minute at most.
+async function hangUp(voiceCallId: string, openaiCallId: string, conversationId: string) {
+  const retryBefore = new Date(Date.now() - HANGUP_RETRY_MS).toISOString();
+  const { data: claimed, error } = await db()
+    .from("voice_calls")
+    .update({ hangup_attempted_at: new Date().toISOString() })
+    .eq("id", voiceCallId)
+    .or(`hangup_attempted_at.is.null,hangup_attempted_at.lt.${retryBefore}`)
+    .select("id");
+  if (error || !claimed?.length) return; // tried less than a minute ago
   try {
     await openai().realtime.calls.hangup(openaiCallId);
     log({ outcome: "call_hung_up", reason: "time_limit", conversationId });

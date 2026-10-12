@@ -7,10 +7,12 @@ import { ChatHttpError } from "@/lib/chat/turn";
 //
 // Three kinds of key, each covering what the others can't:
 //   - per session: the browser's anonymous id (one visitor's pace),
-//   - per IP: only behind a trusted proxy (TRUST_PROXY), since a client can
-//     write any X-Forwarded-For it likes and the app can't see the address,
-//   - per business: a ceiling nobody can get around by making up sessions or
-//     addresses, which bounds the cost of the paid calls.
+//   - per IP: only when the deployment names the header its proxy sets
+//     (TRUSTED_IP_HEADER), since a client can send any header it likes,
+//   - per business: a ceiling on cost nobody can raise by making up sessions
+//     or addresses. Checked last, so a request the per-visitor limits turn
+//     away doesn't use it up; per-IP limits behind a proxy are what keep one
+//     abuser from exhausting it (bot protection would be the next step).
 
 export interface Limit {
   key: string;
@@ -26,6 +28,11 @@ export const LIMITS = {
   voiceSession: (sessionId: string): Limit => ({ key: `voice:session:${sessionId}`, windowSeconds: 600, max: 3 }),
   voiceIp: (ip: string): Limit => ({ key: `voice:ip:${ip}`, windowSeconds: 600, max: 6 }),
   voiceBusiness: (slug: string): Limit => ({ key: `voice:business:${slug}`, windowSeconds: 600, max: 30 }),
+  // Loading the conversation is cheap but unbounded without a limit; a
+  // reload now and then is normal, so this is looser than sending.
+  historySession: (sessionId: string): Limit => ({ key: `history:session:${sessionId}`, windowSeconds: 60, max: 60 }),
+  historyBusiness: (slug: string): Limit => ({ key: `history:business:${slug}`, windowSeconds: 60, max: 1200 }),
+  historyIp: (ip: string): Limit => ({ key: `history:ip:${ip}`, windowSeconds: 60, max: 120 }),
   // Each upload is embedded and each test search embeds the question.
   uploadBusiness: (slug: string): Limit => ({ key: `upload:business:${slug}`, windowSeconds: 600, max: 30 }),
   searchBusiness: (slug: string): Limit => ({ key: `search:business:${slug}`, windowSeconds: 60, max: 30 }),
@@ -33,15 +40,14 @@ export const LIMITS = {
 
 export const TOO_MANY = "You're sending messages quickly. Please wait a moment and try again.";
 
-// The client's address, or null when it can't be known. Only behind a
-// trusted proxy: X-Real-IP, else the LAST X-Forwarded-For entry (the one
-// the proxy added; earlier entries are whatever the client sent).
-export function clientIp(request: Request, trustProxy = env().TRUST_PROXY): string | null {
-  if (!trustProxy) return null;
-  const realIp = request.headers.get("x-real-ip")?.trim();
-  if (realIp) return realIp;
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean);
-  return forwarded?.at(-1) ?? null;
+// The client's address, or null when it can't be known. Only from the
+// header the deployment's own proxy sets; for X-Forwarded-For, the LAST
+// entry (the one that proxy appended; earlier ones are the client's claim).
+export function clientIp(request: Request, header = env().TRUSTED_IP_HEADER): string | null {
+  if (!header) return null;
+  const values = request.headers.get(header)?.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!values?.length) return null;
+  return header === "x-forwarded-for" ? values.at(-1)! : values[0];
 }
 
 // The per-IP limit when the address is known; nothing otherwise (sharing
@@ -51,18 +57,30 @@ export function ipLimit(request: Request, limit: (ip: string) => Limit): Limit[]
   return ip ? [limit(ip)] : [];
 }
 
-// Throws a 429 if any limit is exceeded. If the counter itself fails, the
-// request goes through (logged): the limiter must not take the chat down.
-export async function enforce(limits: Limit[], message = TOO_MANY): Promise<void> {
-  const results = await Promise.all(
-    limits.map(async (l) => {
-      const { data, error } = await db().rpc("take_rate_limit", { p_key: l.key, p_window_seconds: l.windowSeconds, p_max: l.max });
-      if (error) {
-        console.error(JSON.stringify({ event: "rate_limit_error", key: l.key.split(":").slice(0, 2).join(":"), error: error.message }));
-        return true;
-      }
-      return data === true;
-    }),
-  );
-  if (results.includes(false)) throw new ChatHttpError(429, message);
+// Throws a 429 if any limit is exceeded. Tiers are checked in order and
+// stop at the first one over its limit, so later tiers (the business
+// ceiling) aren't spent on requests an earlier tier turned away. If the
+// counter itself fails, the request goes through (logged): the limiter must
+// not take the chat down.
+export async function enforce(tiers: Limit[][], message = TOO_MANY): Promise<void> {
+  for (const tier of tiers) {
+    const results = await Promise.all(tier.map(take));
+    const tripped = tier.filter((_, i) => !results[i]);
+    if (tripped.length) {
+      // The kind of limit only (e.g. "chat:business"), never the session id or address.
+      console.warn(JSON.stringify({ event: "rate_limited", limits: tripped.map(kindOf) }));
+      throw new ChatHttpError(429, message);
+    }
+  }
+}
+
+const kindOf = (l: Limit) => l.key.split(":").slice(0, 2).join(":");
+
+async function take(l: Limit): Promise<boolean> {
+  const { data, error } = await db().rpc("take_rate_limit", { p_key: l.key, p_window_seconds: l.windowSeconds, p_max: l.max });
+  if (error) {
+    console.error(JSON.stringify({ event: "rate_limit_error", key: kindOf(l), error: error.message }));
+    return true;
+  }
+  return data === true;
 }

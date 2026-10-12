@@ -359,8 +359,10 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
   // The customer ends the call (End, Type instead, Continue by text).
   const end = useCallback(() => finish(), [finish]);
   useEffect(() => {
+    // The server's message says why (time limit, or the call is gone); the
+    // browser's own timer has no message and means the time limit.
     onCallOver.current = (message) => {
-      finish("Voice session ended: time limit reached");
+      finish(message ?? "Voice session ended: time limit reached");
       if (message) announce(message);
     };
   }, [finish, announce]);

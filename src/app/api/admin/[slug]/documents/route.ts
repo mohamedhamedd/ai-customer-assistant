@@ -20,7 +20,7 @@ const MAX_BODY_BYTES = MAX_UPLOAD_BYTES + 64 * 1024;
 
 export function POST(request: Request, ctx: RouteContext<"/api/admin/[slug]/documents">) {
   return withBusiness(ctx.params, "upload", async (business) => {
-    await enforce([LIMITS.uploadBusiness(business.slug)], "Too many uploads in a short time. Please wait a few minutes.");
+    await enforce([[LIMITS.uploadBusiness(business.slug)]], "Too many uploads in a short time. Please wait a few minutes.");
     // Capped while reading: a request without content-length can't make the
     // server buffer more than this.
     const form = await readFormCapped(request, MAX_BODY_BYTES, "The file is larger than 10 MB.");
