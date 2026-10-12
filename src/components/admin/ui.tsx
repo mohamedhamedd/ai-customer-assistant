@@ -60,11 +60,11 @@ export function useToast() {
   }, [toast]);
   const show = useCallback((text: string, tone: "success" | "danger" = "success") => setToast({ text, tone, key: Date.now() }), []);
   const element = (
+    // One live region, so each message is announced once.
     <div aria-live="polite" className="pointer-events-none fixed bottom-4 right-4 z-50">
       {toast && (
         <p
           key={toast.key}
-          role={toast.tone === "danger" ? "alert" : "status"}
           className={`rounded-lg border px-4 py-2.5 text-[14px] font-medium shadow-level-2 ${
             toast.tone === "danger" ? "border-danger/40 bg-surface text-danger" : "border-border bg-surface text-text"
           }`}

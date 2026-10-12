@@ -128,11 +128,14 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 
 ## Admin: overview, leads and consultations
 
-`/admin` opens on the **Overview**: conversations and leads in the last 7 days, pending consultations, documents ready, and the latest requests and leads (contact details masked, as it's the screen most likely to be shared).
+**Sign-in.** Set `ADMIN_PASSWORD` (at least 8 characters) in `.env.local` and the admin asks for it once; the server then keeps you signed in with a signed, httpOnly, SameSite=Lax cookie (12 hours). Without it, the admin is open under `npm run dev` (labelled "Demo mode · no login") and **locked** in a production build, so a deploy can't go out with customer data open. Every admin page and every `/api/admin/*` route checks the session.
+
+`/admin` opens on the **Overview**: conversations active and leads captured in the last 7 days, pending consultations, documents ready, and the latest requests and leads (contact details masked, as it's the screen most likely to be shared).
 
 - **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest and consultation requests.
-- **Consultations** (`/admin/[slug]/consultations`): Pending by default, then Confirmed / Cancelled / All, soonest preferred time first, with the contact snapshot taken with the request. Status changes apply at once (optimistic) with a toast; if the save fails the row goes back and the toast says why. Reopening a cancelled request whose time slot was requested again is refused (one active request per slot).
-- **Times** are stored in UTC and always shown in the business's timezone, with the zone named on the page ("America/Los_Angeles (PDT)"), so staff and customer mean the same 3:00 PM.
+- **Consultations** (`/admin/[slug]/consultations`): Pending by default, then Confirmed / Cancelled / All. Upcoming requests first (soonest first), then past ones (most recent first), each part capped, so history never pushes next week off the list. The contact shown is the snapshot taken with the request. Status changes apply at once (optimistic) with a toast; the row's menu is locked while it saves, and if the save fails the row goes back and the toast says why. Reopening a cancelled request whose time slot was requested again is refused (one active request per slot).
+- **Times** are stored in UTC and always shown in the business's timezone, each with its own zone label ("3:00 PM PDT", and "PST" after the clock change), so staff and customer mean the same 3:00 PM.
+- **Counts** (tabs, sidebar badge, overview) come from one SQL function, `admin_counts()`.
 - Lists are capped at 200 rows; past that, the next step is cursor pagination. Every query is scoped to the business in the URL.
 
 ## Agent: prompt and tools
@@ -176,7 +179,7 @@ docs/             User stories, UI design brief, delivery plan
 
 - The browser never talks to Supabase or OpenAI with a secret. All database access goes through server route handlers using the service-role key.
 - Every module that touches a secret imports `server-only`, so importing it from client code fails the build.
-- Admin pages and `/api/admin/*` have no authentication in this version (demo/local use only, labelled "Demo mode · no login"): anyone who can reach the server can upload or delete documents. Production: sign-in (e.g. Supabase Auth) plus a membership check on every admin route, scoped to the business in the URL.
+- The admin is behind one shared password (`ADMIN_PASSWORD`, signed session cookie), and locked in production when it isn't set. Production next step: per-user accounts (e.g. Supabase Auth) with a membership check per business, and rate-limited sign-in (PR-13).
 
 ## Planning docs
 

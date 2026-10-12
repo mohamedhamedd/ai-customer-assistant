@@ -1,8 +1,8 @@
 "use client";
 
-import { CalendarDays, FileText, LayoutDashboard, Users } from "lucide-react";
+import { CalendarDays, FileText, LayoutDashboard, LogOut, Users } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CONSULTATIONS_CHANGED } from "./ui";
 
@@ -45,8 +45,9 @@ function usePendingCount(slug: string, pathname: string) {
 }
 
 // 240 px with labels from 1280 px, an icon rail below (design: Layout).
-export function AdminSidebar({ business }: { business: { slug: string; name: string } }) {
+export function AdminSidebar({ business, signedIn }: { business: { slug: string; name: string }; signedIn: boolean }) {
   const pathname = usePathname();
+  const router = useRouter();
   const pending = usePendingCount(business.slug, pathname);
   return (
     <aside className="flex w-16 shrink-0 flex-col justify-between border-r border-border bg-surface p-3 xl:w-[240px]">
@@ -87,10 +88,27 @@ export function AdminSidebar({ business }: { business: { slug: string; name: str
           })}
         </nav>
       </div>
-      <p className="flex items-center justify-center gap-1.5 rounded bg-surface-muted px-2 py-1 text-[12px] text-text-muted xl:justify-start" title="Demo mode · no login">
-        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-text-muted" />
-        <span className="hidden xl:inline">Demo mode · no login</span>
-      </p>
+      {signedIn ? (
+        <button
+          type="button"
+          title="Sign out"
+          onClick={async () => {
+            await fetch("/api/admin/session", { method: "DELETE" }).catch(() => {});
+            router.replace("/admin/login");
+            router.refresh();
+          }}
+          className="flex h-10 items-center justify-center gap-3 rounded-lg px-3 text-[14px] text-text-muted hover:bg-surface-muted hover:text-text xl:justify-start"
+        >
+          <LogOut aria-hidden className="size-5 shrink-0" />
+          <span className="hidden xl:inline">Sign out</span>
+        </button>
+      ) : (
+        // Only under `next dev` without ADMIN_PASSWORD (see lib/admin/auth.ts).
+        <p className="flex items-center justify-center gap-1.5 rounded bg-surface-muted px-2 py-1 text-[12px] text-text-muted xl:justify-start" title="Demo mode · no login">
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-text-muted" />
+          <span className="hidden xl:inline">Demo mode · no login</span>
+        </p>
+      )}
     </aside>
   );
 }

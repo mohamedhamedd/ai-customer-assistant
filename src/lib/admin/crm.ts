@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
-import { CONSULTATION_STATUSES, type Channel, type ConsultationStatus } from "@/lib/db/enums";
+import type { Channel, ConsultationStatus } from "@/lib/db/enums";
 import { ChatHttpError } from "@/lib/chat/turn";
 
 // Leads, consultation requests and the overview (US-8.1 – 8.3). Every query
@@ -30,9 +30,9 @@ const LEAD_COLUMNS = "id, name, email, phone, interest, source_channel, created_
 // Newest first; `search` matches name or email, case-insensitive. Two plain
 // ILIKE queries merged here rather than one PostgREST `or(...)` filter,
 // whose syntax would need its own escaping of commas and quotes.
-export async function listLeads(businessId: string, search = ""): Promise<LeadRow[]> {
+export async function listLeads(businessId: string, search = "", limit = LIST_LIMIT): Promise<LeadRow[]> {
   const q = search.trim().slice(0, 100);
-  const base = () => db().from("leads").select(LEAD_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(LIST_LIMIT);
+  const base = () => db().from("leads").select(LEAD_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(limit);
   const results = await Promise.all(q ? [base().ilike("name", likePattern(q)), base().ilike("email", likePattern(q))] : [base()]);
   const rows = results.flatMap((r) => {
     if (r.error) throw new Error(`Loading leads failed: ${r.error.message}`);
@@ -42,7 +42,7 @@ export async function listLeads(businessId: string, search = ""): Promise<LeadRo
   const byId = new Map(rows.map((row) => [row.id, row]));
   return [...byId.values()]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .slice(0, LIST_LIMIT)
+    .slice(0, limit)
     .map((l) => ({
       id: l.id,
       name: l.name,
@@ -112,28 +112,44 @@ export async function leadDetail(businessId: string, leadId: string) {
 
 export type StatusFilter = ConsultationStatus | "all";
 
-export async function statusCounts(businessId: string): Promise<Record<ConsultationStatus, number>> {
-  const counts = await Promise.all(
-    CONSULTATION_STATUSES.map(async (status) => {
-      const { count, error } = await db()
-        .from("consultation_requests")
-        .select("id", { count: "exact", head: true })
-        .eq("business_id", businessId)
-        .eq("status", status);
-      if (error) throw new Error(`Counting requests failed: ${error.message}`);
-      return [status, count ?? 0] as const;
-    }),
-  );
-  return Object.fromEntries(counts) as Record<ConsultationStatus, number>;
+interface AdminCounts {
+  pending: number;
+  confirmed: number;
+  cancelled: number;
+  active_conversations: number;
+  new_leads: number;
+  documents_ready: number;
+  documents_total: number;
 }
 
-// Soonest preferred time first: what staff need to confirm next.
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+// One query for every count the admin shows (admin_counts in SQL).
+async function adminCounts(businessId: string): Promise<AdminCounts> {
+  const { data, error } = await db().rpc("admin_counts", { p_business_id: businessId, p_since: new Date(Date.now() - WEEK_MS).toISOString() });
+  if (error) throw new Error(`Counting failed: ${error.message}`);
+  return data as unknown as AdminCounts;
+}
+
+export async function statusCounts(businessId: string): Promise<Record<ConsultationStatus, number>> {
+  const { pending, confirmed, cancelled } = await adminCounts(businessId);
+  return { pending, confirmed, cancelled };
+}
+
+// Upcoming requests first (soonest first: what staff confirm next), then
+// past ones (most recent first). Each part is capped, so a long history can
+// never push next week's requests off the list.
 export async function listConsultations(businessId: string, filter: StatusFilter) {
-  let query = db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId);
-  if (filter !== "all") query = query.eq("status", filter);
-  const [list, counts] = await Promise.all([query.order("preferred_at").limit(LIST_LIMIT), statusCounts(businessId)]);
-  if (list.error) throw new Error(`Loading requests failed: ${list.error.message}`);
-  return { requests: (list.data ?? []).map(toRequestRow), counts };
+  const now = new Date().toISOString();
+  const part = (upcoming: boolean) => {
+    let query = db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId);
+    if (filter !== "all") query = query.eq("status", filter);
+    query = upcoming ? query.gte("preferred_at", now) : query.lt("preferred_at", now);
+    return query.order("preferred_at", { ascending: upcoming }).limit(LIST_LIMIT);
+  };
+  const [upcoming, past, counts] = await Promise.all([part(true), part(false), statusCounts(businessId)]);
+  for (const r of [upcoming, past]) if (r.error) throw new Error(`Loading requests failed: ${r.error.message}`);
+  return { requests: [...(upcoming.data ?? []), ...(past.data ?? [])].map(toRequestRow), counts };
 }
 
 export async function setConsultationStatus(businessId: string, requestId: string, status: ConsultationStatus): Promise<RequestRow> {
@@ -156,31 +172,20 @@ export async function setConsultationStatus(businessId: string, requestId: strin
   return toRequestRow(data);
 }
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
 export async function overview(businessId: string) {
-  const since = new Date(Date.now() - WEEK_MS).toISOString();
-  const count = async (table: "conversations" | "leads", from: string) => {
-    const { count: n, error } = await db().from(table).select("id", { count: "exact", head: true }).eq("business_id", businessId).gte("created_at", from);
-    if (error) throw new Error(`Counting ${table} failed: ${error.message}`);
-    return n ?? 0;
-  };
-  const [conversations, leads, counts, documents, recentRequests, recentLeads] = await Promise.all([
-    count("conversations", since),
-    count("leads", since),
-    statusCounts(businessId),
-    db().from("documents").select("status").eq("business_id", businessId),
+  const [counts, recentRequests, recentLeads] = await Promise.all([
+    adminCounts(businessId),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(5),
-    listLeads(businessId).then((all) => all.slice(0, 5)),
+    listLeads(businessId, "", 5),
   ]);
-  if (documents.error) throw new Error(`Counting documents failed: ${documents.error.message}`);
   if (recentRequests.error) throw new Error(`Loading requests failed: ${recentRequests.error.message}`);
   return {
-    conversations7d: conversations,
-    leads7d: leads,
+    // Conversations with a message in the last 7 days (returning visitors count).
+    conversations7d: counts.active_conversations,
+    leads7d: counts.new_leads,
     pendingRequests: counts.pending,
-    documentsReady: (documents.data ?? []).filter((d) => d.status === "ready").length,
-    documentsTotal: documents.data?.length ?? 0,
+    documentsReady: counts.documents_ready,
+    documentsTotal: counts.documents_total,
     recentRequests: (recentRequests.data ?? []).map(toRequestRow),
     recentLeads,
   };

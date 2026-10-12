@@ -1,10 +1,10 @@
 "use client";
 
 import { CalendarDays, Clock, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { RequestRow, StatusFilter } from "@/lib/admin/crm";
 import { CONSULTATION_STATUSES, type ConsultationStatus } from "@/lib/db/enums";
-import { formatInZone, relativeTime, zoneLabel } from "./format";
+import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
 import { LeadDrawer } from "./lead-drawer";
 import { CONSULTATIONS_CHANGED, STATUS_LABEL, STATUS_TONE, useToast } from "./ui";
@@ -23,34 +23,42 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
   const [data, setData] = useState<{ filter: StatusFilter; requests: RequestRow[]; counts: Counts } | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  // Rows with a status change in flight: their select is locked, so a second
+  // change can't race the first (and a revert can't undo a later change).
+  const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
   const toast = useToast();
 
-  const load = useCallback(
-    async (f: StatusFilter) => {
-      try {
-        const res = await fetch(`${api}/consultations?status=${f}`, { cache: "no-store" });
-        if (!res.ok) throw new Error();
-        const body = (await res.json()) as { requests: RequestRow[]; counts: Counts };
-        setData({ filter: f, ...body });
-        setFailed(false);
-      } catch {
-        setFailed(true);
-      }
-    },
-    [api],
-  );
-
+  // Only the latest tab's answer is kept: clicking through tabs quickly can
+  // make an older request answer last.
   useEffect(() => {
-    // Fetching on filter change; the state is set when the response arrives.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load(filter);
-  }, [filter, load]);
+    let live = true;
+    fetch(`${api}/consultations?status=${filter}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((body: { requests: RequestRow[]; counts: Counts }) => {
+        if (!live) return;
+        setData({ filter, ...body });
+        setFailed(false);
+      })
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [api, filter]);
+
+  const setRowSaving = (id: string, on: boolean) =>
+    setSaving((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   // Optimistic: the row changes at once; if the save fails it goes back and
   // a toast says so. A row that no longer matches the filter stays until
   // the next load, so it doesn't vanish under the cursor.
   const change = async (row: RequestRow, status: ConsultationStatus) => {
-    if (status === row.status) return;
+    if (status === row.status || saving.has(row.id)) return;
+    setRowSaving(row.id, true);
     // Move the row (and one count) from one status to another; reverting is
     // the same move backwards.
     const move = (from: ConsultationStatus, to: ConsultationStatus) =>
@@ -74,6 +82,8 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
     } catch (err) {
       move(status, row.status);
       toast.show(err instanceof Error && err.message ? err.message : "Couldn't change the status. Please try again.", "danger");
+    } finally {
+      setRowSaving(row.id, false);
     }
   };
 
@@ -103,7 +113,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
             </div>
             <p className="flex items-center gap-1.5 text-[12px] text-text-muted">
               <Clock aria-hidden className="size-3.5" />
-              Times shown in {zoneLabel(timeZone)}
+              Times shown in {timeZone.replace(/_/g, " ")} time
             </p>
           </div>
 
@@ -151,7 +161,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
                         <td className="px-5 py-3">{r.service}</td>
                         <td className="whitespace-nowrap px-5 py-3">{formatInZone(r.preferredAt, timeZone)}</td>
                         <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
-                          <StatusSelect value={r.status} customer={r.customer} onChange={(s) => change(r, s)} />
+                          <StatusSelect value={r.status} customer={r.customer} disabled={saving.has(r.id)} onChange={(s) => change(r, s)} />
                         </td>
                         <td className="whitespace-nowrap px-5 py-3 text-right text-[13px] text-text-muted">
                           <time dateTime={r.requestedAt} title={new Date(r.requestedAt).toLocaleString()}>
@@ -175,14 +185,26 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
 
 // A native select, tinted like the status badge: keyboard and screen-reader
 // friendly without a custom menu.
-function StatusSelect({ value, customer, onChange }: { value: ConsultationStatus; customer: string; onChange: (s: ConsultationStatus) => void }) {
+function StatusSelect({
+  value,
+  customer,
+  disabled,
+  onChange,
+}: {
+  value: ConsultationStatus;
+  customer: string;
+  disabled: boolean;
+  onChange: (s: ConsultationStatus) => void;
+}) {
   const tones = { warning: "bg-warning/10 text-warning", success: "bg-success/10 text-success", danger: "bg-danger/10 text-danger" };
   return (
     <select
       value={value}
+      disabled={disabled}
+      aria-busy={disabled}
       aria-label={`Status of ${customer}'s request`}
       onChange={(e) => onChange(e.target.value as ConsultationStatus)}
-      className={`h-9 cursor-pointer rounded-md border border-border px-2 text-[13px] font-medium ${tones[STATUS_TONE[value]]}`}
+      className={`h-9 cursor-pointer rounded-md border border-border px-2 text-[13px] font-medium disabled:cursor-wait disabled:opacity-60 ${tones[STATUS_TONE[value]]}`}
     >
       {CONSULTATION_STATUSES.map((s) => (
         <option key={s} value={s}>

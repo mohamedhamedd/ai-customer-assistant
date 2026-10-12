@@ -2,18 +2,13 @@
 // the business's timezone, labelled, so staff and customers mean the same
 // "3:00 PM" whatever timezone the staff member's laptop is in.
 
-// "Tue, Oct 20 · 3:00 PM"
+// "Tue, Oct 20 · 3:00 PM PDT". The zone abbreviation is for that date, so a
+// list spanning the clock change labels each row right (PDT, then PST).
 export function formatInZone(iso: string, timeZone: string): string {
   const at = new Date(iso);
   const date = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" }).format(at);
-  const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit" }).format(at);
+  const time = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(at);
   return `${date} · ${time}`;
-}
-
-// "America/Los_Angeles (PDT)": the label for a table header.
-export function zoneLabel(timeZone: string, at = new Date()): string {
-  const short = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(at).find((p) => p.type === "timeZoneName")?.value;
-  return short ? `${timeZone} (${short})` : timeZone;
 }
 
 // "just now", "12 min ago", "3 h ago", "2 days ago", then the date.

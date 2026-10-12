@@ -114,10 +114,32 @@ test("reopening a cancelled request whose slot is taken again is a 409", async (
   await assert.rejects(setConsultationStatus(mine, old, "pending"), (err: unknown) => err instanceof ChatHttpError && err.status === 409);
 });
 
+test("past requests come after upcoming ones, most recent first", async () => {
+  const past = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+  await request(mine, omar, past(2), "confirmed");
+  await request(mine, omar, past(20), "confirmed");
+  const confirmed = (await listConsultations(mine, "confirmed")).requests.map((r) => new Date(r.preferredAt).getTime());
+  const now = Date.now();
+  const upcoming = confirmed.filter((t) => t >= now);
+  const earlier = confirmed.filter((t) => t < now);
+  assert.ok(upcoming.length > 0 && earlier.length === 2);
+  assert.deepEqual(confirmed, [...upcoming, ...earlier], "upcoming first");
+  assert.ok(earlier[0] > earlier[1], "then the most recent past one");
+});
+
 test("overview counts the last 7 days and pending requests", async () => {
+  // A returning visitor: the conversation is old, the message is new.
+  const { data: old } = await db()
+    .from("conversations")
+    .insert({ business_id: mine, session_id: randomUUID(), created_at: new Date(Date.now() - 40 * 86_400_000).toISOString() })
+    .select("id")
+    .single();
+  await db().from("messages").insert({ conversation_id: old!.id, role: "user", content: "Back again" });
+  // And a second new one nobody wrote in: counting by creation would say 2.
+  await db().from("conversations").insert({ business_id: mine, session_id: randomUUID() });
   const o = await overview(mine);
   assert.equal(o.leads7d, 1, "Omar was captured 30 days ago");
-  assert.equal(o.conversations7d, 1);
+  assert.equal(o.conversations7d, 1, "only the conversation with a message this week counts, not the new empty ones");
   assert.equal(o.pendingRequests, (await listConsultations(mine, "pending")).counts.pending);
   assert.equal(o.recentLeads[0].name, "Sara Ali");
 });

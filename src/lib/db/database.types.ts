@@ -227,7 +227,10 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "begin_user_message":
+            "admin_counts":
+{ Args: { "p_business_id": string,"p_since": string }; Returns: Json
+                           },
+"begin_user_message":
 { Args: { "p_channel"?: string,"p_client_message_id": string,"p_content": string,"p_conversation_id": string,"p_window_seconds": number }; Returns: Json
                            },
 "claim_reply_attempt":
