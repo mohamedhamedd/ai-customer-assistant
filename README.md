@@ -128,8 +128,6 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 
 ## Admin: overview, leads and consultations
 
-**Sign-in.** Set `ADMIN_PASSWORD` (at least 8 characters) in `.env.local` and the admin asks for it once; the server then keeps you signed in with a signed, httpOnly, SameSite=Lax cookie (12 hours). Without it, the admin is open under `npm run dev` (labelled "Demo mode · no login") and **locked** in a production build, so a deploy can't go out with customer data open. Every admin page and every `/api/admin/*` route checks the session.
-
 `/admin` opens on the **Overview**: conversations active and leads captured in the last 7 days, pending consultations, documents ready, and the latest requests and leads (contact details masked, as it's the screen most likely to be shared).
 
 - **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest and consultation requests.
@@ -179,7 +177,7 @@ docs/             User stories, UI design brief, delivery plan
 
 - The browser never talks to Supabase or OpenAI with a secret. All database access goes through server route handlers using the service-role key.
 - Every module that touches a secret imports `server-only`, so importing it from client code fails the build.
-- The admin is behind one shared password (`ADMIN_PASSWORD`, signed session cookie), and locked in production when it isn't set. Production next step: per-user accounts (e.g. Supabase Auth) with a membership check per business, and rate-limited sign-in (PR-13).
+- The admin has no login in this version (demo/local use only, labelled "Demo mode · no login"): anyone who can reach the server can see leads and requests, change statuses, and upload or delete documents. Production: sign-in (e.g. Supabase Auth) with a membership check on every admin route, scoped to the business in the URL.
 
 ## Planning docs
 

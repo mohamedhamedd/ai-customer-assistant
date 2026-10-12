@@ -1,13 +1,14 @@
 import "server-only";
 import { ChatHttpError, requireBusiness, type Business } from "@/lib/chat/turn";
-import { requireAdmin } from "./auth";
 
-// Shared shape of the admin routes: sign-in is checked first (auth.ts), then
-// the business comes from the URL (an unknown slug is a 404 before anything
-// runs); known errors keep their status, anything else is a logged 500.
+// Shared shape of the admin routes: the business comes from the URL (an
+// unknown slug is a 404 before anything runs); known errors keep their
+// status, anything else is a logged 500.
+//
+// No login (assumption A1, "Demo mode"): these routes are open to anyone
+// who can reach the server. See README, Security model.
 export async function withBusiness(params: Promise<{ slug: string }>, label: string, run: (business: Business) => Promise<Response>) {
   try {
-    await requireAdmin();
     const business = await requireBusiness((await params).slug);
     return await run(business);
   } catch (err) {

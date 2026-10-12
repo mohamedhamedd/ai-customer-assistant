@@ -17,10 +17,6 @@ const schema = z.object({
   // Transcribes the customer's speech for captions and the stored transcript.
   OPENAI_TRANSCRIBE_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
 
-  // Admin sign-in. Unset: the admin is open under `next dev` (local demo) and
-  // locked in a production build, so a deploy can't go out without a login.
-  ADMIN_PASSWORD: z.string().min(8, "use at least 8 characters").optional(),
-
   // Where / sends visitors until the home page lists every business (PR-15).
   DEMO_BUSINESS_SLUG: z.string().min(1).default("lakeside-dental"),
 });

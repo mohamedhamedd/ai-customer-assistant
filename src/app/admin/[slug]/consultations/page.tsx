@@ -1,7 +1,7 @@
 import { Consultations } from "@/components/admin/consultations";
 import { adminBusiness } from "@/lib/admin/page";
 
-// Blocking on purpose: nothing renders before the sign-in check.
+// Blocking on purpose: one cached business lookup, then the page.
 export const instant = false;
 
 export default async function ConsultationsPage({ params }: PageProps<"/admin/[slug]/consultations">) {
