@@ -20,8 +20,10 @@ const components: Components = {
   h3: ({ children }) => <p className="mt-3 font-semibold first:mt-0">{children}</p>,
   code: ({ children }) => <code className="rounded bg-surface px-1 py-0.5 text-[14px]">{children}</code>,
   // Wide tables scroll inside the bubble instead of widening the page.
+  // wrap-break-word overrides a container's overflow-wrap:anywhere, which would
+  // let a cell shrink to one letter wide ("$3 / 49") instead of scrolling.
   table: ({ children }) => (
-    <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-surface text-[14px] first:mt-0">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-surface text-[14px] wrap-break-word first:mt-0">
       <table className="w-full border-collapse text-left">{children}</table>
     </div>
   ),
