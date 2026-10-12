@@ -138,21 +138,19 @@ test("an invented price is replaced: the rewrite fails too, so the safe reply st
 
 test("figures from this turn's tools or the customer pass; numbers in the rules don't count; a good rewrite replaces a bad answer", async () => {
   const { g, rewrites } = guards();
-  // From the conversation and a tool result: the customer's details, read
-  // back, confirmed, then saved (save_lead runs only after the yes, see
-  // confirm.ts; that tool results count as evidence is in loop.test.ts).
+  // From a tool result and the conversation: save_lead's first call proposes
+  // the details (returning them), the model reads them back, and the yes
+  // commits them (confirm.ts). That tool results count as evidence on their
+  // own is in loop.test.ts.
   const sessionId = randomUUID();
+  const sam = { name: "Sam", email: leadEmail, phone: "(503) 555-0199" };
   const readBack = await turn(
     `I'm Sam, ${leadEmail}, 503 555 0199`,
-    { guards: g, complete: scripted([{ text: `Just to confirm: Sam, ${leadEmail}, (503) 555-0199. Is that right?` }]) },
+    { guards: g, complete: scripted([{ tool: "save_lead", args: sam }, { text: `Just to confirm: Sam, ${leadEmail}, (503) 555-0199. Is that right?` }]) },
     sessionId,
   );
   assert.ok(!readBack.events.some((e) => e.type === "replace"), "the read-back's phone is the customer's own");
-  const tool = await turn(
-    "Yes",
-    { guards: g, complete: scripted([{ tool: "save_lead", args: { name: "Sam", email: leadEmail, phone: "(503) 555-0199" } }, { text: "Saved. We'll call you at (503) 555-0199." }]) },
-    sessionId,
-  );
+  const tool = await turn("Yes", { guards: g, complete: scripted([{ tool: "save_lead", args: sam }, { text: "Saved. We'll call you at (503) 555-0199." }]) }, sessionId);
   assert.ok(tool.events.some((e) => e.type === "action" && e.action.kind === "lead_saved"), "confirmed, so saved");
   assert.ok(!tool.events.some((e) => e.type === "replace"), "the phone is in the tool's result and the conversation");
   // From the customer's own words.

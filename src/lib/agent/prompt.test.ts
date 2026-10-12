@@ -100,12 +100,13 @@ test("already-done section lists saved contact and requests, and only when there
   assert.ok(p.indexOf("# Already done") > p.indexOf("# Date and time"), "dynamic: after the cacheable prefix");
 });
 
-test("actions are confirmed in an earlier reply than the one that performs them", () => {
+test("writes are proposed, read back, and repeated after the customer's yes", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
-  assert.match(p, /Never call save_lead in the same reply in which the details were first given or changed/);
-  assert.match(p, /Never call create_consultation_request in the same reply/);
+  assert.match(p, /The first call with new details saves nothing/);
+  assert.match(p, /When the customer says yes, call save_lead again with the same details/);
+  assert.match(p, /The first call for a time saves nothing/);
   // The code refuses an unconfirmed write (confirm.ts); the model must ask, not report a failure.
-  assert.match(p, /confirm_first means nothing was saved yet .* read the details back and ask/);
+  assert.match(p, /confirm_first means nothing is saved yet.*It is not a failure/);
 });
 
 test("the assistant stays on the business and keeps conditions in short answers", () => {

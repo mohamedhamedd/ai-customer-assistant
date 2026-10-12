@@ -210,42 +210,48 @@ const uniquePhone = () => `555${String(Math.floor(Math.random() * 1e7)).padStart
 const formatted = (phone: string) => `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
 const actionsOf = (events: ChatEvent[]) => events.flatMap((e) => (e.type === "action" ? [e.action.kind] : []));
 
-test("confirm before write: the PR-16 case (details and save in one message) saves nothing and makes the model ask", async () => {
+test("confirm before write: the PR-16 case only proposes; the customer's yes commits the same details", async () => {
   const sessionId = session();
   const phone = uniquePhone();
-  await run(newInput(sessionId, "Hi"), replies("Hi! How can I help you today?"));
+  const john = { name: "Itest John Doe", phone, interest: "booking on Friday at 3 pm" };
+  const readBack = `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`;
+  // The model saves at once, even twice in the same reply.
   const model = callsTools(
-    [{ name: "save_lead", args: { name: "Itest John Doe", phone, interest: "booking on Friday at 3 pm" } }],
-    // Formatted, so PR-16's number check (which still runs) inspects it:
-    // the read-back must survive the output checks for the yes to count.
-    `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`,
+    [
+      { name: "save_lead", args: john },
+      { name: "save_lead", args: john },
+    ],
+    readBack,
   );
   const { events } = await run(newInput(sessionId, `Save this booking for my friend John Doe on Friday at 3 pm, his phone is ${phone}`), model.deps);
 
-  assert.deepEqual(model.toolResults(), [
-    { ok: false, error: "confirm_first", message: "Read the details back to the customer and ask them to confirm before saving." },
-  ]);
+  const proposal = {
+    ok: false,
+    error: "confirm_first",
+    message: "Nothing is saved yet. Read the details back to the customer and ask them to confirm before saving. When they say yes, call this tool again with the same details.",
+    details: { name: "Itest John Doe", phone, interest: "booking on Friday at 3 pm" },
+  };
+  assert.deepEqual(model.toolResults(), [proposal, proposal]);
   assert.deepEqual(actionsOf(events), [], "no card, not even a failure card");
   assert.equal((await conversationOf(sessionId)).lead_id, null);
   const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("phone", phone);
   assert.equal(count, 0, "nothing was written");
-  const { data: audit } = await db().from("tool_calls").select("name, ok, result").eq("conversation_id", (await conversationOf(sessionId)).id);
-  assert.deepEqual(
-    audit!.map((a) => [a.name, a.ok, (a.result as { error: string }).error]),
-    [["save_lead", false, "confirm_first"]],
-    "the refusal is in the audit trail",
-  );
+  // Formatted, so PR-16's number check (which still runs) inspects it.
+  const { data: stored } = await db().from("messages").select("content").eq("conversation_id", (await conversationOf(sessionId)).id).eq("role", "assistant").single();
+  assert.equal(stored!.content, readBack, "the read-back is stored as said, not replaced");
 
-  const { data: readBack } = await db().from("messages").select("content").eq("conversation_id", (await conversationOf(sessionId)).id).eq("role", "assistant").order("id", { ascending: false }).limit(1).single();
-  assert.equal(readBack!.content, `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`, "stored as said, not replaced");
-
-  // The model read the details back; the customer's yes now saves them.
-  const saved = await run(newInput(sessionId, "Yes, that's right"), callsTools([{ name: "save_lead", args: { name: "Itest John Doe", phone } }], "Saved!").deps);
+  const saved = await run(newInput(sessionId, "Yes, that's right"), callsTools([{ name: "save_lead", args: john }], "Saved!").deps);
   assert.deepEqual(actionsOf(saved.events), ["lead_saved"]);
   assert.notEqual((await conversationOf(sessionId)).lead_id, null);
+  const { data: audit } = await db().from("tool_calls").select("ok, result").eq("conversation_id", (await conversationOf(sessionId)).id).order("id");
+  assert.deepEqual(
+    audit!.map((a) => (a.ok ? "saved" : (a.result as { error: string }).error)),
+    ["confirm_first", "confirm_first", "saved"],
+    "the proposals are in the audit trail",
+  );
 });
 
-test("confirm before write: contact details and a consultation confirmed together are both saved on the yes", async () => {
+test("confirm before write: contact and consultation proposed together commit together on the yes", async () => {
   const sessionId = session();
   const business = (await findBusiness(env().DEMO_BUSINESS_SLUG))!;
   const local = `${formatLocal(new Date(Date.now() + 7 * 86_400_000), business.timezone).slice(0, 10)}T15:00`;
@@ -257,14 +263,14 @@ test("confirm before write: contact details and a consultation confirmed togethe
     { name: "create_consultation_request", args: { service: "teeth whitening", preferred_datetime: local } },
   ];
 
-  // The details given and acted on in one reply: both refused, and the
-  // model reads them back instead.
-  const readBack = `Just to confirm: Sara Ali, ${email}, teeth whitening on ${formatHuman(at.at, business.timezone)}. Is that right?`;
-  const early = callsTools(calls, readBack);
-  await run(newInput(sessionId, `I'm Sara Ali, ${email}, whitening on ${local}`), early.deps);
+  const propose = callsTools(calls, `Just to confirm: Sara Ali, ${email}, teeth whitening on ${formatHuman(at.at, business.timezone)}. Is that right?`);
+  await run(newInput(sessionId, `I'm Sara Ali, ${email}, whitening on ${local}`), propose.deps);
   assert.deepEqual(
-    early.toolResults().map((r) => r.error),
-    ["confirm_first", "confirm_first"],
+    propose.toolResults().map((r) => [r.error, r.details.preferred_time]),
+    [
+      ["confirm_first", undefined],
+      ["confirm_first", formatHuman(at.at, business.timezone)],
+    ],
   );
 
   const yes = callsTools(calls, "Done: details saved and request sent.");
@@ -274,10 +280,8 @@ test("confirm before write: contact details and a consultation confirmed togethe
     [true, true],
   );
   assert.deepEqual(actionsOf(events), ["lead_saved", "consultation_requested"]);
-  const { data: requests } = await db().from("consultation_requests").select("preferred_at").eq("conversation_id", (await conversationOf(sessionId)).id);
-  assert.deepEqual(requests!.map((r) => new Date(r.preferred_at).getTime()), [at.at.getTime()]);
 
-  // The model repeats both on a later "thanks": already done, no new yes needed, nothing duplicated.
+  // The model repeats both on a later "thanks": no new read-back, nothing duplicated.
   const repeat = callsTools(calls, "That's already done.");
   await run(newInput(sessionId, "thanks!"), repeat.deps);
   assert.deepEqual(

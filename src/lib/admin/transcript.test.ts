@@ -80,14 +80,14 @@ test("failures: validation says what was wrong, other errors show their code", (
   assert.deepEqual(outage, { detail: null, outcome: "temporarily unavailable", tone: "danger", failed: true });
 });
 
-test("a write refused until the customer confirms is the gate working, not a failure", () => {
+test("a write that only proposed its details (confirm before write) is not a failure", () => {
   const s = summarizeToolCall({
     name: "save_lead",
     arguments: { name: "John Doe", phone: "5551234" },
     result: { ok: false, error: "confirm_first", message: "Read the details back…" },
     ok: false,
   });
-  assert.deepEqual(s, { detail: "{name, phone}", outcome: "waited for the customer's yes", tone: "neutral", failed: false });
+  assert.deepEqual(s, { detail: "{name, phone}", outcome: "proposed, waiting for a yes", tone: "neutral", failed: false });
 });
 
 test("a consultation request shows the service and time, and a repeat says so", () => {

@@ -5,8 +5,8 @@ import type { Json } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
-import { CONFIRM_FIRST, isConfirmed, type LastExchange } from "./confirm";
-import { TOOLS, type ConfirmSpec, type SavedLookup, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
+import { confirmFirst, isConfirmed } from "./confirm";
+import { TOOLS, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
 
 // Runs one tool call from the model. The contract (design D-09): it NEVER
 // throws. Every failure becomes { ok: false, error, message } so the model can
@@ -14,10 +14,9 @@ import { TOOLS, type ConfirmSpec, type SavedLookup, type Tool, type ToolContext,
 // mistake a failure for success. Every call, successful or not, is written to
 // tool_calls (US-9.2).
 //
-// A write tool also runs only after the customer confirmed it (confirm.ts):
-// the last exchange is read from the messages table, the same for text and
-// voice, so a model that skips the read-back can't save details the
-// customer never said yes to.
+// A write tool's first call with new details only proposes them; the same
+// details commit once the customer has answered (confirm.ts). Same for text
+// and voice: the proposal is the call's own tool_calls row.
 
 // Inside the 45 s turn deadline (design §7.1), with room for the model.
 export const TOOL_TIMEOUT_MS = 15_000;
@@ -53,10 +52,16 @@ export interface ExecuteDeps {
   timeoutMs: number;
   // SIMULATE_DB_FAILURE: write tools fail as if the database were down.
   simulateDbFailure: () => boolean;
-  // What a write tool's confirmation is checked against: the last exchange,
-  // and (only for a call that isn't confirmed) what's already saved.
-  lastExchange: (ctx: ToolContext) => Promise<LastExchange>;
-  saved: (ctx: ToolContext) => SavedLookup;
+  // What a write tool's confirmation is checked against (confirm.ts).
+  proposals: (ctx: ToolContext, tool: string) => Promise<Proposals>;
+}
+
+export interface Proposals {
+  // This tool's latest proposal in the conversation (a confirm_first call):
+  // its arguments as the model sent them, and when.
+  latest: { arguments: unknown; at: Date } | null;
+  // When the customer last sent a message.
+  customerSpokeAt: Date | null;
 }
 
 export const UNAVAILABLE: ToolOutput = {
@@ -91,47 +96,28 @@ async function auditToDb(row: AuditRow): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-// Enough rows to get past a few voice items still waiting for a transcript.
-const RECENT_MESSAGES = 10;
-
-// The customer's latest message and the assistant message before it.
-async function lastExchangeFromDb(ctx: ToolContext): Promise<LastExchange> {
-  const { data, error } = await (ctx.client ?? db())
-    .from("messages")
-    .select("role, content")
-    .eq("conversation_id", ctx.conversationId)
-    .order("id", { ascending: false })
-    .limit(RECENT_MESSAGES);
-  if (error) throw new Error(`Loading the last exchange failed: ${error.message}`);
-  return lastExchange(data ?? []);
-}
-
-// One small indexed read each, made only when a tool asks.
-function savedFromDb(ctx: ToolContext): SavedLookup {
+// Two small indexed reads. Both tables stamp rows with clock_timestamp(), so
+// the times compare across them.
+async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposals> {
   const client = ctx.client ?? db();
+  const [proposal, customer] = await Promise.all([
+    client
+      .from("tool_calls")
+      .select("arguments, created_at")
+      .eq("conversation_id", ctx.conversationId)
+      .eq("name", tool)
+      .eq("result->>error", "confirm_first")
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    client.from("messages").select("created_at").eq("conversation_id", ctx.conversationId).eq("role", "user").order("id", { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (proposal.error) throw new Error(`Loading the proposal failed: ${proposal.error.message}`);
+  if (customer.error) throw new Error(`Loading the customer's last message failed: ${customer.error.message}`);
   return {
-    async lead() {
-      const { data, error } = await client.from("conversations").select("customer_facts, lead_id").eq("id", ctx.conversationId).single();
-      if (error) throw new Error(`Loading saved contact failed: ${error.message}`);
-      return { facts: (data.customer_facts ?? {}) as Record<string, unknown>, linked: data.lead_id !== null };
-    },
-    async requestedAt() {
-      const { data, error } = await client.from("consultation_requests").select("preferred_at").eq("conversation_id", ctx.conversationId).neq("status", "cancelled");
-      if (error) throw new Error(`Loading saved requests failed: ${error.message}`);
-      return data.map((r) => new Date(r.preferred_at));
-    },
+    latest: proposal.data && { arguments: proposal.data.arguments, at: new Date(proposal.data.created_at) },
+    customerSpokeAt: customer.data && new Date(customer.data.created_at),
   };
-}
-
-// Newest first in. The latest user message is the customer's current one
-// (text: stored before the turn runs; voice: reported when spoken). The
-// read-back is the last assistant message before it that has words (a voice
-// item can be empty).
-export function lastExchange(newestFirst: { role: string; content: string | null }[]): LastExchange {
-  const at = newestFirst.findIndex((m) => m.role === "user");
-  if (at < 0) return { customer: null, readBack: null };
-  const readBack = newestFirst.slice(at + 1).find((m) => m.role === "assistant" && m.content);
-  return { customer: newestFirst[at].content, readBack: readBack?.content ?? null };
 }
 
 const defaultDeps: ExecuteDeps = {
@@ -141,8 +127,7 @@ const defaultDeps: ExecuteDeps = {
   trace: (fields) => console.log(JSON.stringify({ event: "tool_call", ...fields })),
   timeoutMs: TOOL_TIMEOUT_MS,
   simulateDbFailure: () => env().SIMULATE_DB_FAILURE,
-  lastExchange: lastExchangeFromDb,
-  saved: savedFromDb,
+  proposals: proposalsFromDb,
 };
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
@@ -171,6 +156,7 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
     } else {
       // Only a write that started can have an unknown outcome.
       let writing = false;
+      let expired = false;
       try {
         // Thrown where a real database error would be, so a simulated
         // outage takes exactly the real path below.
@@ -179,11 +165,16 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
         // turn only starts a tool when TOOL_TIMEOUT_MS still fits (loop.ts).
         const result = await withTimeout(
           (async (): Promise<ToolRunResult> => {
-            if (tool.confirm && !(await confirmed(tool.confirm, parsed.data, ctx, d))) return { output: CONFIRM_FIRST };
+            const proposal = tool.confirm?.propose(parsed.data, ctx);
+            // Null: invalid arguments, which run() rejects without writing.
+            if (proposal && !(await confirmed(tool, proposal.key, ctx, d))) return { output: confirmFirst(proposal.details) };
+            // A check that finished after the timeout answered must not write.
+            if (expired) return { output: UNAVAILABLE };
             writing = tool.writes;
             return tool.run(parsed.data, ctx);
           })(),
           d.timeoutMs,
+          () => (expired = true),
         );
         output = result.output;
         sources = result.sources ?? [];
@@ -223,14 +214,13 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
   return outcome;
 }
 
-async function confirmed(spec: ConfirmSpec<unknown>, args: unknown, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
-  const details = spec.details(args, ctx);
-  // Invalid arguments: run() rejects them without writing.
-  if (details === null) return true;
-  // The usual case, a yes to a read-back, takes one read; what's already
-  // saved is looked up only when the call isn't confirmed.
-  if (isConfirmed(details, await d.lastExchange(ctx))) return true;
-  return spec.alreadyDone(args, ctx, d.saved(ctx));
+// The latest proposal's key comes from its stored arguments, parsed and
+// keyed like the new call's.
+async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
+  const { latest, customerSpokeAt } = await d.proposals(ctx, tool.name);
+  const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
+  const proposed = parsed?.success ? tool.confirm?.propose(parsed.data, ctx) : null;
+  return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, customerSpokeAt });
 }
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words
@@ -239,10 +229,13 @@ function describeIssues(error: z.ZodError): string {
   return error.issues.map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ");
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new ToolTimeout(`timed out after ${ms} ms`)), ms);
+    timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new ToolTimeout(`timed out after ${ms} ms`));
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

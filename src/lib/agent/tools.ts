@@ -5,7 +5,6 @@ import { db } from "@/lib/db/supabase";
 import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
-import type { Detail } from "./confirm";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
@@ -32,7 +31,8 @@ export interface ToolContext {
 // What the model sees. Always an object with ok.
 export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
-  | { ok: false; error: string; message: string };
+  // details: confirm_first only, what would be saved (confirm.ts).
+  | { ok: false; error: string; message: string; details?: Record<string, unknown> };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -48,26 +48,15 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-// What this conversation already saved, to tell a repeat from a new write.
-// Read only when asked: a confirmed write never needs it (execute.ts).
-export interface SavedLookup {
-  // conversations.customer_facts, and whether a lead is linked.
-  lead(): Promise<{ facts: Record<string, unknown>; linked: boolean }>;
-  // preferred_at of this conversation's open consultation requests.
-  requestedAt(): Promise<Date[]>;
-}
-
-// Confirm before write (confirm.ts): a write tool runs only after the
-// customer said yes to a read-back of these details.
+// Confirm before write (confirm.ts): a write tool's first call with new
+// details only proposes them; the same details commit once the customer has
+// answered.
 export interface ConfirmSpec<A> {
-  // The details the read-back must contain, or null when run() will reject
-  // the arguments anyway (it writes nothing, and the model hears the real
-  // problem first instead of being asked to confirm something invalid).
-  details(args: A, ctx: ToolContext): Detail[] | null;
-  // True when the call only repeats what this conversation already saved:
-  // the database returns the existing row, so it runs without a new yes and
-  // the model can say it's already done.
-  alreadyDone(args: A, ctx: ToolContext, saved: SavedLookup): Promise<boolean>;
+  // key: what identifies the write (the contact, or the time slot); the
+  // proposal and the commit must match on it. details: what would be saved,
+  // for the model to read back. Null when run() will reject the arguments
+  // anyway (nothing is written, and the model hears the real problem first).
+  propose(args: A, ctx: ToolContext): { key: string; details: Record<string, unknown> } | null;
 }
 
 export interface Tool extends ToolDefinition {
@@ -182,7 +171,7 @@ const saveLead = defineTool({
   name: "save_lead",
   writes: true,
   description:
-    "Save the customer's contact details so the team can follow up. Requires a name and at least one of email or phone. Read the details back to the customer and get confirmation before calling.",
+    "Save the customer's contact details so the team can follow up. Requires a name and at least one of email or phone. The first call with new details saves nothing: it returns them to read back to the customer. Call again with the same details after they confirm.",
   parameters: {
     type: "object",
     properties: {
@@ -196,16 +185,11 @@ const saveLead = defineTool({
   },
   schema: saveLeadSchema,
   confirm: {
-    details: (args) => [
-      ...(args.email ? [{ kind: "email" as const, value: args.email }] : []),
-      ...(args.phone ? [{ kind: "phone" as const, value: args.phone }] : []),
-    ],
-    // Every value given is already in customer_facts (save_lead's own
-    // normalised copy): saving again changes nothing.
-    alreadyDone: async (args, _ctx, saved) => {
-      const lead = await saved.lead();
-      return lead.linked && Object.entries(args).every(([key, value]) => value === undefined || lead.facts[key] === value);
-    },
+    // The contact itself; what they're interested in may be worded differently.
+    propose: (args) => ({
+      key: JSON.stringify([args.name.toLowerCase(), args.email ?? null, args.phone ?? null]),
+      details: { name: args.name, email: args.email, phone: args.phone, interest: args.interest },
+    }),
   },
   async run(args, ctx) {
     const { error } = await (ctx.client ?? db()).rpc("save_lead", {
@@ -237,19 +221,6 @@ export const consultationSchema = z.object({
 
 export type PreferredTime = { ok: true; at: Date } | { ok: false; message: string };
 
-// The confirmation check and run() both need the resolved time: worked out
-// once per call (the executor passes them the same arguments object), so
-// both judge it against the same "now".
-const resolvedTimes = new WeakMap<object, PreferredTime>();
-function preferredTime(args: z.output<typeof consultationSchema>, ctx: ToolContext): PreferredTime {
-  let when = resolvedTimes.get(args);
-  if (!when) {
-    when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
-    resolvedTimes.set(args, when);
-  }
-  return when;
-}
-
 // Pure, so the date rules are unit-tested without a database.
 export function resolvePreferredTime(local: string, timeZone: string, now: Date): PreferredTime {
   const parsed = zonedLocalToUtc(local, timeZone);
@@ -275,7 +246,7 @@ const createConsultationRequest = defineTool({
   name: "create_consultation_request",
   writes: true,
   description:
-    "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. Read the service and exact date and time back to the customer before calling.",
+    "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. The first call for a time saves nothing: it returns the details to read back to the customer. Call again with the same details after they confirm.",
   parameters: {
     type: "object",
     properties: {
@@ -291,16 +262,15 @@ const createConsultationRequest = defineTool({
   },
   schema: consultationSchema,
   confirm: {
-    details: (args, ctx) => (preferredTime(args, ctx).ok ? [{ kind: "datetime", value: args.preferred_datetime }] : null),
-    // The slot is the identity of a request (dedupe by slot): the database
-    // returns the existing one.
-    alreadyDone: async (args, ctx, saved) => {
-      const when = preferredTime(args, ctx);
-      return when.ok && (await saved.requestedAt()).some((at) => at.getTime() === when.at.getTime());
+    // The time slot, as the dedupe does: the service may be worded differently.
+    propose: (args, ctx) => {
+      const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+      if (!when.ok) return null;
+      return { key: when.at.toISOString(), details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes } };
     },
   },
   async run(args, ctx) {
-    const when = preferredTime(args, ctx);
+    const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);
 
     const { data, error } = await (ctx.client ?? db()).rpc("create_consultation_request", {

@@ -89,7 +89,7 @@ export interface ToolSummary {
   outcome: string;
   tone: Tone;
   // Something went wrong (shown red and open). Not the same as ok: false: a
-  // write refused until the customer confirms is the gate doing its job.
+  // write that only proposed its details is the confirm step doing its job.
   failed: boolean;
 }
 
@@ -114,9 +114,9 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
     detail = [text(result.service) ?? text(args.service), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
   }
 
-  // Confirm before write (src/lib/agent/confirm.ts): nothing was saved yet,
-  // and the model was told to read the details back first.
-  if (!call.ok && result.error === "confirm_first") return { detail, outcome: "waited for the customer's yes", tone: "neutral", failed: false };
+  // Confirm before write (src/lib/agent/confirm.ts): a first call only
+  // proposes the details; the model reads them back before they're saved.
+  if (!call.ok && result.error === "confirm_first") return { detail, outcome: "proposed, waiting for a yes", tone: "neutral", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are

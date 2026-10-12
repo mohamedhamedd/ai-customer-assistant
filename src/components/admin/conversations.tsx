@@ -308,8 +308,8 @@ const TONE: Record<Tone, string> = { success: "text-success", warning: "text-war
 
 // `🔧 search_knowledge · "whitening price" · 3 matches · 412 ms ✓`. Opens to
 // the arguments and the result; a failed call starts open and is red, so
-// problems stand out while scrolling. A write held back until the customer
-// confirms isn't a problem: it stays closed and grey.
+// problems stand out while scrolling. A write that only proposed its details
+// (confirm before write) isn't a problem: it stays closed and grey.
 function ToolCallRow({ call }: { call: TranscriptToolCall }) {
   const summary = summarizeToolCall(call);
   const [open, setOpen] = useState(summary.failed);
@@ -344,7 +344,7 @@ function ToolCallRow({ call }: { call: TranscriptToolCall }) {
         ) : summary.failed ? (
           <X aria-label="Failed" className="size-3.5 shrink-0 text-danger" />
         ) : (
-          <CircleHelp aria-label="Waited for confirmation" className="size-3.5 shrink-0 text-text-muted" />
+          <CircleHelp aria-label="Proposed, waiting for confirmation" className="size-3.5 shrink-0 text-text-muted" />
         )}
         <ChevronDown aria-hidden className={`size-3.5 shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
