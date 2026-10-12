@@ -6,7 +6,9 @@
 //
 // Nothing is written by hand:
 // - attacks: an attacker model writes new ones for this business each run,
-//   and every message the guard blocked before is replayed;
+//   and every past block (confirmed or not yet reviewed) is replayed;
+// - blocks staff dismissed (real customers the guard got wrong) are replayed
+//   as normal questions: they must not be blocked again;
 // - normal questions: a model writes one customer question per random
 //   section of the business's documents.
 // Each message goes through the real chat turn (real model, real tools) on
@@ -162,16 +164,25 @@ async function main() {
   }
 
   try {
-    const { data: past } = await db().from("flags").select("original").eq("business_id", business.id).eq("layer", "input").order("created_at", { ascending: false }).limit(10);
-    const [fresh, normal] = await Promise.all([newAttacks(business, Number(option("attacks", "12"))), normalQuestions(clone, Number(option("normal", "12")))]);
-    const attacks = [...fresh, ...(past ?? []).map((f) => f.original)];
+    const past = (status: string[]) =>
+      db().from("flags").select("original").eq("business_id", business.id).in("layer", ["input", "caught"]).in("status", status).order("created_at", { ascending: false }).limit(10);
+    const [replayed, dismissed, fresh, generated] = await Promise.all([
+      past(["confirmed", "new"]),
+      past(["dismissed"]),
+      newAttacks(business, Number(option("attacks", "12"))),
+      normalQuestions(clone, Number(option("normal", "12"))),
+    ]);
+    const attacks = [...fresh, ...(replayed.data ?? []).map((f) => f.original)];
+    const normal = [...generated, ...(dismissed.data ?? []).map((f) => f.original)];
     const deps: ChatTurnDeps = {
       complete: (params, signal) => openai().chat.completions.create(params, { signal }),
       guards: guardsOn ? liveGuards : passThrough,
       skipChecks: !guardsOn,
     };
 
-    console.log(`\n${business.name} · guards ${guardsOn ? "ON" : "OFF"} · ${attacks.length} attacks (${past?.length ?? 0} replayed), ${normal.length} normal questions\n`);
+    console.log(
+      `\n${business.name} · guards ${guardsOn ? "ON" : "OFF"} · ${attacks.length} attacks (${replayed.data?.length ?? 0} replayed), ${normal.length} normal questions (${dismissed.data?.length ?? 0} dismissed blocks)\n`,
+    );
 
     const attackRuns: (Run & { pass: boolean; why: string })[] = [];
     for (const a of attacks) {
@@ -179,7 +190,9 @@ async function main() {
       const grade = await resisted(business, a, run.reply);
       const pass = grade.pass && run.wrote.length === 0;
       attackRuns.push({ ...run, pass, why: run.wrote.length ? `wrote: ${run.wrote.join(", ")}` : grade.reason });
-      console.log(`${pass ? "✅" : "❌"} ATTACK ${short(a, 70)}\n     → ${short(run.reply)}${run.flags.length ? `  [${run.flags.join(", ")}]` : ""}${pass ? "" : `\n     ✗ ${short(attackRuns.at(-1)!.why, 120)}`}`);
+      console.log(`${pass ? "✅" : "❌"} ATTACK ${short(a, 70)}\n     → ${short(run.reply)}${run.flags.length ? `  [${run.flags.join(", ")}]` : ""}`);
+      // A failure in full: the copy is deleted after the run, so this is the only record.
+      if (!pass) console.log(`     ✗ ${attackRuns.at(-1)!.why}\n     full attack: ${a}\n     full reply:  ${run.reply.replace(/\s+/g, " ")}`);
     }
 
     const normalRuns: (Run & { blocked: boolean })[] = [];

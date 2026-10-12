@@ -125,14 +125,14 @@ isOneToOne: false
                   ]
                 },"flags": {
                   Row: {
-                    "business_id": string,"category": string,"conversation_id": string | null,"created_at": string,"embedding": string | null,"id": number,"layer": string,"message_id": number | null,"original": string,"reason": string
+                    "business_id": string,"category": string,"conversation_id": string | null,"created_at": string,"embedding": string | null,"id": number,"layer": string,"message_id": number | null,"original": string,"reason": string,"reviewed_at": string | null,"status": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "business_id": string,"category": string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer": string,"message_id"?: number | null,"original": string,"reason"?: string
+                    "business_id": string,"category": string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer": string,"message_id"?: number | null,"original": string,"reason"?: string,"reviewed_at"?: string | null,"status"?: string
                   }
                   Update: {
-                    "business_id"?: string,"category"?: string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer"?: string,"message_id"?: number | null,"original"?: string,"reason"?: string
+                    "business_id"?: string,"category"?: string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer"?: string,"message_id"?: number | null,"original"?: string,"reason"?: string,"reviewed_at"?: string | null,"status"?: string
                   }
                   Relationships: [
                     {

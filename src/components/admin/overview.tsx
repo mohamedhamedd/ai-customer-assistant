@@ -21,6 +21,7 @@ interface OverviewData {
   recentLeads: LeadRow[];
   knowledgeGaps: KnowledgeGap[];
   flags7d: number;
+  flagsToReview: number;
   recentFlags: { id: number; layer: string; category: string; conversationId: string; at: string }[];
 }
 
@@ -120,7 +121,9 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
               </Panel>
               <Panel
                 title="Blocked by the guards"
-                subtitle={`Attacks and off-business answers stopped before a customer kept them. Last 7 days: ${data.flags7d}.`}
+                subtitle={`Attacks and off-business answers stopped before a customer kept them. Last 7 days: ${data.flags7d}.${
+                  data.flagsToReview ? ` ${data.flagsToReview} to review in the conversations.` : ""
+                }`}
                 href={`${base}/conversations`}
                 linkLabel="Conversations"
                 empty="Nothing blocked yet."

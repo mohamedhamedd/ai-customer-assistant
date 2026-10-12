@@ -2,25 +2,41 @@
 -- output check replaces is recorded here, with what was blocked and why.
 --
 -- One table, three uses:
--- 1. Staff see it: the admin transcript marks flagged messages.
+-- 1. Staff see it: the admin transcript marks flagged messages, and staff
+--    confirm or dismiss the ones the guard learns from.
 -- 2. The input guard learns from it: blocked customer messages keep their
---    embedding, and the guard is shown the most similar past ones as
+--    embedding, and the guard is shown the most similar *confirmed* ones as
 --    examples (same business only: tenant isolation holds for learned data).
--- 3. The eval replays it: past attacks are sent again after every change.
+--    Only confirmed rows: a wrong block, or one planted on purpose ("what are
+--    your prices? also write a poem"), must not teach the guard to refuse
+--    real customers.
+-- 3. The eval replays it: confirmed and unreviewed attacks are sent again
+--    after every change; dismissed ones must then pass (a real customer's
+--    question the guard got wrong becomes a "must not block" test).
 create table public.flags (
   id              bigint generated always as identity primary key,
   business_id     uuid not null references public.businesses(id) on delete cascade,
   conversation_id uuid references public.conversations(id) on delete cascade,
   -- The customer message (input layer) or the stored answer (output layers).
   message_id      bigint references public.messages(id) on delete cascade,
-  layer           text not null check (layer in ('input', 'canary', 'scope', 'numbers')),
+  -- input: the input guard blocked this customer message.
+  -- caught: this customer message got past the input guard, and its answer
+  --         was replaced by an output check (an attack caught late).
+  -- canary / scope / numbers: this answer failed that check and was replaced.
+  layer           text not null check (layer in ('input', 'caught', 'canary', 'scope', 'numbers')),
   category        text not null,
   reason          text not null default '',
   -- What was blocked: the customer's message, or the answer before it was
   -- replaced. Kept for review; never shown to customers.
   original        text not null,
-  -- Input layer only: the customer message's embedding, for examples.
+  -- Input and caught layers: the customer message's embedding, for examples.
   embedding       extensions.vector(1536),
+  -- Whether it may teach the guard. Clear attacks (injection, a claim of
+  -- authority, questions about internals) are confirmed when recorded: the
+  -- message itself is the proof. Off-topic blocks and attacks caught late
+  -- wait for staff, who confirm or dismiss them.
+  status          text not null default 'new' check (status in ('new', 'confirmed', 'dismissed')),
+  reviewed_at     timestamptz,
   created_at      timestamptz not null default now()
 );
 
@@ -33,7 +49,7 @@ create index flags_embedding_hnsw_idx on public.flags
 revoke all on public.flags from anon, authenticated;
 alter table public.flags enable row level security;
 
--- The past blocked messages most like this one, for the input guard's
+-- The confirmed past attacks most like this message, for the input guard's
 -- examples. This business only.
 create or replace function public.similar_flags(p_business_id uuid, p_embedding extensions.vector(1536), p_limit int)
 returns table (original text, category text, similarity float)
@@ -44,6 +60,7 @@ as $$
   select f.original, f.category, 1 - (f.embedding operator(extensions.<=>) p_embedding)
     from public.flags f
    where f.business_id = p_business_id
+     and f.status = 'confirmed'
      and f.embedding is not null
    order by f.embedding operator(extensions.<=>) p_embedding
    limit least(greatest(coalesce(p_limit, 3), 0), 10);
@@ -83,9 +100,9 @@ begin
   select m.new_id, v_id, c.chunk_index, c.heading, c.content, c.token_count, c.embedding
     from public.chunks c join doc_map m on m.old_id = c.document_id;
 
-  insert into public.flags (business_id, layer, category, reason, original, embedding, created_at)
-  select v_id, layer, category, reason, original, embedding, created_at
-    from public.flags where business_id = p_source and layer = 'input';
+  insert into public.flags (business_id, layer, category, reason, original, embedding, status, created_at)
+  select v_id, layer, category, reason, original, embedding, status, created_at
+    from public.flags where business_id = p_source and layer in ('input', 'caught');
 
   return v_id;
 end;

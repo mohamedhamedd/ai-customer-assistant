@@ -76,7 +76,7 @@ export async function conversationTranscript(businessId: string, conversationId:
       .eq("conversation_id", conversationId)
       .order("id", { ascending: false })
       .limit(TRANSCRIPT_LIMIT * 2),
-    db().from("flags").select("message_id, layer, category, reason, original").eq("conversation_id", conversationId).order("id"),
+    db().from("flags").select("id, message_id, layer, category, reason, original, status").eq("conversation_id", conversationId).order("id"),
   ]);
   if (conversation.error) throw new Error(`Loading conversation failed: ${conversation.error.message}`);
   if (messages.error) throw new Error(`Loading messages failed: ${messages.error.message}`);
@@ -90,7 +90,10 @@ export async function conversationTranscript(businessId: string, conversationId:
   const flagsByMessage = new Map<number, MessageFlag[]>();
   for (const f of flags.data ?? []) {
     if (f.message_id === null) continue;
-    flagsByMessage.set(f.message_id, [...(flagsByMessage.get(f.message_id) ?? []), { layer: f.layer as MessageFlag["layer"], category: f.category, reason: f.reason, original: f.original }]);
+    flagsByMessage.set(f.message_id, [
+      ...(flagsByMessage.get(f.message_id) ?? []),
+      { id: f.id, layer: f.layer as MessageFlag["layer"], status: f.status as MessageFlag["status"], category: f.category, reason: f.reason, original: f.original },
+    ]);
   }
   const shown: TranscriptMessage[] = (messages.data ?? []).slice(0, TRANSCRIPT_LIMIT).map((m) => ({
     kind: "message",

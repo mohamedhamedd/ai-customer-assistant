@@ -6,14 +6,16 @@ import { declineReply, unsureReply, type GuardBusiness } from "./prompts";
 
 // The output checks on a finished answer (PR-16), cheapest first:
 // 1. canary: the secret marker from the system prompt (plain code);
-// 2. numbers: every price, percentage, time and phone comes from the
-//    evidence (plain code);
+// 2. numbers: every price, percentage and phone number comes from the
+//    evidence (plain code; times aren't checked, see figures.ts);
 // 3. scope: the answer is about the business (the guard model).
 // A failed answer gets one rewrite with the reason, checked again; if that
 // fails too, a safe reply goes out instead. The customer never keeps an
 // answer that failed.
 
-export type Failure = Pick<FlagRow, "layer" | "category" | "reason">;
+// `attack`: for a leak or an off-business answer, the kind of request it gave
+// in to: the customer's message is recorded under it (layer "caught").
+export type Failure = Pick<FlagRow, "layer" | "category" | "reason"> & { attack?: string };
 
 export interface AnswerCheck {
   text: string;
@@ -41,13 +43,13 @@ export interface CheckInput {
 async function check(input: CheckInput, answer: string): Promise<Failure[]> {
   // The safe replies are written by the platform; nothing to check.
   if (answer === declineReply(input.business.name) || answer === unsureReply(input.business.name)) return [];
-  if (answer.includes(input.canary)) return [{ layer: "canary", category: "prompt_leak", reason: "The answer contained the system prompt's secret marker." }];
+  if (answer.includes(input.canary)) return [{ layer: "canary", category: "prompt_leak", reason: "The answer contained the system prompt's secret marker.", attack: "injection" }];
   const figures = unsupportedFigures(answer, indexEvidence(input.evidence));
   if (figures.length > 0) {
     return [{ layer: "numbers", category: [...new Set(figures.map((f) => f.kind))].join(","), reason: `Not in the documents or the conversation: ${figures.map((f) => f.text).join(", ")}` }];
   }
   const scope = await input.guards.scope(input.business, input.question, answer, input.sources);
-  return scope.inScope ? [] : [{ layer: "scope", category: "off_business", reason: scope.reason }];
+  return scope.inScope ? [] : [{ layer: "scope", category: "off_business", reason: scope.reason, attack: scope.category ?? "off_topic" }];
 }
 
 function rewriteMessages(input: CheckInput, failures: Failure[]): ChatCompletionMessageParam[] {

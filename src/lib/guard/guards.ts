@@ -5,7 +5,7 @@ import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
 import { embedTexts } from "@/lib/rag/embed";
-import { inputGuardMessages, inputGuardSchema, scopeCheckMessages, scopeCheckSchema, type GuardBusiness, type InputCategory } from "./prompts";
+import { INPUT_CATEGORIES, inputGuardMessages, inputGuardSchema, scopeCheckMessages, scopeCheckSchema, type GuardBusiness, type InputCategory } from "./prompts";
 
 // The guards around the agent (PR-16). Behind one interface, so the chat
 // turn can be tested with fakes and the eval can switch them off for a
@@ -18,9 +18,11 @@ import { inputGuardMessages, inputGuardSchema, scopeCheckMessages, scopeCheckSch
 // `hold`: allowed, but the guard wasn't sure (the message touches on the
 // assistant itself, roles, rules). The answer is then checked before any of
 // it is shown, instead of streaming and being replaced afterwards.
+// `degraded`: allowed only because the guard failed (error or timeout), not
+// because it judged the message fine.
 export type Screen =
-  | { allowed: true; hold?: boolean; embedding?: number[] }
-  | { allowed: false; category: Exclude<InputCategory, "ok">; reason: string; embedding?: number[] };
+  | { allowed: true; hold?: boolean; degraded?: true; embedding?: number[] }
+  | { allowed: false; category: Exclude<InputCategory, "ok">; reason: string; embedding?: number[]; certain?: boolean };
 
 // The last few turns, for context: an attack can be spread over messages.
 export type GuardContext = { role: "user" | "assistant"; content: string }[];
@@ -29,21 +31,40 @@ export interface FlagRow {
   business_id: string;
   conversation_id: string;
   message_id: number | null;
-  layer: "input" | "canary" | "scope" | "numbers";
+  layer: "input" | "caught" | "canary" | "scope" | "numbers";
   category: string;
   reason: string;
   original: string;
   embedding?: number[];
+  // "confirmed": may teach the guard right away; "new": waits for staff.
+  status?: "new" | "confirmed";
 }
+
+// Blocks that teach the guard without review: a clear attack of a kind no
+// customer writes by accident ("ignore your instructions"), where the guard
+// is certain. Everything else waits for staff (off-topic blocks, attacks
+// caught late, and any block the guard wasn't sure of): that's where real
+// customers get misjudged, and where an attacker could plant examples.
+export const CONFIRMED_ON_SIGHT = new Set(["injection", "authority_claim", "internals"]);
+export const confirmedOnSight = (screen: { category: string; certain?: boolean }) => CONFIRMED_ON_SIGHT.has(screen.category) && screen.certain === true;
 
 export interface Guards {
   // The input guard: is this customer message safe to answer?
   screen(business: GuardBusiness & { id: string }, message: string, context?: GuardContext): Promise<Screen>;
   // The scope check: is this answer about the business?
-  scope(business: GuardBusiness, question: string, answer: string, sources: string[]): Promise<{ inScope: boolean; reason: string }>;
+  scope(business: GuardBusiness, question: string, answer: string, sources: string[]): Promise<ScopeVerdict>;
   // One more try at an answer that failed a check, with the reason.
   rewrite(messages: ChatCompletionMessageParam[]): Promise<string>;
   record(flag: FlagRow): Promise<void>;
+}
+
+export interface ScopeVerdict {
+  inScope: boolean;
+  reason: string;
+  // Out of scope: the kind of request the answer gave in to.
+  category?: Exclude<InputCategory, "ok">;
+  // In scope only because the check failed.
+  degraded?: true;
 }
 
 // How long the input guard may take, all steps included (embedding,
@@ -68,26 +89,32 @@ export const liveGuards: Guards = {
       // The past blocked messages most like this one are the guard's examples.
       [embedding] = await embedTexts([message.slice(0, 2000)]);
       const { data: examples } = await db().rpc("similar_flags", { p_business_id: business.id, p_embedding: JSON.stringify(embedding), p_limit: 3 });
-      const verdict = await classify<{ category: InputCategory; risk: "low" | "elevated"; reason: string }>(
+      const verdict = await classify<{ category: InputCategory; risk: "low" | "elevated"; certainty: "clear" | "likely"; reason: string }>(
         inputGuardMessages(business, message, examples ?? [], context),
         inputGuardSchema,
         SCREEN_TIMEOUT_MS,
       );
       if (verdict.category === "ok" || !verdict.category) return { allowed: true, hold: verdict.risk === "elevated", embedding };
-      return { allowed: false, category: verdict.category, reason: verdict.reason ?? "", embedding };
+      return { allowed: false, category: verdict.category, reason: verdict.reason ?? "", embedding, certain: verdict.certainty === "clear" };
     } catch (err) {
       log("screen failed; allowing", err);
-      return { allowed: true, embedding };
+      return { allowed: true, degraded: true, embedding };
     }
   },
 
   async scope(business, question, answer, sources) {
     try {
-      const verdict = await classify<{ in_scope: boolean; reason: string }>(scopeCheckMessages(business, question, answer, sources), scopeCheckSchema, SCOPE_TIMEOUT_MS);
-      return { inScope: verdict.in_scope !== false, reason: verdict.reason ?? "" };
+      const verdict = await classify<{ in_scope: boolean; category: string; reason: string }>(
+        scopeCheckMessages(business, question, answer, sources),
+        scopeCheckSchema,
+        SCOPE_TIMEOUT_MS,
+      );
+      const inScope = verdict.in_scope !== false;
+      const category = (INPUT_CATEGORIES as readonly string[]).includes(verdict.category) && verdict.category !== "ok" ? (verdict.category as ScopeVerdict["category"]) : "off_topic";
+      return inScope ? { inScope, reason: verdict.reason ?? "" } : { inScope, reason: verdict.reason ?? "", category };
     } catch (err) {
       log("scope check failed; allowing", err);
-      return { inScope: true, reason: "" };
+      return { inScope: true, reason: "", degraded: true };
     }
   },
 
@@ -116,7 +143,7 @@ export function screenFailOpen(screen: Promise<Screen>, ms = SCREEN_TIMEOUT_MS):
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       log(`screen took over ${ms} ms; allowing`);
-      resolve({ allowed: true });
+      resolve({ allowed: true, degraded: true });
     }, ms);
     screen.then(
       (result) => {
@@ -126,7 +153,7 @@ export function screenFailOpen(screen: Promise<Screen>, ms = SCREEN_TIMEOUT_MS):
       (err) => {
         clearTimeout(timer);
         log("screen failed; allowing", err);
-        resolve({ allowed: true });
+        resolve({ allowed: true, degraded: true });
       },
     );
   });

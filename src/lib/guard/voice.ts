@@ -1,6 +1,6 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
-import { canary, liveGuards, type Guards } from "./guards";
+import { canary, confirmedOnSight, liveGuards, type FlagRow, type Guards } from "./guards";
 
 // Voice (PR-16): speech goes from OpenAI straight to the customer, so an
 // answer can't be stopped before it's heard. The same guards run after the
@@ -26,34 +26,47 @@ export async function flagVoiceItem(item: StoredVoiceItem, guards: Guards = live
     if (error) throw new Error(error.message);
     const profile = { id: business.id, name: business.name, description: business.description, guidelines: business.assistant_guidelines };
     const base = { business_id: item.businessId, conversation_id: item.conversationId, message_id: item.messageId, original: item.text };
-    // A transcript can be reported again (corrected): the latest one is
-    // what's checked, so its earlier flags go, and nothing is counted twice.
-    const { error: clearError } = await db().from("flags").delete().eq("message_id", item.messageId);
-    if (clearError) throw new Error(clearError.message);
 
+    // Check first, then replace this message's flags with the result. A
+    // transcript can be reported again (corrected): the latest one counts,
+    // once. But a check that only "passed" because the guard failed changes
+    // nothing: it mustn't erase a flag the earlier check found.
+    const flags: FlagRow[] = [];
     if (item.role === "user") {
       const screen = await guards.screen(profile, item.text);
-      if (!screen.allowed) await guards.record({ ...base, layer: "input", category: screen.category, reason: `${screen.reason} (voice: heard, not blocked)`, embedding: screen.embedding });
-      return;
+      if (screen.allowed && screen.degraded) return;
+      if (!screen.allowed) {
+        flags.push({
+          ...base,
+          layer: "input",
+          category: screen.category,
+          reason: `${screen.reason} (voice: heard, not blocked)`,
+          embedding: screen.embedding,
+          status: confirmedOnSight(screen) ? "confirmed" : "new",
+        });
+      }
+    } else if (item.text.includes(canary())) {
+      flags.push({ ...base, layer: "canary", category: "prompt_leak", reason: "The spoken answer contained the system prompt's secret marker." });
+    } else {
+      // The customer's message this answer replies to: the latest one before it.
+      const { data: question } = await db()
+        .from("messages")
+        .select("content")
+        .eq("conversation_id", item.conversationId)
+        .eq("role", "user")
+        .lt("id", item.messageId)
+        .not("content", "is", null)
+        .order("id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const scope = await guards.scope(profile, question?.content ?? "", item.text, []);
+      if (scope.degraded) return;
+      if (!scope.inScope) flags.push({ ...base, layer: "scope", category: "off_business", reason: `${scope.reason} (voice: heard, not blocked)` });
     }
 
-    if (item.text.includes(canary())) {
-      await guards.record({ ...base, layer: "canary", category: "prompt_leak", reason: "The spoken answer contained the system prompt's secret marker." });
-      return;
-    }
-    // The customer's message this answer replies to: the latest one before it.
-    const { data: question } = await db()
-      .from("messages")
-      .select("content")
-      .eq("conversation_id", item.conversationId)
-      .eq("role", "user")
-      .lt("id", item.messageId)
-      .not("content", "is", null)
-      .order("id", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const scope = await guards.scope(profile, question?.content ?? "", item.text, []);
-    if (!scope.inScope) await guards.record({ ...base, layer: "scope", category: "off_business", reason: `${scope.reason} (voice: heard, not blocked)` });
+    const { error: clearError } = await db().from("flags").delete().eq("message_id", item.messageId);
+    if (clearError) throw new Error(clearError.message);
+    for (const flag of flags) await guards.record(flag);
   } catch (err) {
     // After the response: nothing to tell the customer, only the log.
     console.error("[guard] voice check failed", err instanceof Error ? err.message : err);

@@ -22,7 +22,10 @@ export interface TranscriptMessage {
 }
 
 export interface MessageFlag {
-  layer: "input" | "canary" | "scope" | "numbers";
+  id: number;
+  layer: "input" | "caught" | "canary" | "scope" | "numbers";
+  // Blocks of customer messages: whether staff confirmed or dismissed them.
+  status: "new" | "confirmed" | "dismissed";
   category: string;
   reason: string;
   // The customer's message, or the answer before it was replaced.

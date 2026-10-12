@@ -11,7 +11,7 @@ import { isBusinessSlug } from "@/lib/chat/limits";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 import { checkAnswer } from "@/lib/guard/check-answer";
-import { canary, liveGuards, screenFailOpen, type Guards, type Screen } from "@/lib/guard/guards";
+import { canary, confirmedOnSight, liveGuards, screenFailOpen, type Guards, type Screen } from "@/lib/guard/guards";
 import { declineReply } from "@/lib/guard/prompts";
 
 // One customer message, end to end (design §7, §7.1): conversation, memory,
@@ -288,6 +288,9 @@ export async function runChatTurn(
   };
   const shown = (event: ChatEvent) => (cleared ? show(event) : held.push(event));
   let screened: Promise<Screen> = Promise.resolve({ allowed: true });
+  // The guard's verdict once it let the message through (the try block
+  // throws for a block, so past it this is always an allowed screen).
+  let allowed: Extract<Screen, { allowed: true }> = { allowed: true };
 
   // Everything from here on is covered: any failure marks the turn failed, so
   // a retry re-runs at once instead of waiting out the in-progress window.
@@ -325,6 +328,7 @@ export async function runChatTurn(
     // A short answer can finish before the guard does: it still waits.
     const screen = await screened;
     if (!screen.allowed) throw new Blocked(screen);
+    allowed = screen;
   } catch (err) {
     if (err instanceof Blocked) {
       await sendBlocked(prepared, err.screen, input.message, emit, deps.guards, started);
@@ -335,8 +339,6 @@ export async function runChatTurn(
     emit({ type: "error", message: AI_UNAVAILABLE, retryable: true });
     return;
   }
-
-  const screen = (await screened) as Extract<Screen, { allowed: true }>;
 
   // The output checks. A streamed answer that fails is replaced on screen; a
   // held one is sent only now, already checked. Only the final text is saved.
@@ -372,24 +374,26 @@ export async function runChatTurn(
     return;
   }
 
-  for (const f of checked.failures) {
-    await deps.guards.record({ business_id: business.id, conversation_id: conversation.id, message_id: messageId, ...f, original: firstAnswer });
+  for (const { layer, category, reason } of checked.failures) {
+    await deps.guards.record({ business_id: business.id, conversation_id: conversation.id, message_id: messageId, layer, category, reason, original: firstAnswer });
   }
   // An attack the input guard let through and an output check caught (a leak
   // or an off-business answer, not a wrong figure): the customer's message is
-  // recorded as an input example too, so the input guard stops it next time,
-  // and it leaves the history of later turns.
-  const missed = checked.failures.find((f) => f.layer === "canary" || f.layer === "scope");
+  // recorded too, under the kind of request it was, so the guard can learn it.
+  // Not on sight: the check may be wrong, or the message planted to teach the
+  // guard to refuse real customers. It teaches the guard once staff confirm.
+  const missed = checked.failures.find((f) => f.attack);
   if (missed) {
     await deps.guards.record({
       business_id: business.id,
       conversation_id: conversation.id,
       message_id: userMessageId,
-      layer: "input",
-      category: "missed",
+      layer: "caught",
+      category: missed.attack!,
       reason: `Got past the input guard; caught in the answer (${missed.layer}).`,
       original: input.message,
-      embedding: screen.embedding,
+      embedding: allowed.embedding,
+      status: "new",
     });
   }
   emit({ type: "sources", sources: result.sources });
@@ -437,6 +441,7 @@ async function sendBlocked(
     reason: screen.reason,
     original: message,
     embedding: screen.embedding,
+    status: confirmedOnSight(screen) ? "confirmed" : "new",
   });
   emit({ type: "sources", sources: [] });
   emit({ type: "done", messageId });
@@ -449,6 +454,9 @@ async function sendBlocked(
 // Messages the input guard blocked are left out, with the standard reply to
 // them (PR-16): a blocked injection must not reach the model on a later turn
 // through the history ("ignore your rules…", blocked, then "ok, go on").
+// Unless staff dismissed the block (a real customer, misjudged). Answers an
+// output check replaced stay: the check may have been wrong, and the
+// customer's message may hold what they asked for.
 export async function recentHistory(conversationId: string, beforeMessageId?: number): Promise<HistoryMessage[]> {
   const limit = beforeMessageId === undefined ? HISTORY_LIMIT : HISTORY_LIMIT - 1;
   let query = db().from("messages").select("id, role, content, reply_to_message_id").eq("conversation_id", conversationId).not("content", "is", null);
@@ -456,7 +464,7 @@ export async function recentHistory(conversationId: string, beforeMessageId?: nu
   const [messages, blocked] = await Promise.all([
     // Extra rows, so dropping blocked pairs still leaves a full window.
     query.order("id", { ascending: false }).limit(limit + 10),
-    db().from("flags").select("message_id").eq("conversation_id", conversationId).eq("layer", "input").not("message_id", "is", null),
+    db().from("flags").select("message_id").eq("conversation_id", conversationId).eq("layer", "input").neq("status", "dismissed").not("message_id", "is", null),
   ]);
   if (messages.error) throw new Error(`Loading history failed: ${messages.error.message}`);
   if (blocked.error) throw new Error(`Loading flags failed: ${blocked.error.message}`);
