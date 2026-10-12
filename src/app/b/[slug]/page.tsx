@@ -36,6 +36,8 @@ export default function Page({ params }: PageProps<"/b/[slug]">) {
 async function BusinessChat({ params }: Pick<PageProps<"/b/[slug]">, "params">) {
   const business = await businessFor(params);
   if (!business) notFound();
-  // Only what the browser needs: no ids or settings.
-  return <Chat business={{ slug: business.slug, name: business.name }} />;
+  // Only what the browser needs. The id isn't a secret (every request goes
+  // through the server, which checks the slug); it keys the visitor's
+  // session in this browser, so a rename doesn't lose it.
+  return <Chat business={{ id: business.id, slug: business.slug, name: business.name }} />;
 }

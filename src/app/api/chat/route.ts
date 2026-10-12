@@ -41,8 +41,8 @@ export async function POST(request: Request) {
   try {
     // Per visitor first; the business's ceiling only for a real business.
     await enforce([[LIMITS.chatSession(input.sessionId), ...ipLimit(request, LIMITS.chatIp)]]);
-    await requireBusiness(input.businessSlug);
-    await enforce([[LIMITS.chatBusiness(input.businessSlug)]]);
+    const business = await requireBusiness(input.businessSlug);
+    await enforce([[LIMITS.chatBusiness(business.id)]]);
     prepared = await prepareChatTurn(input);
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });
@@ -102,8 +102,8 @@ export async function GET(request: Request) {
   try {
     const tooMany = "Too many requests. Please wait a moment and reload.";
     await enforce([[LIMITS.historySession(sessionId), ...ipLimit(request, LIMITS.historyIp)]], tooMany);
-    await requireBusiness(slug.data);
-    await enforce([[LIMITS.historyBusiness(slug.data)]], tooMany);
+    const business = await requireBusiness(slug.data);
+    await enforce([[LIMITS.historyBusiness(business.id)]], tooMany);
     return Response.json({ messages: await loadHistory(slug.data, sessionId) }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });

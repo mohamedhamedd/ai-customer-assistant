@@ -4,7 +4,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
-import { findBusiness } from "@/lib/chat/turn";
+import { findBusiness, forgetBusiness } from "@/lib/chat/turn";
 import { businessProfile, createBusiness, listBusinesses, ProfileError, updateBusiness } from "./businesses";
 
 const slugs: string[] = [];
@@ -52,6 +52,8 @@ test("the database refuses a profile the form would refuse, whoever writes it", 
   assert.match(error?.message ?? "", /businesses_slug_format/);
   const { error: long } = await db().from("businesses").insert({ slug: slug(), name: "x", assistant_guidelines: "x".repeat(2001) });
   assert.match(long?.message ?? "", /businesses_guidelines_length/);
+  const { error: reserved } = await db().from("businesses").insert({ slug: "new", name: "x" });
+  assert.match(reserved?.message ?? "", /businesses_slug_format/, "'new' is /admin/new");
 });
 
 test("saving a profile applies to the next message, under the new slug; the old slug stops working", async () => {
@@ -88,4 +90,16 @@ test("the list counts ready documents only, and lists businesses without any", a
   const list = await listBusinesses();
   assert.equal(list.find((b) => b.slug === s)?.documents, 1);
   assert.equal(list.find((b) => b.slug === empty)?.documents, 0);
+});
+
+test("a lookup that started before a save doesn't put the old profile back in the cache", async () => {
+  const s = slug();
+  await createBusiness(profile(s));
+  // In flight (its query hasn't answered yet) when the save clears the cache.
+  const inFlight = findBusiness(s);
+  forgetBusiness(s);
+  assert.equal((await inFlight)?.name, "Acme Fitness");
+  // Changed behind the cache's back: only a fresh read can see it.
+  await db().from("businesses").update({ name: "Changed" }).eq("slug", s);
+  assert.equal((await findBusiness(s))?.name, "Changed", "the in-flight result wasn't cached");
 });

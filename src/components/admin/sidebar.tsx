@@ -5,14 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { CONSULTATIONS_CHANGED } from "./ui";
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join("");
+import { initials } from "@/lib/initials";
 
 const NAV = [
   { href: "overview", label: "Overview", icon: LayoutDashboard },

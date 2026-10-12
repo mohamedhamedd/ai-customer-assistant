@@ -12,8 +12,8 @@ export function POST(request: Request) {
     const tooMany = "You've started several voice calls in a short time. Please wait a few minutes, or keep typing.";
     // Per visitor first; the business's ceiling only for a real business.
     await enforce([[LIMITS.voiceSession(input.sessionId), ...ipLimit(request, LIMITS.voiceIp)]], tooMany);
-    await requireBusiness(input.businessSlug);
-    await enforce([[LIMITS.voiceBusiness(input.businessSlug)]], tooMany);
+    const business = await requireBusiness(input.businessSlug);
+    await enforce([[LIMITS.voiceBusiness(business.id)]], tooMany);
     return Response.json(await startVoiceCall(input));
   });
 }

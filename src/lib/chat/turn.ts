@@ -66,11 +66,15 @@ export interface Business {
 // grow it, and a business created a moment ago is found at once.
 const BUSINESS_TTL_MS = 60_000;
 const businessCache = new Map<string, { value: Business; expires: number }>();
+// Bumped by every save. A lookup that started before a save may have read
+// the old row; it must not put it back in the cache after the save cleared it.
+let businessVersion = 0;
 
 export async function findBusiness(slug: string): Promise<Business | null> {
   if (!isBusinessSlug(slug)) return null;
   const hit = businessCache.get(slug);
   if (hit && hit.expires > Date.now()) return hit.value;
+  const version = businessVersion;
   const { data, error } = await db()
     .from("businesses")
     .select("id, slug, name, description, timezone, assistant_guidelines")
@@ -83,12 +87,13 @@ export async function findBusiness(slug: string): Promise<Business | null> {
   }
   const { assistant_guidelines, ...rest } = data;
   const business = { ...rest, guidelines: assistant_guidelines };
-  businessCache.set(slug, { value: business, expires: Date.now() + BUSINESS_TTL_MS });
+  if (version === businessVersion) businessCache.set(slug, { value: business, expires: Date.now() + BUSINESS_TTL_MS });
   return business;
 }
 
 // After a profile is saved: under its old slug and its new one.
 export function forgetBusiness(...slugs: string[]) {
+  businessVersion++;
   for (const slug of slugs) businessCache.delete(slug);
 }
 

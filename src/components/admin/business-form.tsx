@@ -1,8 +1,9 @@
 "use client";
 
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { MAX_SLUG_CHARS } from "@/lib/chat/limits";
 import { PROFILE_LIMITS, TIMEZONES, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
+import { useCopy } from "./ui";
 
 // The profile fields, shared by Settings (US-10.1) and New business
 // (US-10.2). Controlled: the page owns the values and saves them.
@@ -49,7 +50,7 @@ export function ProfileFields({
             <input
               id="slug"
               value={values.slug}
-              maxLength={64}
+              maxLength={MAX_SLUG_CHARS}
               onChange={(e) => onChange("slug", e.target.value.toLowerCase())}
               aria-invalid={!!errors.slug}
               aria-describedby={`slug-hint${errors.slug ? " slug-error" : ""}`}
@@ -157,19 +158,12 @@ function Field({
 }
 
 function CopyLink({ path }: { path: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}${path}`);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  };
+  const { copied, copy } = useCopy();
   return (
     // Icon only on a phone, where the slug needs the width.
     <button
       type="button"
-      onClick={copy}
+      onClick={() => copy(`${window.location.origin}${path}`)}
       aria-label={copied ? "Copied" : "Copy the chat link"}
       title="Copy the chat link"
       className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-[14px] font-medium hover:bg-surface-muted"
@@ -200,7 +194,10 @@ export async function saveProfile(url: string, method: "POST" | "PATCH", values:
       signal: AbortSignal.timeout(15_000),
     });
     const body = (await res.json().catch(() => ({}))) as { profile?: Profile; business?: Profile; error?: string; fields?: FieldErrors };
-    if (res.ok) return { ok: true, profile: (body.profile ?? body.business)! };
+    const profile = body.profile ?? body.business;
+    if (res.ok && profile) return { ok: true, profile };
+    // A success with no profile (a cut-off response): it may have saved.
+    if (res.ok) return { ok: false, error: "The answer from the server was incomplete. Reload the page to see whether it saved.", fields: {} };
     return { ok: false, error: body.error ?? "Couldn't save. Please try again.", fields: body.fields ?? {} };
   } catch (err) {
     // It may have reached the server and saved: don't say it failed.

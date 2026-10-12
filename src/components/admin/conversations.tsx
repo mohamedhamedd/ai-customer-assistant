@@ -10,6 +10,7 @@ import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
 import { LeadDrawer } from "./lead-drawer";
+import { useCopy } from "./ui";
 
 // Conversations (US-9.1, 9.2): the list on the left, the transcript on the
 // right with every tool call the assistant made shown where it happened.
@@ -349,18 +350,11 @@ function ToolCallRow({ call }: { call: TranscriptToolCall }) {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  };
+  const { copied, copy } = useCopy();
   return (
     <button
       type="button"
-      onClick={copy}
+      onClick={() => copy(text)}
       aria-label="Copy JSON"
       title="Copy JSON"
       className="absolute right-2 top-2 inline-flex size-7 items-center justify-center rounded text-text-muted hover:bg-surface-muted hover:text-text"

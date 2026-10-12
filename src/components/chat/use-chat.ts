@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { readNdjson } from "./ndjson";
+import { loadSessionId, storeSessionId, uuid, type SessionScope } from "./session";
 import {
   applyEvent,
   isAnsweredElsewhere,
@@ -24,38 +25,6 @@ import {
 export const OFFLINE = "You're offline. This will send when you're back.";
 const UNREACHABLE = "Couldn't reach the assistant. Check your connection and try again.";
 
-// Anonymous visitor id (US-1.1): no sign-up, so the conversation is keyed by
-// a random id kept in this browser. One per business, so "New conversation"
-// on one chat doesn't reset another.
-const sessionKey = (slug: string) => `chat-session:${slug}`;
-
-function uuid(): string {
-  // randomUUID needs a secure context (https or localhost).
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
-
-// Storage can be unavailable (private mode, blocked site data): fall back to
-// an id for this page view only.
-function loadSessionId(slug: string): string {
-  try {
-    const stored = localStorage.getItem(sessionKey(slug));
-    if (stored) return stored;
-  } catch {}
-  return storeSessionId(slug, uuid());
-}
-
-function storeSessionId(slug: string, id: string): string {
-  try {
-    localStorage.setItem(sessionKey(slug), id);
-  } catch {}
-  return id;
-}
-
 function subscribeOnline(onChange: () => void) {
   window.addEventListener("online", onChange);
   window.addEventListener("offline", onChange);
@@ -73,7 +42,8 @@ const GIVE_UP_MS = 65_000;
 
 export type HistoryState = "loading" | "ready" | "failed";
 
-export function useChat(businessSlug: string) {
+export function useChat(business: SessionScope) {
+  const { id: businessId, slug: businessSlug } = business;
   const [turns, setTurns] = useState<Turn[]>([]);
   const [history, setHistory] = useState<HistoryState>("loading");
   // Shown when loading failed with a reason worth telling (a rate limit).
@@ -123,9 +93,9 @@ export function useChat(businessSlug: string) {
   }, [businessSlug]);
 
   useEffect(() => {
-    sessionId.current = loadSessionId(businessSlug);
+    sessionId.current = loadSessionId({ id: businessId, slug: businessSlug });
     void loadHistory();
-  }, [businessSlug, loadHistory]);
+  }, [businessId, businessSlug, loadHistory]);
 
   const run = useCallback(
     async (turn: Turn) => {
@@ -205,11 +175,11 @@ export function useChat(businessSlug: string) {
   const newConversation = useCallback(() => {
     if (isBusy(turnsRef.current)) return;
     generation.current++;
-    sessionId.current = storeSessionId(businessSlug, uuid());
+    sessionId.current = storeSessionId({ id: businessId, slug: businessSlug }, uuid());
     setTurns([]);
     setStartedFresh(true);
     setHistory("ready");
-  }, [businessSlug]);
+  }, [businessId, businessSlug]);
 
   // An answer being produced elsewhere: refresh history until it lands.
   const answeredElsewhere = isAnsweredElsewhere(turns);

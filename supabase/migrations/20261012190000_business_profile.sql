@@ -16,7 +16,8 @@ alter table public.businesses
   add constraint businesses_name_length        check (char_length(btrim(name)) between 1 and 100),
   add constraint businesses_description_length check (char_length(description) <= 500),
   add constraint businesses_guidelines_length  check (char_length(assistant_guidelines) <= 2000),
-  add constraint businesses_slug_format        check (char_length(slug) <= 64 and slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$');
+  -- "new" is reserved: /admin/new is the create page.
+  add constraint businesses_slug_format        check (char_length(slug) <= 64 and slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' and slug <> 'new');
 
 -- The demo clinic's rules, which this migration takes out of the shared
 -- prompt. Set here too (not only in seed.sql) so a database that is migrated

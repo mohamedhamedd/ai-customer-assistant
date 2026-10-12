@@ -12,7 +12,7 @@ const searchRequest = z.object({ query: z.string().trim().min(1, "Type a questio
 
 export function POST(request: Request, ctx: RouteContext<"/api/admin/[slug]/search">) {
   return withBusiness(ctx.params, "test search", async (business) => {
-    await enforce([[LIMITS.searchBusiness(business.slug)]], "Too many test searches in a short time. Please wait a moment.");
+    await enforce([[LIMITS.searchBusiness(business.id)]], "Too many test searches in a short time. Please wait a moment.");
     const body = await readJsonCapped(request, 4 * 1024);
     if (!body.ok) throw new ChatHttpError(body.status, body.error);
     const parsed = searchRequest.safeParse(body.value);

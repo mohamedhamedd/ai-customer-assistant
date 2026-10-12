@@ -2,7 +2,8 @@
 
 import { ExternalLink, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { initials } from "@/lib/initials";
 import { fieldErrors, profileSchema, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
 import { focusFirstError, ProfileFields, saveProfile } from "./business-form";
 import { AdminHeader } from "./header";
@@ -11,41 +12,26 @@ import { useToast } from "./ui";
 // Settings: the business profile (US-10.1). Saved changes apply to the next
 // customer message, no redeploy. A new slug moves the admin and the chat to
 // the new URL.
-export function Settings({ slug }: { slug: string }) {
+export function Settings({ slug, initial }: { slug: string; initial: Profile }) {
   const api = `/api/admin/${encodeURIComponent(slug)}/settings`;
   const router = useRouter();
   const toast = useToast();
-  const [saved, setSaved] = useState<Profile | null>(null);
-  const [values, setValues] = useState<Profile | null>(null);
+  // What is stored, and what the form shows.
+  const [saved, setSaved] = useState(initial);
+  const [values, setValues] = useState(initial);
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [failed, setFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let live = true;
-    fetch(api, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((body: { profile: Profile }) => {
-        if (!live) return;
-        setSaved(body.profile);
-        setValues(body.profile);
-      })
-      .catch(() => live && setFailed(true));
-    return () => {
-      live = false;
-    };
-  }, [api]);
-
-  const dirty = !!values && !!saved && (Object.keys(values) as ProfileField[]).some((k) => values[k] !== saved[k]);
+  const dirty = (Object.keys(values) as ProfileField[]).some((k) => values[k] !== saved[k]);
 
   const change = (field: ProfileField, value: string) => {
-    setValues((v) => v && { ...v, [field]: value });
+    setValues((v) => ({ ...v, [field]: value }));
     setErrors((e) => ({ ...e, [field]: undefined }));
   };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!values || saving) return;
+    if (saving) return;
     // Same rules as the server: most mistakes are caught without a round trip.
     const local = profileSchema.safeParse(values);
     if (!local.success) {
@@ -79,48 +65,40 @@ export function Settings({ slug }: { slug: string }) {
     <>
       <AdminHeader title="Settings" slug={slug} />
       <main className="min-h-0 flex-1 overflow-y-auto p-4 md:p-8">
-        {failed && <p className="text-[14px] text-danger">Couldn&apos;t load the settings.</p>}
-        {!values && !failed && (
-          <p className="flex items-center gap-2 text-[14px] text-text-muted">
-            <Loader2 aria-hidden className="size-4 animate-spin" /> Loading…
-          </p>
-        )}
-        {values && (
-          <div className="flex max-w-[952px] flex-col items-start gap-8 lg:flex-row">
-            <form onSubmit={save} noValidate className="w-full max-w-[640px] rounded-2xl border border-border bg-surface">
-              <div className="border-b border-border p-6">
-                <h2 className="text-[16px] font-semibold">Business profile</h2>
-                <p className="mt-1 text-[14px] text-text-muted">Changes apply to the next customer message.</p>
-              </div>
-              <div className="p-6">
-                <ProfileFields values={values} errors={errors} onChange={change} slugHint="Changing it moves the chat to a new link; the old link stops working." />
-              </div>
-              <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
-                <button
-                  type="button"
-                  disabled={!dirty || saving}
-                  onClick={() => {
-                    setValues(saved);
-                    setErrors({});
-                  }}
-                  className="h-10 rounded-lg px-4 text-[14px] font-medium text-text-muted hover:text-text disabled:opacity-50"
-                >
-                  Discard changes
-                </button>
-                <button
-                  type="submit"
-                  disabled={!dirty || saving}
-                  aria-busy={saving}
-                  className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-accent px-4 text-[14px] font-medium text-accent-contrast hover:opacity-90 disabled:opacity-50"
-                >
-                  {saving && <Loader2 aria-hidden className="size-4 animate-spin" />}
-                  Save changes
-                </button>
-              </div>
-            </form>
-            <HeaderPreview name={values.name} slug={saved!.slug} />
-          </div>
-        )}
+        <div className="flex max-w-[952px] flex-col items-start gap-8 lg:flex-row">
+          <form onSubmit={save} noValidate className="w-full max-w-[640px] rounded-2xl border border-border bg-surface">
+            <div className="border-b border-border p-6">
+              <h2 className="text-[16px] font-semibold">Business profile</h2>
+              <p className="mt-1 text-[14px] text-text-muted">Changes apply to the next customer message.</p>
+            </div>
+            <div className="p-6">
+              <ProfileFields values={values} errors={errors} onChange={change} slugHint="Changing it moves the chat to a new link; the old link stops working." />
+            </div>
+            <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
+              <button
+                type="button"
+                disabled={!dirty || saving}
+                onClick={() => {
+                  setValues(saved);
+                  setErrors({});
+                }}
+                className="h-10 rounded-lg px-4 text-[14px] font-medium text-text-muted hover:text-text disabled:opacity-50"
+              >
+                Discard changes
+              </button>
+              <button
+                type="submit"
+                disabled={!dirty || saving}
+                aria-busy={saving}
+                className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-accent px-4 text-[14px] font-medium text-accent-contrast hover:opacity-90 disabled:opacity-50"
+              >
+                {saving && <Loader2 aria-hidden className="size-4 animate-spin" />}
+                Save changes
+              </button>
+            </div>
+          </form>
+          <HeaderPreview name={values.name} slug={saved.slug} />
+        </div>
       </main>
       {toast.element}
     </>
@@ -130,13 +108,7 @@ export function Settings({ slug }: { slug: string }) {
 // How the chat's header will look with this name (the live chat changes on
 // save). The link is the saved slug's: the new one doesn't exist yet.
 function HeaderPreview({ name, slug }: { name: string; slug: string }) {
-  const initials =
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0]!.toUpperCase())
-      .join("") || "?";
+  const avatar = initials(name) || "?";
   return (
     <aside className="flex w-full flex-col gap-3 lg:w-[280px] lg:shrink-0">
       <span className="px-1 text-[12px] font-medium uppercase tracking-wider text-text-muted">Chat header preview</span>
@@ -144,7 +116,7 @@ function HeaderPreview({ name, slug }: { name: string; slug: string }) {
         <div className="flex items-center justify-between rounded-xl border border-border bg-bg p-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-[12px] font-semibold text-accent-contrast">
-              {initials}
+              {avatar}
             </span>
             <div className="min-w-0">
               <p className="truncate text-[14px] font-semibold leading-tight">{name || "Business name"}</p>

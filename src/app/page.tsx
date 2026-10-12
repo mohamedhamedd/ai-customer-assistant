@@ -2,19 +2,12 @@ import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { connection } from "next/server";
 import { listBusinesses } from "@/lib/admin/businesses";
+import { initials } from "@/lib/initials";
 
 // Home (US-10.2): one card per business, each opening its own chat. A demo
 // device: in production a customer reaches a business's chat from that
 // business's website, never from a list of every business.
 export const instant = false;
-
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join("");
 
 export default async function Home() {
   await connection(); // per request: a business created a moment ago is listed

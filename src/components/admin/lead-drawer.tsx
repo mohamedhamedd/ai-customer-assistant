@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import type { RequestRow } from "@/lib/admin/crm";
 import type { Channel } from "@/lib/db/enums";
 import { formatInZone, relativeTime } from "./format";
-import { StatusBadge, useDialog } from "./ui";
+import { StatusBadge, useCopy, useDialog } from "./ui";
 
 interface LeadDetail {
   lead: { id: string; name: string; email: string | null; phone: string | null; interest: string | null; channel: Channel; capturedAt: string };
@@ -134,21 +134,14 @@ export function LeadDrawer({ slug, leadId, timeZone, onClose }: { slug: string; 
 }
 
 function CopyRow({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  };
+  const { copied, copy } = useCopy();
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="min-w-0">
         <dt className="sr-only">{label}</dt>
         <dd className="break-all">{value}</dd>
       </div>
-      <button type="button" onClick={copy} aria-label={`Copy ${label.toLowerCase()}`} title={`Copy ${label.toLowerCase()}`} className="inline-flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-muted hover:text-text">
+      <button type="button" onClick={() => copy(value)} aria-label={`Copy ${label.toLowerCase()}`} title={`Copy ${label.toLowerCase()}`} className="inline-flex size-8 shrink-0 items-center justify-center rounded text-text-muted hover:bg-surface-muted hover:text-text">
         {copied ? <Check aria-hidden className="size-4 text-success" /> : <Copy aria-hidden className="size-4" />}
       </button>
     </div>

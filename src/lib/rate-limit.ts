@@ -23,19 +23,21 @@ export interface Limit {
 export const LIMITS = {
   chatSession: (sessionId: string): Limit => ({ key: `chat:session:${sessionId}`, windowSeconds: 60, max: 20 }),
   chatIp: (ip: string): Limit => ({ key: `chat:ip:${ip}`, windowSeconds: 60, max: 60 }),
-  chatBusiness: (slug: string): Limit => ({ key: `chat:business:${slug}`, windowSeconds: 60, max: 300 }),
+  // Business ceilings are keyed by id, not slug: a rename must not start
+  // them again from zero.
+  chatBusiness: (businessId: string): Limit => ({ key: `chat:business:${businessId}`, windowSeconds: 60, max: 300 }),
   // Voice costs per minute: a few call starts per 10 minutes.
   voiceSession: (sessionId: string): Limit => ({ key: `voice:session:${sessionId}`, windowSeconds: 600, max: 3 }),
   voiceIp: (ip: string): Limit => ({ key: `voice:ip:${ip}`, windowSeconds: 600, max: 6 }),
-  voiceBusiness: (slug: string): Limit => ({ key: `voice:business:${slug}`, windowSeconds: 600, max: 30 }),
+  voiceBusiness: (businessId: string): Limit => ({ key: `voice:business:${businessId}`, windowSeconds: 600, max: 30 }),
   // Loading the conversation is cheap but unbounded without a limit; a
   // reload now and then is normal, so this is looser than sending.
   historySession: (sessionId: string): Limit => ({ key: `history:session:${sessionId}`, windowSeconds: 60, max: 60 }),
-  historyBusiness: (slug: string): Limit => ({ key: `history:business:${slug}`, windowSeconds: 60, max: 1200 }),
+  historyBusiness: (businessId: string): Limit => ({ key: `history:business:${businessId}`, windowSeconds: 60, max: 1200 }),
   historyIp: (ip: string): Limit => ({ key: `history:ip:${ip}`, windowSeconds: 60, max: 120 }),
   // Each upload is embedded and each test search embeds the question.
-  uploadBusiness: (slug: string): Limit => ({ key: `upload:business:${slug}`, windowSeconds: 600, max: 30 }),
-  searchBusiness: (slug: string): Limit => ({ key: `search:business:${slug}`, windowSeconds: 60, max: 30 }),
+  uploadBusiness: (businessId: string): Limit => ({ key: `upload:business:${businessId}`, windowSeconds: 600, max: 30 }),
+  searchBusiness: (businessId: string): Limit => ({ key: `search:business:${businessId}`, windowSeconds: 60, max: 30 }),
   // The admin is public in this demo (A1): bound how fast anyone can add
   // businesses or rewrite a profile.
   createBusiness: (): Limit => ({ key: "business:create", windowSeconds: 3600, max: 20 }),

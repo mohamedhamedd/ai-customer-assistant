@@ -10,8 +10,11 @@ import { canRetry, toolStatus, visibleActions, type Action, type Turn } from "./
 import { useChat } from "./use-chat";
 import { useVoice, voiceSupported } from "./use-voice";
 import { VoiceExplainer, VoicePanel } from "./voice-panel";
+import { initials } from "@/lib/initials";
 
 export interface ChatBusiness {
+  // Stable across renames: the browser keeps the visitor's session under it.
+  id: string;
   slug: string;
   name: string;
 }
@@ -20,16 +23,8 @@ export interface ChatBusiness {
 // questions come with business settings (PR-15).
 const SUGGESTIONS = ["What services do you offer?", "What are your hours?", "How much does it cost?", "Request a consultation"];
 
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join("");
-
 export function Chat({ business }: { business: ChatBusiness }) {
-  const chat = useChat(business.slug);
+  const chat = useChat(business);
   const actions = useMemo(() => visibleActions(chat.turns), [chat.turns]);
   const voice = useVoice({ businessSlug: business.slug, getSessionId: chat.getSessionId, updateTurns: chat.updateTurns, announce: chat.announce });
   const voiceOn = voice.state !== "off" && voice.state !== "explain";

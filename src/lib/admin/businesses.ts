@@ -46,6 +46,13 @@ export async function listBusinesses(): Promise<BusinessCard[]> {
   return (data ?? []).map((b) => ({ slug: b.slug, name: b.name, description: b.description, documents: b.documents[0]?.count ?? 0 }));
 }
 
+// Just the names, for the admin's switcher and /admin: no document counts.
+export async function listBusinessLinks(): Promise<{ slug: string; name: string }[]> {
+  const { data, error } = await db().from("businesses").select("slug, name").order("created_at").limit(200);
+  if (error) throw new Error(`Loading businesses failed: ${error.message}`);
+  return data ?? [];
+}
+
 export async function businessProfile(businessId: string): Promise<Profile> {
   const { data, error } = await db().from("businesses").select("slug, name, description, timezone, assistant_guidelines").eq("id", businessId).single();
   if (error) throw new Error(`Loading profile failed: ${error.message}`);
