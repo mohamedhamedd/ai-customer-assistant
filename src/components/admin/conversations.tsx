@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquare, Mic, RefreshCw, ShieldAlert, Volume2, Wrench, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, CircleHelp, Copy, Loader2, MessageSquare, Mic, RefreshCw, ShieldAlert, Volume2, Wrench, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ConversationRow, Transcript } from "@/lib/admin/conversations";
@@ -308,23 +308,24 @@ const TONE: Record<Tone, string> = { success: "text-success", warning: "text-war
 
 // `🔧 search_knowledge · "whitening price" · 3 matches · 412 ms ✓`. Opens to
 // the arguments and the result; a failed call starts open and is red, so
-// problems stand out while scrolling.
+// problems stand out while scrolling. A write held back until the customer
+// confirms isn't a problem: it stays closed and grey.
 function ToolCallRow({ call }: { call: TranscriptToolCall }) {
-  const [open, setOpen] = useState(!call.ok);
   const summary = summarizeToolCall(call);
+  const [open, setOpen] = useState(summary.failed);
   const json = JSON.stringify({ arguments: call.arguments, result: call.result }, null, 2);
   return (
-    <div className={`rounded-lg border font-mono text-[12px] ${call.ok ? "border-border bg-surface" : "border-danger/40 border-l-4 border-l-danger bg-danger/5"}`}>
+    <div className={`rounded-lg border font-mono text-[12px] ${summary.failed ? "border-danger/40 border-l-4 border-l-danger bg-danger/5" : "border-border bg-surface"}`}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         className="flex min-h-9 w-full items-center gap-2 px-3 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
       >
-        <Wrench aria-hidden className={`size-3.5 shrink-0 ${call.ok ? "text-text-muted" : "text-danger"}`} />
+        <Wrench aria-hidden className={`size-3.5 shrink-0 ${summary.failed ? "text-danger" : "text-text-muted"}`} />
         {/* One line from sm up; on a phone the parts wrap rather than truncate to nothing. */}
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap sm:flex-nowrap sm:overflow-hidden">
-          <span className={`font-semibold ${call.ok ? "" : "text-danger"}`}>{call.name}</span>
+          <span className={`font-semibold ${summary.failed ? "text-danger" : ""}`}>{call.name}</span>
           {summary.detail && (
             <>
               <span className="text-text-muted">·</span>
@@ -338,7 +339,13 @@ function ToolCallRow({ call }: { call: TranscriptToolCall }) {
           <span className="shrink-0 text-text-muted">{call.durationMs} ms</span>
           {call.channel === "voice" && <Mic aria-label="During a voice call" className="size-3 shrink-0 text-text-muted" />}
         </span>
-        {call.ok ? <Check aria-label="Succeeded" className="size-3.5 shrink-0 text-success" /> : <X aria-label="Failed" className="size-3.5 shrink-0 text-danger" />}
+        {call.ok ? (
+          <Check aria-label="Succeeded" className="size-3.5 shrink-0 text-success" />
+        ) : summary.failed ? (
+          <X aria-label="Failed" className="size-3.5 shrink-0 text-danger" />
+        ) : (
+          <CircleHelp aria-label="Waited for confirmation" className="size-3.5 shrink-0 text-text-muted" />
+        )}
         <ChevronDown aria-hidden className={`size-3.5 shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (

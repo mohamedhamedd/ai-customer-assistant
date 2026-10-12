@@ -48,14 +48,13 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
-// What execute.ts knows about the conversation when a write tool is called,
-// to tell a repeat of something already saved from a new write.
-export interface SavedState {
+// What this conversation already saved, to tell a repeat from a new write.
+// Read only when asked: a confirmed write never needs it (execute.ts).
+export interface SavedLookup {
   // conversations.customer_facts, and whether a lead is linked.
-  facts: Record<string, unknown>;
-  leadSaved: boolean;
+  lead(): Promise<{ facts: Record<string, unknown>; linked: boolean }>;
   // preferred_at of this conversation's open consultation requests.
-  requestedAt: Date[];
+  requestedAt(): Promise<Date[]>;
 }
 
 // Confirm before write (confirm.ts): a write tool runs only after the
@@ -68,7 +67,7 @@ export interface ConfirmSpec<A> {
   // True when the call only repeats what this conversation already saved:
   // the database returns the existing row, so it runs without a new yes and
   // the model can say it's already done.
-  alreadyDone(args: A, ctx: ToolContext, saved: SavedState): boolean;
+  alreadyDone(args: A, ctx: ToolContext, saved: SavedLookup): Promise<boolean>;
 }
 
 export interface Tool extends ToolDefinition {
@@ -203,8 +202,10 @@ const saveLead = defineTool({
     ],
     // Every value given is already in customer_facts (save_lead's own
     // normalised copy): saving again changes nothing.
-    alreadyDone: (args, _ctx, saved) =>
-      saved.leadSaved && Object.entries(args).every(([key, value]) => value === undefined || saved.facts[key] === value),
+    alreadyDone: async (args, _ctx, saved) => {
+      const lead = await saved.lead();
+      return lead.linked && Object.entries(args).every(([key, value]) => value === undefined || lead.facts[key] === value);
+    },
   },
   async run(args, ctx) {
     const { error } = await (ctx.client ?? db()).rpc("save_lead", {
@@ -235,6 +236,19 @@ export const consultationSchema = z.object({
 });
 
 export type PreferredTime = { ok: true; at: Date } | { ok: false; message: string };
+
+// The confirmation check and run() both need the resolved time: worked out
+// once per call (the executor passes them the same arguments object), so
+// both judge it against the same "now".
+const resolvedTimes = new WeakMap<object, PreferredTime>();
+function preferredTime(args: z.output<typeof consultationSchema>, ctx: ToolContext): PreferredTime {
+  let when = resolvedTimes.get(args);
+  if (!when) {
+    when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+    resolvedTimes.set(args, when);
+  }
+  return when;
+}
 
 // Pure, so the date rules are unit-tested without a database.
 export function resolvePreferredTime(local: string, timeZone: string, now: Date): PreferredTime {
@@ -277,16 +291,16 @@ const createConsultationRequest = defineTool({
   },
   schema: consultationSchema,
   confirm: {
-    details: (args, ctx) => (resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now()).ok ? [{ kind: "datetime", value: args.preferred_datetime }] : null),
+    details: (args, ctx) => (preferredTime(args, ctx).ok ? [{ kind: "datetime", value: args.preferred_datetime }] : null),
     // The slot is the identity of a request (dedupe by slot): the database
     // returns the existing one.
-    alreadyDone: (args, ctx, saved) => {
-      const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
-      return when.ok && saved.requestedAt.some((at) => at.getTime() === when.at.getTime());
+    alreadyDone: async (args, ctx, saved) => {
+      const when = preferredTime(args, ctx);
+      return when.ok && (await saved.requestedAt()).some((at) => at.getTime() === when.at.getTime());
     },
   },
   async run(args, ctx) {
-    const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+    const when = preferredTime(args, ctx);
     if (!when.ok) return invalid(when.message);
 
     const { data, error } = await (ctx.client ?? db()).rpc("create_consultation_request", {

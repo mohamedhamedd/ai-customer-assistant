@@ -53,17 +53,19 @@ test("search rows: the query and how many matches, or nothing found as a warning
     detail: '"whitening price"',
     outcome: "3 matches",
     tone: "neutral",
+    failed: false,
   });
   assert.deepEqual(summarizeToolCall({ name: "search_knowledge", arguments: { query: "sedation" }, result: { ok: true, found: false }, ok: true }), {
     detail: '"sedation"',
     outcome: "nothing found",
     tone: "warning",
+    failed: false,
   });
 });
 
 test("save_lead shows the field names, not the customer's details", () => {
   const s = summarizeToolCall({ name: "save_lead", arguments: { name: "Sara", email: "sara@example.com", phone: null }, result: { ok: true, saved: true }, ok: true });
-  assert.deepEqual(s, { detail: "{name, email}", outcome: "saved", tone: "success" });
+  assert.deepEqual(s, { detail: "{name, email}", outcome: "saved", tone: "success", failed: false });
 });
 
 test("failures: validation says what was wrong, other errors show their code", () => {
@@ -73,9 +75,19 @@ test("failures: validation says what was wrong, other errors show their code", (
     result: { ok: false, error: "invalid_input", message: "preferred_datetime: that time is in the past" },
     ok: false,
   });
-  assert.deepEqual(invalid, { detail: "Whitening", outcome: "invalid input: preferred_datetime: that time is in the past", tone: "danger" });
+  assert.deepEqual(invalid, { detail: "Whitening", outcome: "invalid input: preferred_datetime: that time is in the past", tone: "danger", failed: true });
   const outage = summarizeToolCall({ name: "save_lead", arguments: {}, result: { ok: false, error: "temporarily_unavailable", message: "Tell the customer…" }, ok: false });
-  assert.deepEqual(outage, { detail: null, outcome: "temporarily unavailable", tone: "danger" });
+  assert.deepEqual(outage, { detail: null, outcome: "temporarily unavailable", tone: "danger", failed: true });
+});
+
+test("a write refused until the customer confirms is the gate working, not a failure", () => {
+  const s = summarizeToolCall({
+    name: "save_lead",
+    arguments: { name: "John Doe", phone: "5551234" },
+    result: { ok: false, error: "confirm_first", message: "Read the details back…" },
+    ok: false,
+  });
+  assert.deepEqual(s, { detail: "{name, phone}", outcome: "waited for the customer's yes", tone: "neutral", failed: false });
 });
 
 test("a consultation request shows the service and time, and a repeat says so", () => {
@@ -85,5 +97,5 @@ test("a consultation request shows the service and time, and a repeat says so", 
     result: { ok: true, service: "In-office whitening", preferred_time: "Tue, Oct 13 · 3:00 PM PDT", already_requested: true },
     ok: true,
   });
-  assert.deepEqual(s, { detail: "In-office whitening · Tue, Oct 13 · 3:00 PM PDT", outcome: "already requested", tone: "success" });
+  assert.deepEqual(s, { detail: "In-office whitening · Tue, Oct 13 · 3:00 PM PDT", outcome: "already requested", tone: "success", failed: false });
 });

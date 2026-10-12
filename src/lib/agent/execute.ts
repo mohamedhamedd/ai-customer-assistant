@@ -6,7 +6,7 @@ import type { Channel } from "@/lib/db/enums";
 import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
 import { CONFIRM_FIRST, isConfirmed, type LastExchange } from "./confirm";
-import { TOOLS, type SavedState, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
+import { TOOLS, type ConfirmSpec, type SavedLookup, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
 
 // Runs one tool call from the model. The contract (design D-09): it NEVER
 // throws. Every failure becomes { ok: false, error, message } so the model can
@@ -53,13 +53,10 @@ export interface ExecuteDeps {
   timeoutMs: number;
   // SIMULATE_DB_FAILURE: write tools fail as if the database were down.
   simulateDbFailure: () => boolean;
-  // What a write tool's confirmation is checked against.
-  confirmState: (ctx: ToolContext) => Promise<ConfirmState>;
-}
-
-export interface ConfirmState {
-  exchange: LastExchange;
-  saved: SavedState;
+  // What a write tool's confirmation is checked against: the last exchange,
+  // and (only for a call that isn't confirmed) what's already saved.
+  lastExchange: (ctx: ToolContext) => Promise<LastExchange>;
+  saved: (ctx: ToolContext) => SavedLookup;
 }
 
 export const UNAVAILABLE: ToolOutput = {
@@ -97,24 +94,31 @@ async function auditToDb(row: AuditRow): Promise<void> {
 // Enough rows to get past a few voice items still waiting for a transcript.
 const RECENT_MESSAGES = 10;
 
-// The customer's latest message, the assistant message before it, and what
-// this conversation already saved. Three small indexed reads, in parallel.
-async function confirmStateFromDb(ctx: ToolContext): Promise<ConfirmState> {
+// The customer's latest message and the assistant message before it.
+async function lastExchangeFromDb(ctx: ToolContext): Promise<LastExchange> {
+  const { data, error } = await (ctx.client ?? db())
+    .from("messages")
+    .select("role, content")
+    .eq("conversation_id", ctx.conversationId)
+    .order("id", { ascending: false })
+    .limit(RECENT_MESSAGES);
+  if (error) throw new Error(`Loading the last exchange failed: ${error.message}`);
+  return lastExchange(data ?? []);
+}
+
+// One small indexed read each, made only when a tool asks.
+function savedFromDb(ctx: ToolContext): SavedLookup {
   const client = ctx.client ?? db();
-  const [messages, conversation, requests] = await Promise.all([
-    client.from("messages").select("role, content").eq("conversation_id", ctx.conversationId).order("id", { ascending: false }).limit(RECENT_MESSAGES),
-    client.from("conversations").select("customer_facts, lead_id").eq("id", ctx.conversationId).single(),
-    client.from("consultation_requests").select("preferred_at").eq("conversation_id", ctx.conversationId).neq("status", "cancelled"),
-  ]);
-  for (const { error } of [messages, conversation, requests]) {
-    if (error) throw new Error(`Loading confirmation state failed: ${error.message}`);
-  }
   return {
-    exchange: lastExchange(messages.data ?? []),
-    saved: {
-      facts: (conversation.data?.customer_facts ?? {}) as Record<string, unknown>,
-      leadSaved: (conversation.data?.lead_id ?? null) !== null,
-      requestedAt: (requests.data ?? []).map((r) => new Date(r.preferred_at)),
+    async lead() {
+      const { data, error } = await client.from("conversations").select("customer_facts, lead_id").eq("id", ctx.conversationId).single();
+      if (error) throw new Error(`Loading saved contact failed: ${error.message}`);
+      return { facts: (data.customer_facts ?? {}) as Record<string, unknown>, linked: data.lead_id !== null };
+    },
+    async requestedAt() {
+      const { data, error } = await client.from("consultation_requests").select("preferred_at").eq("conversation_id", ctx.conversationId).neq("status", "cancelled");
+      if (error) throw new Error(`Loading saved requests failed: ${error.message}`);
+      return data.map((r) => new Date(r.preferred_at));
     },
   };
 }
@@ -137,7 +141,8 @@ const defaultDeps: ExecuteDeps = {
   trace: (fields) => console.log(JSON.stringify({ event: "tool_call", ...fields })),
   timeoutMs: TOOL_TIMEOUT_MS,
   simulateDbFailure: () => env().SIMULATE_DB_FAILURE,
-  confirmState: confirmStateFromDb,
+  lastExchange: lastExchangeFromDb,
+  saved: savedFromDb,
 };
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
@@ -174,7 +179,7 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
         // turn only starts a tool when TOOL_TIMEOUT_MS still fits (loop.ts).
         const result = await withTimeout(
           (async (): Promise<ToolRunResult> => {
-            if (tool.confirm && !(await confirmed(tool, parsed.data, ctx, d))) return { output: CONFIRM_FIRST };
+            if (tool.confirm && !(await confirmed(tool.confirm, parsed.data, ctx, d))) return { output: CONFIRM_FIRST };
             writing = tool.writes;
             return tool.run(parsed.data, ctx);
           })(),
@@ -218,12 +223,14 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
   return outcome;
 }
 
-async function confirmed(tool: Tool, args: unknown, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
-  const details = tool.confirm!.details(args, ctx);
+async function confirmed(spec: ConfirmSpec<unknown>, args: unknown, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
+  const details = spec.details(args, ctx);
   // Invalid arguments: run() rejects them without writing.
   if (details === null) return true;
-  const state = await d.confirmState(ctx);
-  return tool.confirm!.alreadyDone(args, ctx, state.saved) || isConfirmed(details, state.exchange);
+  // The usual case, a yes to a read-back, takes one read; what's already
+  // saved is looked up only when the call isn't confirmed.
+  if (isConfirmed(details, await d.lastExchange(ctx))) return true;
+  return spec.alreadyDone(args, ctx, d.saved(ctx));
 }
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words
