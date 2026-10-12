@@ -18,6 +18,8 @@ type UploadState =
   | { kind: "processing" }
   | { kind: "ready"; sections: number }
   | { kind: "duplicate" }
+  // Another document has this title: the admin can replace it.
+  | { kind: "title_taken"; existingDocumentId: string; message: string }
   | { kind: "failed"; message: string };
 
 interface UploadItem {
@@ -29,11 +31,18 @@ interface UploadItem {
 type IngestResult =
   | { status: "ready"; chunkCount: number }
   | { status: "duplicate" }
+  | { status: "title_taken"; existingDocumentId: string; error: string }
   | { status: "failed"; error: string };
 
 // fetch() can't report upload progress; XMLHttpRequest can. Once the bytes
 // are sent the server is extracting, chunking and embedding ("Processing").
-function sendFile(url: string, file: File, onProgress: (percent: number) => void, onSent: () => void): Promise<{ status: number; body: unknown }> {
+function sendFile(
+  url: string,
+  file: File,
+  replaces: string | undefined,
+  onProgress: (percent: number) => void,
+  onSent: () => void,
+): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
@@ -49,6 +58,7 @@ function sendFile(url: string, file: File, onProgress: (percent: number) => void
     xhr.onerror = () => reject(new Error("network"));
     const form = new FormData();
     form.append("file", file);
+    if (replaces) form.append("replaces", replaces);
     xhr.send(form);
   });
 }
@@ -85,34 +95,42 @@ export function KnowledgeBase({ slug }: { slug: string }) {
   // One file at a time: each one is a few seconds of embedding, and the
   // order on screen is the order they finish.
   const queue = useRef<Promise<void>>(Promise.resolve());
+  const enqueue = (item: UploadItem, replaces?: string) => {
+    queue.current = queue.current.then(async () => {
+      update(item.key, { kind: "uploading", percent: 0 });
+      try {
+        const { status, body } = await sendFile(
+          `${api}/documents`,
+          item.file,
+          replaces,
+          (percent) => update(item.key, { kind: "uploading", percent }),
+          () => update(item.key, { kind: "processing" }),
+        );
+        const result = body as IngestResult & { error?: string };
+        if (status !== 200) update(item.key, { kind: "failed", message: result?.error ?? "The upload failed." });
+        else if (result.status === "ready") update(item.key, { kind: "ready", sections: result.chunkCount });
+        else if (result.status === "duplicate") update(item.key, { kind: "duplicate" });
+        else if (result.status === "title_taken") update(item.key, { kind: "title_taken", existingDocumentId: result.existingDocumentId, message: result.error });
+        else update(item.key, { kind: "failed", message: result.error });
+      } catch {
+        update(item.key, { kind: "failed", message: "Couldn't reach the server. Check your connection and try again." });
+      }
+      await refresh();
+    });
+  };
   const add = (files: FileList | File[]) => {
     const items: UploadItem[] = [...files].map((file) => {
       const problem = checkUpload(file.name, file.size);
-      return { key: `${file.name}-${crypto.randomUUID()}`, file, state: problem ? { kind: "failed", message: problem } : { kind: "waiting" } };
+      return { key: `${file.name}-${Math.random().toString(36).slice(2)}`, file, state: problem ? { kind: "failed", message: problem } : { kind: "waiting" } };
     });
     setUploads((us) => [...items, ...us]);
-    for (const item of items) {
-      if (item.state.kind !== "waiting") continue; // refused before upload
-      queue.current = queue.current.then(async () => {
-        update(item.key, { kind: "uploading", percent: 0 });
-        try {
-          const { status, body } = await sendFile(
-            `${api}/documents`,
-            item.file,
-            (percent) => update(item.key, { kind: "uploading", percent }),
-            () => update(item.key, { kind: "processing" }),
-          );
-          const result = body as IngestResult & { error?: string };
-          if (status !== 200) update(item.key, { kind: "failed", message: result?.error ?? "The upload failed." });
-          else if (result.status === "ready") update(item.key, { kind: "ready", sections: result.chunkCount });
-          else if (result.status === "duplicate") update(item.key, { kind: "duplicate" });
-          else update(item.key, { kind: "failed", message: result.error });
-        } catch {
-          update(item.key, { kind: "failed", message: "Couldn't reach the server. Check your connection and try again." });
-        }
-        await refresh();
-      });
-    }
+    for (const item of items) if (item.state.kind === "waiting") enqueue(item); // the rest were refused before upload
+  };
+  // The new file takes the old one's place in one step (its chunks swap
+  // atomically), so the assistant never sees both or neither.
+  const replace = (item: UploadItem, existingDocumentId: string) => {
+    update(item.key, { kind: "waiting" });
+    enqueue(item, existingDocumentId);
   };
 
   const [dragging, setDragging] = useState(false);
@@ -191,7 +209,12 @@ export function KnowledgeBase({ slug }: { slug: string }) {
               </div>
               <ul className="divide-y divide-border" aria-live="polite">
                 {uploads.map((u) => (
-                  <UploadRow key={u.key} item={u} onDismiss={() => setUploads((us) => us.filter((x) => x.key !== u.key))} />
+                  <UploadRow
+                    key={u.key}
+                    item={u}
+                    onReplace={(id) => replace(u, id)}
+                    onDismiss={() => setUploads((us) => us.filter((x) => x.key !== u.key))}
+                  />
                 ))}
               </ul>
             </section>
@@ -259,9 +282,9 @@ export function KnowledgeBase({ slug }: { slug: string }) {
   );
 }
 
-function UploadRow({ item, onDismiss }: { item: UploadItem; onDismiss: () => void }) {
+function UploadRow({ item, onReplace, onDismiss }: { item: UploadItem; onReplace: (existingDocumentId: string) => void; onDismiss: () => void }) {
   const { file, state } = item;
-  const finished = state.kind === "ready" || state.kind === "duplicate" || state.kind === "failed";
+  const finished = state.kind === "ready" || state.kind === "duplicate" || state.kind === "failed" || state.kind === "title_taken";
   return (
     <li className="flex flex-col gap-2 py-3 text-[14px] sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -270,7 +293,16 @@ function UploadRow({ item, onDismiss }: { item: UploadItem; onDismiss: () => voi
         <span className="shrink-0 text-[12px] text-text-muted">{formatSize(file.size)}</span>
       </div>
       <div className="flex shrink-0 items-center gap-3">
-        {state.kind === "failed" && <span className="max-w-sm text-[12px] text-text-muted">{state.message}</span>}
+        {(state.kind === "failed" || state.kind === "title_taken") && <span className="max-w-sm text-[12px] text-text-muted">{state.message}</span>}
+        {state.kind === "title_taken" && (
+          <button
+            type="button"
+            onClick={() => onReplace(state.existingDocumentId)}
+            className="inline-flex h-8 shrink-0 items-center rounded-lg border border-border px-3 text-[12px] font-medium hover:bg-surface-muted"
+          >
+            Replace
+          </button>
+        )}
         {state.kind === "waiting" && <span className="text-[12px] text-text-muted">Waiting…</span>}
         {state.kind === "uploading" && (
           <>
@@ -354,14 +386,17 @@ function DocumentsTable({ documents, onView, onDelete }: { documents: DocumentRo
                       View<span className="sr-only"> {d.title}</span>
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => onDelete(d)}
-                    aria-label={`Delete ${d.title}`}
-                    className="inline-flex size-8 items-center justify-center rounded text-text-muted hover:bg-danger/10 hover:text-danger"
-                  >
-                    <Trash2 aria-hidden className="size-4" />
-                  </button>
+                  {/* Not while it's being processed: the upload would fail half-way. */}
+                  {d.status !== "processing" && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(d)}
+                      aria-label={`Delete ${d.title}`}
+                      className="inline-flex size-8 items-center justify-center rounded text-text-muted hover:bg-danger/10 hover:text-danger"
+                    >
+                      <Trash2 aria-hidden className="size-4" />
+                    </button>
+                  )}
                 </div>
               </td>
             </tr>

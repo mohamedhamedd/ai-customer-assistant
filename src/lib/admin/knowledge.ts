@@ -1,9 +1,8 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
 import { ChatHttpError } from "@/lib/chat/turn";
-import { embedTexts } from "@/lib/rag/embed";
-import { ingestDocument, type IngestResult } from "@/lib/rag/ingest";
-import { DEFAULT_FOUND_RULE, isFound, searchChunks } from "@/lib/rag/retrieve";
+import { ingestDocument, STALE_PROCESSING_MS, type IngestResult } from "@/lib/rag/ingest";
+import { searchCandidates } from "@/lib/rag/retrieve";
 import { checkUpload } from "@/lib/rag/file-types";
 
 // The admin's knowledge base (US-7.x). Every query is scoped to one business
@@ -29,25 +28,36 @@ export async function listDocuments(businessId: string): Promise<DocumentRow[]> 
     // A small business has tens of documents; the cap keeps the page bounded.
     .limit(500);
   if (error) throw new Error(`Loading documents failed: ${error.message}`);
-  return (data ?? []).map((d) => ({
-    id: d.id,
-    title: d.title,
-    sourceType: d.source_type as DocumentRow["sourceType"],
-    status: d.status as DocumentRow["status"],
-    error: d.error,
-    sections: d.chunk_count,
-    uploadedAt: d.created_at,
-  }));
+  return (data ?? []).map((d) => {
+    // A 'processing' row past the stale limit is an upload that died (the
+    // server restarted mid-way): it will never finish, so say so. Uploading
+    // the file again clears it (same rule in the ingestion pipeline).
+    const stale = d.status === "processing" && Date.now() - new Date(d.created_at).getTime() > STALE_PROCESSING_MS;
+    return {
+      id: d.id,
+      title: d.title,
+      sourceType: d.source_type as DocumentRow["sourceType"],
+      status: stale ? "failed" : (d.status as DocumentRow["status"]),
+      error: stale ? INTERRUPTED : d.error,
+      sections: d.chunk_count,
+      uploadedAt: d.created_at,
+    };
+  });
 }
+
+export const INTERRUPTED = "Processing was interrupted. Upload the file again.";
 
 // Synchronous: the request returns when the document is Ready or Failed
 // (a few seconds: extract, chunk, embed, one commit). Fine for a handful of
 // files at a time; the next step for large volumes is a job queue.
-export async function uploadDocument(businessId: string, file: File): Promise<IngestResult> {
+// `replaces`: the admin chose to replace the ready document with the same
+// title (after a "title_taken" result). The swap is atomic and only touches
+// a document of this business (commit_document_chunks).
+export async function uploadDocument(businessId: string, file: File, replaces?: string): Promise<IngestResult> {
   // Checked before anything is read or stored (the page checks first too).
   const problem = checkUpload(file.name, file.size);
   if (problem) throw new ChatHttpError(400, problem);
-  return ingestDocument({ businessId, filename: file.name, data: Buffer.from(await file.arrayBuffer()) });
+  return ingestDocument({ businessId, filename: file.name, data: Buffer.from(await file.arrayBuffer()), replacesDocumentId: replaces });
 }
 
 // Deleting a document cascades to its chunks, so the assistant stops using
@@ -84,16 +94,13 @@ export async function documentSections(businessId: string, documentId: string) {
   };
 }
 
-export const TEST_SEARCH_RESULTS = 5;
-
-// What the assistant would find for a question (US-7.5): the same hybrid
-// search and the same "found" rule as the search_knowledge tool, so the
-// admin sees whether it would answer or say it doesn't know.
+// What the assistant would find for a question (US-7.5): the same function,
+// result count and "found" rule as the search_knowledge tool, so the admin
+// sees whether it would answer or say it doesn't know.
 export async function testSearch(businessId: string, query: string) {
-  const [embedding] = await embedTexts([query]);
-  const chunks = await searchChunks(businessId, embedding, query, TEST_SEARCH_RESULTS);
+  const { chunks, found } = await searchCandidates(businessId, query);
   return {
-    found: isFound(chunks, DEFAULT_FOUND_RULE),
+    found,
     results: chunks.map((c) => ({
       documentId: c.documentId,
       title: c.documentTitle,

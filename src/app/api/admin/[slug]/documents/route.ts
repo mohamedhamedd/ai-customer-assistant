@@ -1,10 +1,12 @@
+import { z } from "zod";
 import { ChatHttpError } from "@/lib/chat/turn";
 import { listDocuments, uploadDocument } from "@/lib/admin/knowledge";
-import { MAX_UPLOAD_BYTES } from "@/lib/rag/file-types";
 import { withBusiness } from "@/lib/admin/respond";
+import { readFormCapped } from "@/lib/http";
+import { MAX_UPLOAD_BYTES } from "@/lib/rag/file-types";
 
-// GET  /api/admin/[slug]/documents          -> { documents }
-// POST /api/admin/[slug]/documents  (multipart, field "file") -> IngestResult
+// GET  /api/admin/[slug]/documents -> { documents }
+// POST /api/admin/[slug]/documents (multipart: "file", optional "replaces" id) -> IngestResult
 
 export function GET(_request: Request, ctx: RouteContext<"/api/admin/[slug]/documents">) {
   return withBusiness(ctx.params, "list documents", async (business) =>
@@ -17,11 +19,16 @@ const MAX_BODY_BYTES = MAX_UPLOAD_BYTES + 64 * 1024;
 
 export function POST(request: Request, ctx: RouteContext<"/api/admin/[slug]/documents">) {
   return withBusiness(ctx.params, "upload", async (business) => {
-    // Refuse an oversized body before reading it into memory.
-    if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) throw new ChatHttpError(413, "The file is larger than 10 MB.");
-    const form = await request.formData().catch(() => null);
-    const file = form?.get("file");
+    // Capped while reading: a request without content-length can't make the
+    // server buffer more than this.
+    const form = await readFormCapped(request, MAX_BODY_BYTES, "The file is larger than 10 MB.");
+    if (!form.ok) throw new ChatHttpError(form.status, form.error);
+    const file = form.value.get("file");
     if (!(file instanceof File)) throw new ChatHttpError(400, "Choose a file to upload.");
-    return Response.json(await uploadDocument(business.id, file));
+    const replaces = form.value.get("replaces");
+    if (replaces !== null && (typeof replaces !== "string" || !z.uuid().safeParse(replaces).success)) {
+      throw new ChatHttpError(400, "Invalid document to replace.");
+    }
+    return Response.json(await uploadDocument(business.id, file, replaces ?? undefined));
   });
 }
