@@ -114,6 +114,16 @@ Voice uses the OpenAI Realtime API over WebRTC: audio goes straight between the 
 
 Known limits: the browser reports transcripts, so a visitor with a live call could write fake lines into their own transcript, and could call the tools directly while their call lasts (no more than they could by speaking; never into another conversation; design doc L1). A visitor could also send `session.update` on their own call. A server-side connection to the call is the production fix for all three. "What was heard" is estimated from a typical speaking rate. Opening calls isn't rate-limited and calls have no hard time limit yet (PR-13).
 
+## Admin: knowledge base
+
+`/admin` opens the knowledge base of a business at `/admin/[slug]/knowledge-base` (the business is in the URL, ready for the switcher in PR-15). Code: `src/components/admin/`, `src/lib/admin/`, `src/app/api/admin/[slug]/`.
+
+- **Upload** by drag and drop or the file picker: `.txt`, `.md` and text-based `.pdf`, up to 10 MB each, several at once. The browser refuses a wrong type, an empty file or an oversized one before uploading (the server checks again, with the same rules from `src/lib/rag/file-types.ts`). Each file shows *Uploading… n%* → *Processing* → *Ready · n sections*, *Already in your knowledge base* (same content, detected by hash), or *Failed* with the reason (e.g. a scanned PDF).
+- **Ingestion is synchronous**, through the same pipeline as `npm run ingest`: the request returns when the document is ready or failed, a few seconds per file. Files are sent one at a time. For large volumes the next step is a job queue.
+- **Documents table** with search, a section preview (how the document was split, US-7.4) and delete with confirmation. Deleting removes the chunks, so the assistant stops using it at once; answers already given keep their citation snapshots.
+- **Test search** runs the assistant's own search and "found" rule for a question, and says whether the assistant would answer or say it doesn't know (US-7.5).
+- Every admin query is scoped to the business in the URL: another business's document id is "not found".
+
 ## Agent: prompt and tools
 
 `src/lib/agent/` holds everything the model is given, shared by text chat and voice:
@@ -155,7 +165,7 @@ docs/             User stories, UI design brief, delivery plan
 
 - The browser never talks to Supabase or OpenAI with a secret. All database access goes through server route handlers using the service-role key.
 - Every module that touches a secret imports `server-only`, so importing it from client code fails the build.
-- Admin pages have no authentication in this version (demo/local use only).
+- Admin pages and `/api/admin/*` have no authentication in this version (demo/local use only, labelled "Demo mode · no login"): anyone who can reach the server can upload or delete documents. Production: sign-in (e.g. Supabase Auth) plus a membership check on every admin route, scoped to the business in the URL.
 
 ## Planning docs
 
