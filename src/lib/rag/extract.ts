@@ -17,13 +17,7 @@ export class ExtractError extends Error {
   }
 }
 
-const EXTENSIONS: Record<string, SourceType> = { ".txt": "txt", ".md": "md", ".markdown": "md", ".pdf": "pdf" };
-
-export function sourceTypeFromFilename(filename: string): SourceType | null {
-  const dot = filename.lastIndexOf(".");
-  if (dot < 0) return null;
-  return EXTENSIONS[filename.slice(dot).toLowerCase()] ?? null;
-}
+export { sourceTypeFromFilename } from "./file-types";
 
 export function sha256(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex");

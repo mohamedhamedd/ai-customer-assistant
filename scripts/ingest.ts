@@ -50,6 +50,7 @@ async function main() {
       case "duplicate":
         console.log(`  same     ${filename.padEnd(24)} already in the knowledge base`);
         break;
+      case "title_taken":
       case "failed":
         failed++;
         console.log(`  FAILED   ${filename.padEnd(24)} ${result.error}`);

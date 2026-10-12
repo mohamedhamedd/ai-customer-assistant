@@ -81,16 +81,28 @@ export interface RetrieveOptions {
 }
 
 export async function retrieve(businessId: string, query: string, options: RetrieveOptions = {}): Promise<RetrievalResult> {
+  const { chunks, found } = await searchCandidates(businessId, query, options);
+  if (!found) return notFound();
+  return { found: true, chunks, sources: toSources(chunks) };
+}
+
+// The candidates for a query and the found decision, before the gate drops
+// them. retrieve() (the assistant's tool) and the admin's test search both
+// call this, so the test search shows exactly what the assistant would get.
+export async function searchCandidates(
+  businessId: string,
+  query: string,
+  options: RetrieveOptions = {},
+): Promise<{ chunks: RetrievedChunk[]; found: boolean }> {
   // toWellFormed(): slicing by UTF-16 unit can split an emoji into a lone
   // surrogate, which the embeddings API rejects as invalid UTF-8.
   const text = query.trim().slice(0, MAX_QUERY_CHARS).toWellFormed();
-  if (text.length < 2) return notFound();
+  if (text.length < 2) return { chunks: [], found: false };
 
   await assertIndexedModel(businessId);
   const [embedding] = await embedTexts([text]);
   const chunks = await searchChunks(businessId, embedding, text, options.matchCount ?? DEFAULT_MATCH_COUNT);
-  if (!isFound(chunks, options.rule ?? DEFAULT_FOUND_RULE)) return notFound();
-  return { found: true, chunks, sources: toSources(chunks) };
+  return { chunks, found: isFound(chunks, options.rule ?? DEFAULT_FOUND_RULE) };
 }
 
 export async function assertIndexedModel(businessId: string): Promise<void> {
