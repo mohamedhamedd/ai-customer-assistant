@@ -116,7 +116,7 @@ Known limits: the browser reports transcripts, so a visitor with a live call cou
 
 ## Admin: knowledge base
 
-`/admin` opens the knowledge base of a business at `/admin/[slug]/knowledge-base` (the business is in the URL, ready for the switcher in PR-15). Code: `src/components/admin/`, `src/lib/admin/`, `src/app/api/admin/[slug]/`.
+The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the business is in the URL, ready for the switcher in PR-15). Code: `src/components/admin/`, `src/lib/admin/`, `src/app/api/admin/[slug]/`.
 
 - **Upload** by drag and drop or the file picker: `.txt`, `.md` and text-based `.pdf`, up to 10 MB each, several at once. The browser refuses a wrong type, an empty file or an oversized one before uploading (the server checks again, with the same rules from `src/lib/rag/file-types.ts`), and the server stops reading any request body past the cap, with or without a `Content-Length`.
 - **Replace:** a new file with an existing document's title (an updated price list) is caught before anything is embedded, and the row offers *Replace*: the new version takes the old one's place in one transaction. Each file shows *Uploading… n%* → *Processing* → *Ready · n sections*, *Already in your knowledge base* (same content, detected by hash), or *Failed* with the reason (e.g. a scanned PDF).
@@ -125,6 +125,15 @@ Known limits: the browser reports transcripts, so a visitor with a live call cou
 - **Test search** runs the assistant's own search function (same result count, same query handling) and "found" rule for a question, and says whether the assistant would answer or say it doesn't know (US-7.5).
 - Every admin query is scoped to the business in the URL: another business's document id is "not found".
 - Failed documents show a plain reason (a scanned PDF, an interrupted upload); internal error details stay in the server log. An upload that died mid-way (server restart) shows as interrupted after 10 minutes instead of "Processing" forever.
+
+## Admin: overview, leads and consultations
+
+`/admin` opens on the **Overview**: conversations and leads in the last 7 days, pending consultations, documents ready, and the latest requests and leads (contact details masked, as it's the screen most likely to be shared).
+
+- **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest and consultation requests.
+- **Consultations** (`/admin/[slug]/consultations`): Pending by default, then Confirmed / Cancelled / All, soonest preferred time first, with the contact snapshot taken with the request. Status changes apply at once (optimistic) with a toast; if the save fails the row goes back and the toast says why. Reopening a cancelled request whose time slot was requested again is refused (one active request per slot).
+- **Times** are stored in UTC and always shown in the business's timezone, with the zone named on the page ("America/Los_Angeles (PDT)"), so staff and customer mean the same 3:00 PM.
+- Lists are capped at 200 rows; past that, the next step is cursor pagination. Every query is scoped to the business in the URL.
 
 ## Agent: prompt and tools
 

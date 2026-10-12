@@ -1,34 +1,15 @@
 "use client";
 
 import { FileText, Loader2, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { DocumentRow } from "@/lib/admin/knowledge";
+import { useDialog } from "./ui";
 
 interface Section {
   index: number;
   heading: string;
   content: string;
   tokens: number;
-}
-
-// Closes on Escape and focuses the panel on open (shared by both panels).
-function useDialog(onClose: () => void) {
-  const panel = useRef<HTMLDivElement>(null);
-  const close = useRef(onClose);
-  useEffect(() => {
-    close.current = onClose;
-  });
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    panel.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close.current();
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      opener?.focus();
-    };
-  }, []);
-  return panel;
 }
 
 // How a document was split into sections (US-7.4), in a right-hand drawer.
@@ -105,8 +86,9 @@ export function DocumentDrawer({ api, document: doc, onClose }: { api: string; d
 
 // "Delete 'pricing.md'?" (design: Admin — Delete document dialog).
 export function DeleteDialog({ api, document: doc, onClose, onDeleted }: { api: string; document: DocumentRow; onClose: () => void; onDeleted: () => void }) {
-  const panel = useDialog(onClose);
   const [busy, setBusy] = useState(false);
+  // After a delete the row's button is gone: focus goes to the table.
+  const panel = useDialog(onClose, { busy, fallback: () => document.getElementById("documents-heading") });
   const [error, setError] = useState("");
 
   const remove = async () => {

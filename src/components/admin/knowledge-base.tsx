@@ -6,7 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DocumentRow } from "@/lib/admin/knowledge";
 import { ACCEPTED_EXTENSIONS, checkUpload } from "@/lib/rag/file-types";
 import { DeleteDialog, DocumentDrawer } from "./document-panels";
+import { AdminHeader } from "./header";
 import { TestSearch } from "./test-search";
+import { Badge } from "./ui";
 
 // The knowledge base (US-7.1 – 7.5): upload, see, preview and delete the
 // documents the assistant answers from. Built from the Stitch admin screens.
@@ -143,22 +145,16 @@ export function KnowledgeBase({ slug }: { slug: string }) {
 
   return (
     <>
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-4 md:px-8">
-        <h1 className="text-[18px] font-semibold">Knowledge base</h1>
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={() => picker.current?.click()}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-3.5 text-[14px] font-medium text-accent-contrast hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            <Upload aria-hidden className="size-4" />
-            <span className="hidden sm:inline">Upload documents</span>
-          </button>
-          <a href={`/b/${slug}`} target="_blank" rel="noopener" className="text-[14px] text-text-muted hover:text-text">
-            Open chat ↗
-          </a>
-        </div>
-      </header>
+      <AdminHeader title="Knowledge base" slug={slug}>
+        <button
+          type="button"
+          onClick={() => picker.current?.click()}
+          className="inline-flex h-10 items-center gap-2 rounded-lg bg-accent px-3.5 text-[14px] font-medium text-accent-contrast hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <Upload aria-hidden className="size-4" />
+          <span className="hidden sm:inline">Upload documents</span>
+        </button>
+      </AdminHeader>
 
       <main className="min-h-0 flex-1 overflow-y-auto p-4 md:p-8">
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -228,7 +224,9 @@ export function KnowledgeBase({ slug }: { slug: string }) {
             <section aria-label="Documents" className="overflow-hidden rounded-2xl border border-border bg-surface">
               <div className="flex flex-col justify-between gap-3 border-b border-border p-5 sm:flex-row sm:items-center">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-[14px] font-semibold">Documents</h2>
+                  <h2 id="documents-heading" tabIndex={-1} className="text-[14px] font-semibold outline-none">
+                    Documents
+                  </h2>
                   {documents && <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[12px] font-medium text-text-muted">{documents.length}</span>}
                 </div>
                 <label className="relative w-full sm:w-64">
@@ -424,16 +422,6 @@ function EmptyState() {
       </ul>
     </section>
   );
-}
-
-export function Badge({ tone, children }: { tone: "success" | "danger" | "info" | "neutral"; children: React.ReactNode }) {
-  const tones = {
-    success: "bg-success/10 text-success",
-    danger: "bg-danger/10 text-danger",
-    info: "bg-info/10 text-info",
-    neutral: "bg-surface-muted text-text-muted",
-  };
-  return <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium ${tones[tone]}`}>{children}</span>;
 }
 
 function formatSize(bytes: number): string {

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-// The admin's landing page is the knowledge base until Overview lands (PR-11).
+// The admin opens on the overview.
 export default async function BusinessAdminHome({ params }: PageProps<"/admin/[slug]">) {
-  redirect(`/admin/${(await params).slug}/knowledge-base`);
+  redirect(`/admin/${(await params).slug}/overview`);
 }

@@ -8,5 +8,5 @@ export const instant = false;
 
 export default async function AdminHome() {
   await connection();
-  redirect(`/admin/${env().DEMO_BUSINESS_SLUG}/knowledge-base`);
+  redirect(`/admin/${env().DEMO_BUSINESS_SLUG}/overview`);
 }
