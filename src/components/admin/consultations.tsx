@@ -61,13 +61,17 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
     setRowSaving(row.id, true);
     // Move the row (and one count) from one status to another; reverting is
     // the same move backwards.
+    // Only if the row is in the data on screen: after a tab switch the new
+    // load already has the true state and counts.
     const move = (from: ConsultationStatus, to: ConsultationStatus) =>
       setData((d) =>
-        d && {
-          ...d,
-          requests: d.requests.map((r) => (r.id === row.id ? { ...r, status: to } : r)),
-          counts: { ...d.counts, [from]: d.counts[from] - 1, [to]: d.counts[to] + 1 },
-        },
+        d && d.requests.some((r) => r.id === row.id)
+          ? {
+              ...d,
+              requests: d.requests.map((r) => (r.id === row.id ? { ...r, status: to } : r)),
+              counts: { ...d.counts, [from]: d.counts[from] - 1, [to]: d.counts[to] + 1 },
+            }
+          : d,
       );
     move(row.status, status);
     try {
@@ -75,6 +79,8 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status }),
+        // A stalled request must not lock the row forever.
+        signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error);
       toast.show(`Marked as ${STATUS_LABEL[status].toLowerCase()}`);

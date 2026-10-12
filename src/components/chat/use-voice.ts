@@ -55,6 +55,8 @@ interface Connection {
   // Proves to our server that requests belong to this live call.
   callToken: string | null;
   disconnectTimer?: ReturnType<typeof setTimeout>;
+  // Ends the call at the server's time limit (cost control).
+  limitTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface Deps {
@@ -82,10 +84,16 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     return run;
   }, []);
 
+  // What to do when the server says the call is over (set below, once
+  // finish() exists; a ref so post() stays stable).
+  const onCallOver = useRef<(message?: string) => void>(() => {});
+
   const post = useCallback(async (path: string, body: Record<string, unknown>) => {
     const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) {
       const err = (await res.json().catch(() => ({}))) as { error?: string };
+      // 401 on a call request: the call is over at the server (time limit).
+      if (res.status === 401 && path !== "/api/voice/session") onCallOver.current(err.error);
       throw new Error(err.error ?? `${path} failed (${res.status})`);
     }
     return res;
@@ -251,6 +259,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     conn.current = null;
     if (!c) return;
     clearTimeout(c.disconnectTimer);
+    clearTimeout(c.limitTimer);
     c.channel.close();
     c.pc.close();
     c.mic.getTracks().forEach((t) => t.stop());
@@ -294,7 +303,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     const drop = () => {
       if (conn.current?.pc !== pc) return;
       teardown();
-      setError("Voice disconnected.");
+      setError("The connection dropped.");
       setState("failed");
     };
     pc.onconnectionstatechange = () => {
@@ -315,9 +324,10 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       const res = await post("/api/voice/session", { businessSlug, sessionId: getSessionId(), sdp: offer.sdp });
-      const { sdp, callToken } = (await res.json()) as { sdp: string; callToken: string };
+      const { sdp, callToken, maxSeconds } = (await res.json()) as { sdp: string; callToken: string; maxSeconds: number };
       if (conn.current?.pc !== pc) return; // ended while connecting
       conn.current.callToken = callToken;
+      conn.current.limitTimer = setTimeout(() => onCallOver.current(), maxSeconds * 1000);
       await pc.setRemoteDescription({ type: "answer", sdp });
     } catch (err) {
       if (conn.current?.pc !== pc) return;
@@ -337,12 +347,23 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     setState("explain");
   }, [connect]);
 
-  const end = useCallback(() => {
-    const wasLive = conn.current !== null;
-    teardown();
-    setState("off");
-    if (wasLive) updateTurns((ts) => endVoice(ts, `end-${Date.now()}`));
-  }, [teardown, updateTurns]);
+  const finish = useCallback(
+    (notice?: string) => {
+      const wasLive = conn.current !== null;
+      teardown();
+      setState("off");
+      if (wasLive) updateTurns((ts) => endVoice(ts, `end-${Date.now()}`, notice));
+    },
+    [teardown, updateTurns],
+  );
+  // The customer ends the call (End, Type instead, Continue by text).
+  const end = useCallback(() => finish(), [finish]);
+  useEffect(() => {
+    onCallOver.current = (message) => {
+      finish("Voice session ended: time limit reached");
+      if (message) announce(message);
+    };
+  }, [finish, announce]);
 
   const toggleMute = useCallback(() => {
     setMuted((m) => {

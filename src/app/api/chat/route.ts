@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { readJsonCapped } from "@/lib/http";
+import { clientIp, enforce, LIMITS } from "@/lib/rate-limit";
 import { BUSINESS_SLUG, MAX_MESSAGE_CHARS, MAX_SLUG_CHARS } from "@/lib/chat/limits";
 import { ChatHttpError, loadHistory, prepareChatTurn, replayEvents, runChatTurn, type ChatEvent } from "@/lib/chat/turn";
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
 
   let prepared: Awaited<ReturnType<typeof prepareChatTurn>>;
   try {
+    await enforce([LIMITS.chatSession(input.sessionId), LIMITS.chatIp(clientIp(request))]);
     prepared = await prepareChatTurn(input);
   } catch (err) {
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });

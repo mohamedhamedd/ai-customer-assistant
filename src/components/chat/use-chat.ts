@@ -138,10 +138,10 @@ export function useChat(businessSlug: string) {
       }
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        // 409: another message (maybe from another tab) is being answered,
-        // so trying again shortly is right. 4xx: the same request would fail
-        // the same way.
-        return fail({ message: body.error ?? "Something went wrong. Please try again.", retryable: res.status === 409 || res.status >= 500 });
+        // 409: another message (maybe from another tab) is being answered;
+        // 429: rate limited. Trying again shortly is right for both. Other
+        // 4xx: the same request would fail the same way.
+        return fail({ message: body.error ?? "Something went wrong. Please try again.", retryable: res.status === 409 || res.status === 429 || res.status >= 500 });
       }
 
       let finished = false;

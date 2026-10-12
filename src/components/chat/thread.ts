@@ -242,13 +242,13 @@ export function heardPart(text: string, audioEndMs: number): string {
 }
 
 // The call ended: nothing is streaming any more, and a line marks the end.
-export function endVoice(turns: Turn[], noticeKey: string): Turn[] {
+export function endVoice(turns: Turn[], noticeKey: string, notice = "Voice session ended"): Turn[] {
   const settled = turns.map((t) => {
     if (t.channel !== "voice") return t;
     const reply = t.reply && t.reply.phase === "streaming" ? { ...t.reply, phase: "done" as const } : t.reply;
     return { ...t, reply, transcribing: false };
   });
-  return [...settled, { key: noticeKey, clientMessageId: null, userText: "", sendState: "sent", reply: null, notice: "Voice session ended" }];
+  return [...settled, { key: noticeKey, clientMessageId: null, userText: "", sendState: "sent", reply: null, notice }];
 }
 
 export const isAnsweredElsewhere = (turns: Turn[]) => {

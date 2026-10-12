@@ -88,3 +88,9 @@ test("actions are confirmed in an earlier reply than the one that performs them"
   assert.match(p, /Never call save_lead in the same reply in which the details were first given or changed/);
   assert.match(p, /Never call create_consultation_request in the same reply/);
 });
+
+test("the assistant stays on the business and keeps conditions in short answers", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /Do not answer general-knowledge questions, write code/);
+  assert.match(p, /keep any condition that changes the answer/);
+});
