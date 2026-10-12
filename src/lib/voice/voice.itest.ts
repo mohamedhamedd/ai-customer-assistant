@@ -182,7 +182,8 @@ test("voice: a save needs the spoken read-back and the customer's transcribed ye
   // The read-back, spoken (spelled out, digits as words), then a yes whose
   // transcript isn't in yet: still refused.
   const [local, domain] = email.split("@");
-  const spelled = `${local.split("").join("-")} at ${domain.replace(".", " dot ")}`;
+  // Letter by letter, the address's own hyphens said as "dash".
+  const spelled = `${local.split("-").map((part) => part.split("").join("-")).join(" dash ")} at ${domain.replace(".", " dot ")}`;
   await recordVoiceItem({ callToken, itemId: item(), role: "assistant", transcript: `That's Sam Spoken, ${spelled}, five oh three, five five five, oh one four two. Is that right?` });
   const yes = item();
   await recordVoiceItem({ callToken, itemId: yes, role: "user" });

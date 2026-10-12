@@ -355,6 +355,29 @@ test("the confirmation check failing or hanging is an outage, never a success, n
   assert.deepEqual(rpcs, []);
 });
 
+test("the confirmation check and the write share one timeout: a write tool never takes longer than timeoutMs", async () => {
+  const slow = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const tool: Tool = {
+    name: "probe",
+    description: "",
+    parameters: {},
+    writes: true,
+    schema: z.object({ x: z.number() }),
+    confirm: { details: () => [], alreadyDone: () => false },
+    run: async () => (await slow(40), { output: { ok: true } }),
+  };
+  const started = Date.now();
+  const out = await executeTool("probe", '{"x": 1}', ctx, {
+    ...quiet,
+    tools: { probe: tool },
+    audit: async () => {},
+    timeoutMs: 50,
+    confirmState: async () => (await slow(40), { exchange: { customer: "yes", readBack: "Is that right?" }, saved: NOTHING_SAVED }),
+  });
+  assert.ok(Date.now() - started < 75, `took ${Date.now() - started} ms`);
+  assert.deepEqual(out.output, OUTCOME_UNKNOWN, "it timed out while writing");
+});
+
 test("tools without a confirmation spec (search, read tools) are never gated", async () => {
   let loaded = false;
   const out = await executeTool("probe", '{"x": 1}', ctx, {

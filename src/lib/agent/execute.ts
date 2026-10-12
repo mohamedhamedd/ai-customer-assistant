@@ -6,7 +6,7 @@ import type { Channel } from "@/lib/db/enums";
 import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
 import { CONFIRM_FIRST, isConfirmed, type LastExchange } from "./confirm";
-import { TOOLS, type SavedState, type Tool, type ToolContext, type ToolOutput } from "./tools";
+import { TOOLS, type SavedState, type Tool, type ToolContext, type ToolOutput, type ToolRunResult } from "./tools";
 
 // Runs one tool call from the model. The contract (design D-09): it NEVER
 // throws. Every failure becomes { ok: false, error, message } so the model can
@@ -170,14 +170,18 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
         // Thrown where a real database error would be, so a simulated
         // outage takes exactly the real path below.
         if (tool.writes && d.simulateDbFailure()) throw new Error("SIMULATE_DB_FAILURE: database unavailable");
-        if (tool.confirm && !(await withTimeout(confirmed(tool, parsed.data, ctx, d), d.timeoutMs))) {
-          output = CONFIRM_FIRST;
-        } else {
-          writing = tool.writes;
-          const result = await withTimeout(tool.run(parsed.data, ctx), d.timeoutMs);
-          output = result.output;
-          sources = result.sources ?? [];
-        }
+        // One timeout for the confirmation check and the tool together: the
+        // turn only starts a tool when TOOL_TIMEOUT_MS still fits (loop.ts).
+        const result = await withTimeout(
+          (async (): Promise<ToolRunResult> => {
+            if (tool.confirm && !(await confirmed(tool, parsed.data, ctx, d))) return { output: CONFIRM_FIRST };
+            writing = tool.writes;
+            return tool.run(parsed.data, ctx);
+          })(),
+          d.timeoutMs,
+        );
+        output = result.output;
+        sources = result.sources ?? [];
       } catch (err) {
         d.log(`${name} failed (conversation ${ctx.conversationId})`, err);
         output = err instanceof ToolTimeout && writing ? OUTCOME_UNKNOWN : UNAVAILABLE;
