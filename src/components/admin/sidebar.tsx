@@ -1,8 +1,10 @@
 "use client";
 
-import { FileText } from "lucide-react";
+import { CalendarDays, FileText, LayoutDashboard, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { CONSULTATIONS_CHANGED } from "./ui";
 
 const initials = (name: string) =>
   name
@@ -12,13 +14,40 @@ const initials = (name: string) =>
     .map((w) => w[0]!.toUpperCase())
     .join("");
 
-// Only pages that exist are listed; Overview, Leads and Consultations come
-// with PR-11, Conversations with PR-12, Settings and the switcher with PR-15.
-const NAV = [{ href: "knowledge-base", label: "Knowledge base", icon: FileText }];
+// Only pages that exist are listed: Conversations comes with PR-12,
+// Settings and the business switcher with PR-15.
+const NAV = [
+  { href: "overview", label: "Overview", icon: LayoutDashboard },
+  { href: "knowledge-base", label: "Knowledge base", icon: FileText },
+  { href: "leads", label: "Leads", icon: Users },
+  { href: "consultations", label: "Consultations", icon: CalendarDays },
+];
+
+// Pending requests, for the badge: refreshed on navigation and whenever the
+// consultations page changes a status.
+function usePendingCount(slug: string, pathname: string) {
+  const [pending, setPending] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      fetch(`/api/admin/${encodeURIComponent(slug)}/consultations?counts=1`, { cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : Promise.reject()))
+        .then((body: { counts: { pending: number } }) => live && setPending(body.counts.pending))
+        .catch(() => {});
+    void load();
+    window.addEventListener(CONSULTATIONS_CHANGED, load);
+    return () => {
+      live = false;
+      window.removeEventListener(CONSULTATIONS_CHANGED, load);
+    };
+  }, [slug, pathname]);
+  return pending;
+}
 
 // 240 px with labels from 1280 px, an icon rail below (design: Layout).
 export function AdminSidebar({ business }: { business: { slug: string; name: string } }) {
   const pathname = usePathname();
+  const pending = usePendingCount(business.slug, pathname);
   return (
     <aside className="flex w-16 shrink-0 flex-col justify-between border-r border-border bg-surface p-3 xl:w-[240px]">
       <div className="flex flex-col gap-4">
@@ -42,8 +71,17 @@ export function AdminSidebar({ business }: { business: { slug: string; name: str
                   active ? "bg-surface-muted font-semibold text-text" : "text-text-muted hover:bg-surface-muted hover:text-text"
                 }`}
               >
-                <Icon aria-hidden className={`size-5 shrink-0 ${active ? "text-accent" : ""}`} />
-                <span className="hidden xl:inline">{label}</span>
+                <span className="relative shrink-0">
+                  <Icon aria-hidden className={`size-5 ${active ? "text-accent" : ""}`} />
+                  {href === "consultations" && !!pending && <span aria-hidden className="absolute -right-1 -top-1 size-2 rounded-full bg-warning xl:hidden" />}
+                </span>
+                <span className="hidden flex-1 xl:inline">{label}</span>
+                {href === "consultations" && !!pending && (
+                  <span className="hidden rounded-full bg-surface-muted px-2 py-0.5 text-[12px] font-medium text-text-muted xl:inline">
+                    {pending}
+                    <span className="sr-only"> pending</span>
+                  </span>
+                )}
               </Link>
             );
           })}
