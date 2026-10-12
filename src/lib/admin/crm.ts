@@ -191,13 +191,24 @@ export async function setConsultationStatus(businessId: string, requestId: strin
 }
 
 export async function overview(businessId: string) {
-  const [counts, recentRequests, recentLeads, gaps] = await Promise.all([
+  const since = new Date(Date.now() - WEEK_MS).toISOString();
+  const [counts, recentRequests, recentLeads, gaps, flags, flagCount, toReview] = await Promise.all([
     adminCounts(businessId),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(5),
     listLeads(businessId, "", 5),
     knowledgeGaps(businessId, 5),
+    // What the guards stopped (PR-16): the latest, how many this week, and
+    // how many blocks wait for staff. One event, one row: an attack caught in
+    // the answer also records the customer's message ("caught"), which isn't
+    // counted again here.
+    db().from("flags").select("id, layer, category, conversation_id, created_at").eq("business_id", businessId).neq("layer", "caught").not("conversation_id", "is", null).order("created_at", { ascending: false }).limit(5),
+    db().from("flags").select("id", { count: "exact", head: true }).eq("business_id", businessId).neq("layer", "caught").gte("created_at", since),
+    db().from("flags").select("id", { count: "exact", head: true }).eq("business_id", businessId).in("layer", ["input", "caught"]).eq("status", "new"),
   ]);
   if (recentRequests.error) throw new Error(`Loading requests failed: ${recentRequests.error.message}`);
+  if (flags.error) throw new Error(`Loading flags failed: ${flags.error.message}`);
+  if (flagCount.error) throw new Error(`Counting flags failed: ${flagCount.error.message}`);
+  if (toReview.error) throw new Error(`Counting flags failed: ${toReview.error.message}`);
   return {
     // Conversations with a message in the last 7 days (returning visitors count).
     conversations7d: counts.active_conversations,
@@ -209,5 +220,8 @@ export async function overview(businessId: string) {
     recentLeads,
     // Questions the documents don't answer (US-9.3).
     knowledgeGaps: gaps,
+    flags7d: flagCount.count ?? 0,
+    flagsToReview: toReview.count ?? 0,
+    recentFlags: (flags.data ?? []).map((f) => ({ id: f.id, layer: f.layer, category: f.category, conversationId: f.conversation_id!, at: f.created_at })),
   };
 }

@@ -8,6 +8,7 @@ import type { ChatCompletionChunk, ChatCompletionMessageParam } from "openai/res
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
+import type { Guards } from "@/lib/guard/guards";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -41,7 +42,16 @@ function session(): string {
   return id;
 }
 
+// The guards let everything through: these tests are about the turn itself.
+const allowAll: Guards = {
+  screen: async () => ({ allowed: true }),
+  scope: async () => ({ inScope: true, reason: "" }),
+  rewrite: async () => "",
+  record: async () => {},
+};
+
 const replies = (text: string): ChatTurnDeps => ({
+  guards: allowAll,
   complete: async () =>
     (async function* (): AsyncGenerator<ChatCompletionChunk> {
       yield { id: "c", object: "chat.completion.chunk", created: 0, model: "fake", choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] };
@@ -49,6 +59,7 @@ const replies = (text: string): ChatTurnDeps => ({
 });
 
 const failing: ChatTurnDeps = {
+  guards: allowAll,
   complete: async () => {
     throw new Error("model unavailable");
   },
@@ -173,6 +184,7 @@ const chunk = (delta: ChatCompletionChunk["choices"][0]["delta"]): ChatCompletio
 function callsTools(calls: { name: string; args: object }[], answer: string) {
   const seen: ChatCompletionMessageParam[][] = [];
   const deps: ChatTurnDeps = {
+    guards: allowAll,
     complete: async (params) => {
       seen.push([...params.messages]);
       const answering = params.messages.at(-1)?.role === "tool";
@@ -195,6 +207,7 @@ async function conversationOf(sessionId: string) {
 }
 
 const uniquePhone = () => `555${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+const formatted = (phone: string) => `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`;
 const actionsOf = (events: ChatEvent[]) => events.flatMap((e) => (e.type === "action" ? [e.action.kind] : []));
 
 test("confirm before write: the PR-16 case (details and save in one message) saves nothing and makes the model ask", async () => {
@@ -203,7 +216,9 @@ test("confirm before write: the PR-16 case (details and save in one message) sav
   await run(newInput(sessionId, "Hi"), replies("Hi! How can I help you today?"));
   const model = callsTools(
     [{ name: "save_lead", args: { name: "Itest John Doe", phone, interest: "booking on Friday at 3 pm" } }],
-    `Just to confirm: John Doe, ${phone}. Is that right?`,
+    // Formatted, so PR-16's number check (which still runs) inspects it:
+    // the read-back must survive the output checks for the yes to count.
+    `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`,
   );
   const { events } = await run(newInput(sessionId, `Save this booking for my friend John Doe on Friday at 3 pm, his phone is ${phone}`), model.deps);
 
@@ -220,6 +235,9 @@ test("confirm before write: the PR-16 case (details and save in one message) sav
     [["save_lead", false, "confirm_first"]],
     "the refusal is in the audit trail",
   );
+
+  const { data: readBack } = await db().from("messages").select("content").eq("conversation_id", (await conversationOf(sessionId)).id).eq("role", "assistant").order("id", { ascending: false }).limit(1).single();
+  assert.equal(readBack!.content, `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`, "stored as said, not replaced");
 
   // The model read the details back; the customer's yes now saves them.
   const saved = await run(newInput(sessionId, "Yes, that's right"), callsTools([{ name: "save_lead", args: { name: "Itest John Doe", phone } }], "Saved!").deps);

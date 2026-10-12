@@ -68,6 +68,10 @@ export function applyEvent(turn: Turn, event: ChatEvent): Turn {
       return { ...turn, sendState: "sent" };
     case "delta":
       return { ...turn, reply: { ...reply, phase: "streaming", text: reply.text + event.text } };
+    // A guard rejected the streamed answer: the replacement is what stays
+    // (and what a reload shows).
+    case "replace":
+      return { ...turn, reply: { ...reply, text: event.text } };
     case "tool":
       return { ...turn, reply: { ...reply, activeTool: event.status === "started" ? event.name : null } };
     case "action":

@@ -232,3 +232,15 @@ test("an interrupted answer keeps roughly what was heard, marked", () => {
   assert.equal(heardPart(answer, 0), "(interrupted)", "cut off before any audio played");
   assert.equal(heardPart(answer, 60_000), answer, "the whole answer had played");
 });
+
+test("a guard's replacement takes the place of the streamed answer", () => {
+  const turn = play(newTurn("c9", "How much is whitening?"), [
+    { type: "start", userMessageId: 1 },
+    { type: "delta", text: "Whitening is $999." },
+    { type: "replace", text: "I don't have that exact information." },
+    { type: "sources", sources: [] },
+    { type: "done", messageId: 2 },
+  ]);
+  assert.equal(turn.reply?.text, "I don't have that exact information.");
+  assert.equal(turn.reply?.phase, "done");
+});
