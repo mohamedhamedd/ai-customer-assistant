@@ -350,7 +350,8 @@ function TurnViewInner({
             )}
 
             {reply.text && (
-              <div className="rounded-2xl rounded-bl-[4px] bg-surface-muted px-5 py-3.5 text-[16px] leading-[1.5] [overflow-wrap:anywhere]">
+              // break-words, not overflow-wrap:anywhere: "anywhere" lets a table cell shrink to one letter wide ("$3 / 49"); this way the table keeps its width and scrolls.
+              <div className="max-w-full rounded-2xl rounded-bl-[4px] bg-surface-muted px-5 py-3.5 text-[16px] leading-[1.5] break-words">
                 {spoken && <Volume2 aria-label="Spoken answer" className="float-left mr-2 mt-1 size-4 text-text-muted" />}
                 <Markdown text={reply.text} />
                 {reply.phase === "streaming" && <span aria-hidden className="caret ml-0.5 inline-block h-4 w-2 translate-y-0.5 bg-accent" />}
