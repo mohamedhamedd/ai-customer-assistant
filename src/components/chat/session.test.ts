@@ -28,6 +28,18 @@ test("a session stored under the old slug key is moved once, not lost", () => {
   assert.equal(data.get(`chat-session:id:${acme.id}`), "visitor-1");
 });
 
+test("if the new key can't be written, the old session is used and kept for next time", () => {
+  const { data, store } = fakeStore({ "chat-session:acme-fitness": "visitor-1" });
+  const full = () => ({
+    ...store(),
+    setItem: () => {
+      throw new Error("QuotaExceededError");
+    },
+  });
+  assert.equal(loadSessionId(acme, full), "visitor-1", "this page view keeps the conversation");
+  assert.equal(data.get("chat-session:acme-fitness"), "visitor-1", "the old key isn't removed");
+});
+
 test("New conversation replaces it; blocked storage still gives an id", () => {
   const { store } = fakeStore();
   loadSessionId(acme, store);

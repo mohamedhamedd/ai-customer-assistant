@@ -33,8 +33,13 @@ export function loadSessionId(business: SessionScope, store: () => Store = brows
     if (stored) return stored;
     const legacy = s.getItem(legacySessionKey(business.slug));
     if (legacy) {
-      s.removeItem(legacySessionKey(business.slug));
-      return storeSessionId(business, legacy, store);
+      // The new key first, the old one removed only once that worked: if the
+      // write fails (storage full), the old key is still there next time.
+      try {
+        s.setItem(sessionKey(business.id), legacy);
+        s.removeItem(legacySessionKey(business.slug));
+      } catch {}
+      return legacy;
     }
   } catch {}
   return storeSessionId(business, uuid(), store);
