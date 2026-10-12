@@ -5,6 +5,7 @@ import { db } from "@/lib/db/supabase";
 import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
+import type { Detail } from "./confirm";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
@@ -47,15 +48,41 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
+// What execute.ts knows about the conversation when a write tool is called,
+// to tell a repeat of something already saved from a new write.
+export interface SavedState {
+  // conversations.customer_facts, and whether a lead is linked.
+  facts: Record<string, unknown>;
+  leadSaved: boolean;
+  // preferred_at of this conversation's open consultation requests.
+  requestedAt: Date[];
+}
+
+// Confirm before write (confirm.ts): a write tool runs only after the
+// customer said yes to a read-back of these details.
+export interface ConfirmSpec<A> {
+  // The details the read-back must contain, or null when run() will reject
+  // the arguments anyway (it writes nothing, and the model hears the real
+  // problem first instead of being asked to confirm something invalid).
+  details(args: A, ctx: ToolContext): Detail[] | null;
+  // True when the call only repeats what this conversation already saved:
+  // the database returns the existing row, so it runs without a new yes and
+  // the model can say it's already done.
+  alreadyDone(args: A, ctx: ToolContext, saved: SavedState): boolean;
+}
+
 export interface Tool extends ToolDefinition {
   // Writes data. A write that times out may still commit, so its outcome is
   // reported as unknown rather than failed (execute.ts).
   writes: boolean;
   schema: z.ZodType;
+  confirm?: ConfirmSpec<unknown>;
   run(args: unknown, ctx: ToolContext): Promise<ToolRunResult>;
 }
 
-function defineTool<S extends z.ZodType>(spec: ToolDefinition & { writes: boolean; schema: S; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> }): Tool {
+function defineTool<S extends z.ZodType>(
+  spec: ToolDefinition & { writes: boolean; schema: S; confirm?: ConfirmSpec<z.output<S>>; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> },
+): Tool {
   return spec as unknown as Tool;
 }
 
@@ -169,6 +196,16 @@ const saveLead = defineTool({
     additionalProperties: false,
   },
   schema: saveLeadSchema,
+  confirm: {
+    details: (args) => [
+      ...(args.email ? [{ kind: "email" as const, value: args.email }] : []),
+      ...(args.phone ? [{ kind: "phone" as const, value: args.phone }] : []),
+    ],
+    // Every value given is already in customer_facts (save_lead's own
+    // normalised copy): saving again changes nothing.
+    alreadyDone: (args, _ctx, saved) =>
+      saved.leadSaved && Object.entries(args).every(([key, value]) => value === undefined || saved.facts[key] === value),
+  },
   async run(args, ctx) {
     const { error } = await (ctx.client ?? db()).rpc("save_lead", {
       p_business_id: ctx.businessId,
@@ -239,6 +276,15 @@ const createConsultationRequest = defineTool({
     additionalProperties: false,
   },
   schema: consultationSchema,
+  confirm: {
+    details: (args, ctx) => (resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now()).ok ? [{ kind: "datetime", value: args.preferred_datetime }] : null),
+    // The slot is the identity of a request (dedupe by slot): the database
+    // returns the existing one.
+    alreadyDone: (args, ctx, saved) => {
+      const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+      return when.ok && saved.requestedAt.some((at) => at.getTime() === when.at.getTime());
+    },
+  },
   async run(args, ctx) {
     const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);

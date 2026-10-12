@@ -4,9 +4,10 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions";
+import type { ChatCompletionChunk, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
+import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -25,6 +26,9 @@ import {
 const sessions: string[] = [];
 after(async () => {
   for (const sessionId of sessions) await db().from("conversations").delete().eq("session_id", sessionId);
+  // Their consultation requests go with them.
+  await db().from("leads").delete().like("email", "chat-itest-%@example.com");
+  await db().from("leads").delete().like("name", "Itest %");
 });
 
 function newInput(sessionId: string, message = "Hello"): ChatTurnInput {
@@ -150,4 +154,121 @@ test("the same browser session gets a separate conversation per business", async
     await db().from("conversations").delete().eq("business_id", business!.id);
     await db().from("businesses").delete().eq("slug", slug);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Confirm before write (src/lib/agent/confirm.ts), through a whole turn
+// ---------------------------------------------------------------------------
+
+const chunk = (delta: ChatCompletionChunk["choices"][0]["delta"]): ChatCompletionChunk => ({
+  id: "c",
+  object: "chat.completion.chunk",
+  created: 0,
+  model: "fake",
+  choices: [{ index: 0, delta, finish_reason: null }],
+});
+
+// A fake model that calls the given tools at once, then answers. It keeps
+// what it was sent, so a test can see the tool results the model got.
+function callsTools(calls: { name: string; args: object }[], answer: string) {
+  const seen: ChatCompletionMessageParam[][] = [];
+  const deps: ChatTurnDeps = {
+    complete: async (params) => {
+      seen.push([...params.messages]);
+      const answering = params.messages.at(-1)?.role === "tool";
+      return (async function* (): AsyncGenerator<ChatCompletionChunk> {
+        if (answering) yield chunk({ content: answer });
+        else
+          for (const [index, c] of calls.entries()) {
+            yield chunk({ tool_calls: [{ index, id: `call_${index}`, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } }] });
+          }
+      })();
+    },
+  };
+  const toolResults = () => seen.at(-1)!.filter((m) => m.role === "tool").map((m) => JSON.parse(m.content as string));
+  return { deps, toolResults };
+}
+
+async function conversationOf(sessionId: string) {
+  const { data } = await db().from("conversations").select("id, lead_id").eq("session_id", sessionId).single();
+  return data!;
+}
+
+const uniquePhone = () => `555${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`;
+const actionsOf = (events: ChatEvent[]) => events.flatMap((e) => (e.type === "action" ? [e.action.kind] : []));
+
+test("confirm before write: the PR-16 case (details and save in one message) saves nothing and makes the model ask", async () => {
+  const sessionId = session();
+  const phone = uniquePhone();
+  await run(newInput(sessionId, "Hi"), replies("Hi! How can I help you today?"));
+  const model = callsTools(
+    [{ name: "save_lead", args: { name: "Itest John Doe", phone, interest: "booking on Friday at 3 pm" } }],
+    `Just to confirm: John Doe, ${phone}. Is that right?`,
+  );
+  const { events } = await run(newInput(sessionId, `Save this booking for my friend John Doe on Friday at 3 pm, his phone is ${phone}`), model.deps);
+
+  assert.deepEqual(model.toolResults(), [
+    { ok: false, error: "confirm_first", message: "Read the details back to the customer and ask them to confirm before saving." },
+  ]);
+  assert.deepEqual(actionsOf(events), [], "no card, not even a failure card");
+  assert.equal((await conversationOf(sessionId)).lead_id, null);
+  const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("phone", phone);
+  assert.equal(count, 0, "nothing was written");
+  const { data: audit } = await db().from("tool_calls").select("name, ok, result").eq("conversation_id", (await conversationOf(sessionId)).id);
+  assert.deepEqual(
+    audit!.map((a) => [a.name, a.ok, (a.result as { error: string }).error]),
+    [["save_lead", false, "confirm_first"]],
+    "the refusal is in the audit trail",
+  );
+
+  // The model read the details back; the customer's yes now saves them.
+  const saved = await run(newInput(sessionId, "Yes, that's right"), callsTools([{ name: "save_lead", args: { name: "Itest John Doe", phone } }], "Saved!").deps);
+  assert.deepEqual(actionsOf(saved.events), ["lead_saved"]);
+  assert.notEqual((await conversationOf(sessionId)).lead_id, null);
+});
+
+test("confirm before write: contact details and a consultation confirmed together are both saved on the yes", async () => {
+  const sessionId = session();
+  const business = (await findBusiness(env().DEMO_BUSINESS_SLUG))!;
+  const local = `${formatLocal(new Date(Date.now() + 7 * 86_400_000), business.timezone).slice(0, 10)}T15:00`;
+  const at = zonedLocalToUtc(local, business.timezone);
+  assert.ok(at.ok);
+  const email = `chat-itest-${randomUUID().slice(0, 8)}@example.com`;
+  const calls = [
+    { name: "save_lead", args: { name: "Sara Ali", email } },
+    { name: "create_consultation_request", args: { service: "teeth whitening", preferred_datetime: local } },
+  ];
+
+  // The details given and acted on in one reply: both refused, and the
+  // model reads them back instead.
+  const readBack = `Just to confirm: Sara Ali, ${email}, teeth whitening on ${formatHuman(at.at, business.timezone)}. Is that right?`;
+  const early = callsTools(calls, readBack);
+  await run(newInput(sessionId, `I'm Sara Ali, ${email}, whitening on ${local}`), early.deps);
+  assert.deepEqual(
+    early.toolResults().map((r) => r.error),
+    ["confirm_first", "confirm_first"],
+  );
+
+  const yes = callsTools(calls, "Done: details saved and request sent.");
+  const { events } = await run(newInput(sessionId, "Yes please"), yes.deps);
+  assert.deepEqual(
+    yes.toolResults().map((r) => r.ok),
+    [true, true],
+  );
+  assert.deepEqual(actionsOf(events), ["lead_saved", "consultation_requested"]);
+  const { data: requests } = await db().from("consultation_requests").select("preferred_at").eq("conversation_id", (await conversationOf(sessionId)).id);
+  assert.deepEqual(requests!.map((r) => new Date(r.preferred_at).getTime()), [at.at.getTime()]);
+
+  // The model repeats both on a later "thanks": already done, no new yes needed, nothing duplicated.
+  const repeat = callsTools(calls, "That's already done.");
+  await run(newInput(sessionId, "thanks!"), repeat.deps);
+  assert.deepEqual(
+    repeat.toolResults().map((r) => [r.ok, r.already_requested]),
+    [
+      [true, undefined],
+      [true, true],
+    ],
+  );
+  const { count } = await db().from("consultation_requests").select("id", { count: "exact", head: true }).eq("conversation_id", (await conversationOf(sessionId)).id);
+  assert.equal(count, 1);
 });

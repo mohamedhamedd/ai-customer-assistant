@@ -5,13 +5,19 @@ import type { Json } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
-import { TOOLS, type Tool, type ToolContext, type ToolOutput } from "./tools";
+import { CONFIRM_FIRST, isConfirmed, type LastExchange } from "./confirm";
+import { TOOLS, type SavedState, type Tool, type ToolContext, type ToolOutput } from "./tools";
 
 // Runs one tool call from the model. The contract (design D-09): it NEVER
 // throws. Every failure becomes { ok: false, error, message } so the model can
 // recover (ask for a corrected email, apologise for an outage) and can never
 // mistake a failure for success. Every call, successful or not, is written to
 // tool_calls (US-9.2).
+//
+// A write tool also runs only after the customer confirmed it (confirm.ts):
+// the last exchange is read from the messages table, the same for text and
+// voice, so a model that skips the read-back can't save details the
+// customer never said yes to.
 
 // Inside the 45 s turn deadline (design §7.1), with room for the model.
 export const TOOL_TIMEOUT_MS = 15_000;
@@ -47,6 +53,13 @@ export interface ExecuteDeps {
   timeoutMs: number;
   // SIMULATE_DB_FAILURE: write tools fail as if the database were down.
   simulateDbFailure: () => boolean;
+  // What a write tool's confirmation is checked against.
+  confirmState: (ctx: ToolContext) => Promise<ConfirmState>;
+}
+
+export interface ConfirmState {
+  exchange: LastExchange;
+  saved: SavedState;
 }
 
 export const UNAVAILABLE: ToolOutput = {
@@ -81,6 +94,42 @@ async function auditToDb(row: AuditRow): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// Enough rows to get past a few voice items still waiting for a transcript.
+const RECENT_MESSAGES = 10;
+
+// The customer's latest message, the assistant message before it, and what
+// this conversation already saved. Three small indexed reads, in parallel.
+async function confirmStateFromDb(ctx: ToolContext): Promise<ConfirmState> {
+  const client = ctx.client ?? db();
+  const [messages, conversation, requests] = await Promise.all([
+    client.from("messages").select("role, content").eq("conversation_id", ctx.conversationId).order("id", { ascending: false }).limit(RECENT_MESSAGES),
+    client.from("conversations").select("customer_facts, lead_id").eq("id", ctx.conversationId).single(),
+    client.from("consultation_requests").select("preferred_at").eq("conversation_id", ctx.conversationId).neq("status", "cancelled"),
+  ]);
+  for (const { error } of [messages, conversation, requests]) {
+    if (error) throw new Error(`Loading confirmation state failed: ${error.message}`);
+  }
+  return {
+    exchange: lastExchange(messages.data ?? []),
+    saved: {
+      facts: (conversation.data?.customer_facts ?? {}) as Record<string, unknown>,
+      leadSaved: (conversation.data?.lead_id ?? null) !== null,
+      requestedAt: (requests.data ?? []).map((r) => new Date(r.preferred_at)),
+    },
+  };
+}
+
+// Newest first in. The latest user message is the customer's current one
+// (text: stored before the turn runs; voice: reported when spoken). The
+// read-back is the last assistant message before it that has words (a voice
+// item can be empty).
+export function lastExchange(newestFirst: { role: string; content: string | null }[]): LastExchange {
+  const at = newestFirst.findIndex((m) => m.role === "user");
+  if (at < 0) return { customer: null, readBack: null };
+  const readBack = newestFirst.slice(at + 1).find((m) => m.role === "assistant" && m.content);
+  return { customer: newestFirst[at].content, readBack: readBack?.content ?? null };
+}
+
 const defaultDeps: ExecuteDeps = {
   tools: TOOLS,
   audit: auditToDb,
@@ -88,6 +137,7 @@ const defaultDeps: ExecuteDeps = {
   trace: (fields) => console.log(JSON.stringify({ event: "tool_call", ...fields })),
   timeoutMs: TOOL_TIMEOUT_MS,
   simulateDbFailure: () => env().SIMULATE_DB_FAILURE,
+  confirmState: confirmStateFromDb,
 };
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
@@ -114,16 +164,23 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
     if (!parsed.success) {
       output = { ok: false, error: "invalid_input", message: describeIssues(parsed.error) };
     } else {
+      // Only a write that started can have an unknown outcome.
+      let writing = false;
       try {
         // Thrown where a real database error would be, so a simulated
         // outage takes exactly the real path below.
         if (tool.writes && d.simulateDbFailure()) throw new Error("SIMULATE_DB_FAILURE: database unavailable");
-        const result = await withTimeout(tool.run(parsed.data, ctx), d.timeoutMs);
-        output = result.output;
-        sources = result.sources ?? [];
+        if (tool.confirm && !(await withTimeout(confirmed(tool, parsed.data, ctx, d), d.timeoutMs))) {
+          output = CONFIRM_FIRST;
+        } else {
+          writing = tool.writes;
+          const result = await withTimeout(tool.run(parsed.data, ctx), d.timeoutMs);
+          output = result.output;
+          sources = result.sources ?? [];
+        }
       } catch (err) {
         d.log(`${name} failed (conversation ${ctx.conversationId})`, err);
-        output = err instanceof ToolTimeout && tool.writes ? OUTCOME_UNKNOWN : UNAVAILABLE;
+        output = err instanceof ToolTimeout && writing ? OUTCOME_UNKNOWN : UNAVAILABLE;
       }
     }
   }
@@ -155,6 +212,14 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
     d.log(`audit write failed for ${name}`, err);
   }
   return outcome;
+}
+
+async function confirmed(tool: Tool, args: unknown, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
+  const details = tool.confirm!.details(args, ctx);
+  // Invalid arguments: run() rejects them without writing.
+  if (details === null) return true;
+  const state = await d.confirmState(ctx);
+  return tool.confirm!.alreadyDone(args, ctx, state.saved) || isConfirmed(details, state.exchange);
 }
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words

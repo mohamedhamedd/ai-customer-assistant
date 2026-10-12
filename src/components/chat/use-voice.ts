@@ -27,6 +27,10 @@ import {
 // only end the call if it stays down this long, or "failed" outright.
 const DISCONNECT_GRACE_MS = 5000;
 
+// How long a tool call waits for the customer's last words to be transcribed
+// (see heard below). Short answers ("yes") usually take well under a second.
+const TRANSCRIPT_WAIT_MS = 3000;
+
 export type VoiceState =
   | "off"
   | "explain" // pre-permission explainer
@@ -120,6 +124,28 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
   const pending = useRef(emptyPending());
   const toolCalls = useRef<Promise<void>[]>([]);
 
+  // The customer's latest item, until its transcript is reported. A save is
+  // checked on the server against what the customer last said (confirm
+  // before write), and transcription often finishes after the model has
+  // already called the tool, so a tool call waits for it (at most
+  // TRANSCRIPT_WAIT_MS; without it the server asks the model to confirm again).
+  const heard = useRef<{ itemId: string; transcribed: Promise<void>; done: () => void; wait?: Promise<void> } | null>(null);
+  const newHeard = (itemId: string) => {
+    let done = () => {};
+    const transcribed = new Promise<void>((resolve) => (done = resolve));
+    heard.current = { itemId, transcribed, done };
+  };
+  const markHeard = (itemId: string) => {
+    if (heard.current?.itemId === itemId) heard.current.done();
+  };
+  // One shared wait per item, so tool calls keep their order.
+  const untilHeard = () => {
+    const h = heard.current;
+    if (!h) return Promise.resolve();
+    h.wait ??= Promise.race([h.transcribed, new Promise<void>((resolve) => setTimeout(resolve, TRANSCRIPT_WAIT_MS))]);
+    return h.wait;
+  };
+
   // Assistant captions, so an interruption or a cut-short response can be
   // settled with what was actually heard. Once finished, late events for
   // the item are ignored (an interruption wins over the full transcript).
@@ -139,7 +165,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     setState("checking");
     const callToken = conn.current?.callToken;
     pending.current.toolCallIds.push(callId);
-    const call = enqueue(async () => {
+    const relay = async () => {
       let output: unknown;
       try {
         const res = await post("/api/voice/tool", { callToken, callId, name, arguments: args });
@@ -153,8 +179,9 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
         output = { ok: false, error: "temporarily_unavailable", message: "The system couldn't complete this right now. Tell the customer it didn't go through." };
       }
       send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) } });
-    });
-    toolCalls.current.push(call);
+    };
+    // Behind the customer's last words (see heard), in the same queue.
+    toolCalls.current.push(untilHeard().then(() => enqueue(relay)));
   };
 
   const onEvent = (event: RealtimeEvent) => {
@@ -175,6 +202,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
         if (item.role === "user") {
           updateTurns((ts) => voiceUserItem(ts, item.id));
           report(item.id, "user");
+          newHeard(item.id);
         } else if (item.role === "assistant") {
           const { toolCallIds, ...extras } = pending.current;
           pending.current = emptyPending();
@@ -188,11 +216,14 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
         const itemId = event.item_id as string;
         const transcript = (event.transcript as string) ?? "";
         updateTurns((ts) => voiceUserTranscript(ts, itemId, transcript));
+        // Queued first, so a waiting tool call reaches the server after it.
         report(itemId, "user", transcript);
+        markHeard(itemId);
         break;
       }
       case "conversation.item.input_audio_transcription.failed":
         updateTurns((ts) => voiceUserTranscript(ts, event.item_id as string, ""));
+        markHeard(event.item_id as string);
         break;
       case "response.output_audio_transcript.delta": {
         const itemId = event.item_id as string;
@@ -268,6 +299,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     toolCalls.current = [];
     pending.current = emptyPending();
     captions.current.clear();
+    heard.current = null;
   }, []);
 
   const connect = useCallback(async () => {

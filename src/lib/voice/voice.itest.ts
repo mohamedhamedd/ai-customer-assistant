@@ -41,6 +41,12 @@ const businessSlug = () => env().DEMO_BUSINESS_SLUG;
 const isExpired = (err: unknown) => err instanceof ChatHttpError && err.status === 401 && err.message === CALL_EXPIRED;
 const isOverTime = (err: unknown) => err instanceof ChatHttpError && err.status === 401 && err.message === CALL_TIME_LIMIT;
 
+// The spoken read-back and the customer's yes, as the browser reports them.
+async function confirmAloud(callToken: string, readBack: string, yes = "Yes, that's right.") {
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", transcript: readBack });
+  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: yes });
+}
+
 test("voice messages keep conversation order even when the question's transcript arrives last", async () => {
   const { callToken, sessionId } = await openCall();
   const question = item();
@@ -101,8 +107,9 @@ test("without a live call's secret nothing runs and nothing is stored", async ()
 
 test("an answer's cards come from exactly the tool calls it used, once", async () => {
   const { callToken, conversationId } = await openCall();
-  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: "I'm Sam" });
   const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
+  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: `I'm Sam, ${email}` });
+  await confirmAloud(callToken, `Sam Voice, ${email}. Is that right?`);
   const args = JSON.stringify({ name: "Sam Voice", email });
   const relayed = await runVoiceTool({ callToken, callId: "call_a", name: "save_lead", arguments: args });
   assert.equal(relayed.output.ok, true);
@@ -113,9 +120,10 @@ test("an answer's cards come from exactly the tool calls it used, once", async (
   const answer = item();
   await recordVoiceItem({ callToken, itemId: answer, role: "assistant", toolCallIds: ["call_a", "call_b"] });
   // A later answer naming the same tool calls gets nothing: already attached.
-  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", toolCallIds: ["call_a", "call_b"] });
+  const later = item();
+  await recordVoiceItem({ callToken, itemId: later, role: "assistant", toolCallIds: ["call_a", "call_b"] });
 
-  const { data } = await db().from("messages").select("id, actions").eq("conversation_id", conversationId).eq("role", "assistant").order("id");
+  const { data } = await db().from("messages").select("id, actions").eq("conversation_id", conversationId).in("client_message_id", [answer, later]).order("id");
   assert.deepEqual(data![0].actions, [{ kind: "lead_saved", details: { name: "Sam Voice", email } }]);
   assert.deepEqual(data![1].actions, []);
 
@@ -127,10 +135,13 @@ test("another call can't borrow a call's tool results, even in the same conversa
   const first = await openCall();
   const second = await openCall({ sessionId: first.sessionId });
   const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
-  await runVoiceTool({ callToken: first.callToken, callId: "call_1", name: "save_lead", arguments: JSON.stringify({ name: "First", email }) });
+  await confirmAloud(first.callToken, `First, ${email}?`);
+  const saved = await runVoiceTool({ callToken: first.callToken, callId: "call_1", name: "save_lead", arguments: JSON.stringify({ name: "First", email }) });
+  assert.equal(saved.output.ok, true);
 
-  await recordVoiceItem({ callToken: second.callToken, itemId: item(), role: "assistant", toolCallIds: ["call_1"] });
-  const { data } = await db().from("messages").select("actions").eq("conversation_id", first.conversationId);
+  const borrower = item();
+  await recordVoiceItem({ callToken: second.callToken, itemId: borrower, role: "assistant", toolCallIds: ["call_1"] });
+  const { data } = await db().from("messages").select("actions").eq("conversation_id", first.conversationId).eq("client_message_id", borrower);
   assert.deepEqual(data, [{ actions: [] }]);
 });
 
@@ -153,6 +164,38 @@ test("an answer's citations come from the server's own tool calls", async () => 
 
   const history = await loadHistory(businessSlug(), sessionId);
   assert.deepEqual(history.at(-1)!.sources, [source]);
+});
+
+test("voice: a save needs the spoken read-back and the customer's transcribed yes", async () => {
+  const { callToken, conversationId } = await openCall();
+  const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
+  const save = (callId: string) =>
+    runVoiceTool({ callToken, callId, name: "save_lead", arguments: JSON.stringify({ name: "Sam Spoken", email, phone: "503 555 0142" }) });
+
+  // Details and save in the same breath: refused, no card.
+  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: `Save me, Sam Spoken, ${email}, 503 555 0142` });
+  const early = await save("call_early");
+  assert.equal(early.output.ok, false);
+  assert.equal((early.output as { error: string }).error, "confirm_first");
+  assert.equal(early.action, null);
+
+  // The read-back, spoken (spelled out, digits as words), then a yes whose
+  // transcript isn't in yet: still refused.
+  const [local, domain] = email.split("@");
+  const spelled = `${local.split("").join("-")} at ${domain.replace(".", " dot ")}`;
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", transcript: `That's Sam Spoken, ${spelled}, five oh three, five five five, oh one four two. Is that right?` });
+  const yes = item();
+  await recordVoiceItem({ callToken, itemId: yes, role: "user" });
+  assert.equal(((await save("call_pending")).output as { error: string }).error, "confirm_first");
+
+  await recordVoiceItem({ callToken, itemId: yes, role: "user", transcript: "Yeah, that's right." });
+  const confirmed = await save("call_yes");
+  assert.equal(confirmed.output.ok, true);
+  assert.equal(confirmed.action?.kind, "lead_saved");
+  const { data: lead } = await db().from("leads").select("phone").eq("email", email).single();
+  assert.equal(lead!.phone, "5035550142");
+  const { data: audit } = await db().from("tool_calls").select("ok").eq("conversation_id", conversationId).order("id");
+  assert.deepEqual(audit!.map((a) => a.ok), [false, false, true]);
 });
 
 test("an unknown tool name is refused as a tool error, not a crash", async () => {

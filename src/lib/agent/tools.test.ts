@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { executeTool, OUTCOME_UNKNOWN, type AuditRow, UNAVAILABLE } from "./execute";
+import { CONFIRM_FIRST } from "./confirm";
+import { executeTool, lastExchange, OUTCOME_UNKNOWN, type AuditRow, type ConfirmState, UNAVAILABLE } from "./execute";
 import {
   consultationSchema,
   resolvePreferredTime,
@@ -81,8 +82,20 @@ test("tool definitions match the validation schemas (no drift)", () => {
 
 const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW };
 
-// Executor deps for tests: no console output, no simulated outage unless asked.
-const quiet = { log: () => {}, trace: () => {}, simulateDbFailure: () => false };
+// The customer said yes to this read-back; nothing saved yet.
+const NOTHING_SAVED = { facts: {}, leadSaved: false, requestedAt: [] };
+const saidYesTo =
+  (readBack: string, customer = "Yes, that's right."): (() => Promise<ConfirmState>) =>
+  async () => ({ exchange: { customer, readBack }, saved: NOTHING_SAVED });
+
+// Executor deps for tests: no console output, no simulated outage unless
+// asked, and every write already confirmed (the gate has its own tests).
+const quiet = {
+  log: () => {},
+  trace: () => {},
+  simulateDbFailure: () => false,
+  confirmState: saidYesTo("Sara Ali, sara@x.com, Tuesday, October 20 at 3:00 PM. Is that right?"),
+};
 
 function harness(run: Tool["run"], schema: z.ZodType = z.object({ x: z.number() }), writes = false) {
   const audits: AuditRow[] = [];
@@ -227,4 +240,153 @@ test("every call leaves one structured log line, without the arguments", async (
   assert.equal(h.traces.length, 1);
   assert.deepEqual(Object.keys(h.traces[0]).sort(), ["channel", "conversationId", "error", "ms", "ok", "tool"]);
   assert.equal(h.traces[0].error, "invalid_input");
+});
+
+// ---------------------------------------------------------------------------
+// Confirm before write (confirm.ts), enforced by the executor
+// ---------------------------------------------------------------------------
+
+// A client that records whether a write RPC ran.
+function writeClient(data: unknown) {
+  const rpcs: string[] = [];
+  const client = { rpc: async (fn: string) => (rpcs.push(fn), { data, error: null }) } as unknown as NonNullable<ToolContext["client"]>;
+  return { client, rpcs };
+}
+
+const JOHN_DOE = "Save this booking for my friend John Doe on Friday at 3 pm, his phone is 555-1234";
+const GREETING = "Hi! I'm the assistant for Lakeside Dental. How can I help?";
+
+test("a write in the same reply the details were given is refused with confirm_first, and nothing is written", async () => {
+  const { client, rpcs } = writeClient({ lead_id: "L1", created: true });
+  const audits: AuditRow[] = [];
+  const out = await executeTool("save_lead", JSON.stringify({ name: "John Doe", phone: "555-1234", interest: "booking" }), { ...ctx, client }, {
+    ...quiet,
+    audit: async (r) => void audits.push(r),
+    confirmState: saidYesTo(GREETING, JOHN_DOE),
+  });
+  assert.deepEqual(out.output, CONFIRM_FIRST);
+  assert.deepEqual(out.output, {
+    ok: false,
+    error: "confirm_first",
+    message: "Read the details back to the customer and ask them to confirm before saving.",
+  });
+  assert.deepEqual(rpcs, [], "the database is never written");
+  assert.equal(audits[0].ok, false, "audited as refused");
+});
+
+test("save_lead runs after a read-back of its email and phone and a yes", async () => {
+  const { client, rpcs } = writeClient({ lead_id: "L1", created: true });
+  const args = JSON.stringify({ name: "Sara Ali", email: "Sara@Example.com", phone: "(503) 555-0142" });
+  const run = (readBack: string, customer: string) => executeTool("save_lead", args, { ...ctx, client }, { ...quiet, confirmState: saidYesTo(readBack, customer) });
+
+  assert.deepEqual((await run("Sara Ali, sara@example.com. Is that right?", "yes")).output, CONFIRM_FIRST, "the phone was never read back");
+  assert.deepEqual((await run("Sara Ali, sara@example.com, (503) 555-0142. Is that right?", "no, it's 0143")).output, CONFIRM_FIRST, "a correction");
+  assert.equal(rpcs.length, 0);
+
+  const ok = await run("Sara Ali, sara@example.com, (503) 555-0142. Is that right?", "Yes, that's right");
+  assert.equal(ok.output.ok, true);
+  assert.deepEqual(rpcs, ["save_lead"]);
+});
+
+test("create_consultation_request needs the date and time read back and a yes", async () => {
+  const { client, rpcs } = writeClient({ request_id: "R1", status: "pending", service: "whitening", created: true });
+  const args = JSON.stringify({ service: "teeth whitening", preferred_datetime: "2026-10-20T15:00" });
+  const run = (readBack: string, customer: string) =>
+    executeTool("create_consultation_request", args, { ...ctx, client }, { ...quiet, confirmState: saidYesTo(readBack, customer) });
+
+  assert.deepEqual((await run("Sure! What day works for you?", "Tuesday the 20th at 3pm for whitening")).output, CONFIRM_FIRST);
+  assert.deepEqual((await run("Tuesday, October 20 at 4:00 PM. Is that right?", "yes")).output, CONFIRM_FIRST, "another time was read back");
+  assert.equal(rpcs.length, 0);
+  assert.equal((await run("Teeth whitening on Tuesday, October 20 at 3:00 PM. Is that right?", "Yes please")).output.ok, true);
+  assert.deepEqual(rpcs, ["create_consultation_request"]);
+});
+
+test("invalid arguments skip the confirmation: the tool's own error comes first, nothing is written", async () => {
+  let loaded = false;
+  const { client, rpcs } = writeClient({});
+  const deps = {
+    ...quiet,
+    confirmState: async () => {
+      loaded = true;
+      return { exchange: { customer: null, readBack: null }, saved: NOTHING_SAVED };
+    },
+  };
+  const past = await executeTool("create_consultation_request", JSON.stringify({ service: "whitening", preferred_datetime: "2026-10-01T10:00" }), { ...ctx, client }, deps);
+  assert.ok(!past.output.ok && past.output.error === "invalid_input" && /in the past/.test(past.output.message));
+  const badEmail = await executeTool("save_lead", JSON.stringify({ name: "Sara", email: "sara@" }), { ...ctx, client }, deps);
+  assert.ok(!badEmail.output.ok && badEmail.output.error === "invalid_input");
+  assert.equal(loaded, false);
+  assert.deepEqual(rpcs, []);
+});
+
+test("repeating what is already saved needs no new yes (idempotent, the model can say it's done)", async () => {
+  const { client, rpcs } = writeClient({ request_id: "R1", status: "pending", service: "whitening", created: false });
+  const saved = {
+    facts: { name: "Sara Ali", email: "sara@example.com" },
+    leadSaved: true,
+    requestedAt: [new Date("2026-10-20T22:00:00Z")], // 3 PM PDT
+  };
+  const deps = { ...quiet, confirmState: async () => ({ exchange: { customer: "thanks!", readBack: "All set." }, saved }) };
+  const repeatLead = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "SARA@example.com" }), { ...ctx, client }, deps);
+  assert.equal(repeatLead.output.ok, true);
+  const repeatSlot = await executeTool("create_consultation_request", JSON.stringify({ service: "whitening consult", preferred_datetime: "2026-10-20T15:00" }), { ...ctx, client }, deps);
+  assert.ok(repeatSlot.output.ok && repeatSlot.output.already_requested === true);
+  assert.deepEqual(rpcs, ["save_lead", "create_consultation_request"]);
+
+  // Anything new is a new write and needs a yes.
+  const newPhone = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "sara@example.com", phone: "5035550142" }), { ...ctx, client }, deps);
+  assert.deepEqual(newPhone.output, CONFIRM_FIRST);
+  const newSlot = await executeTool("create_consultation_request", JSON.stringify({ service: "whitening", preferred_datetime: "2026-10-21T15:00" }), { ...ctx, client }, deps);
+  assert.deepEqual(newSlot.output, CONFIRM_FIRST);
+  const noLead = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "sara@example.com" }), { ...ctx, client }, {
+    ...deps,
+    confirmState: async () => ({ exchange: { customer: "thanks!", readBack: "All set." }, saved: { ...saved, leadSaved: false } }),
+  });
+  assert.deepEqual(noLead.output, CONFIRM_FIRST, "facts alone don't count: the lead must be linked");
+});
+
+test("the confirmation check failing or hanging is an outage, never a success, never 'outcome unknown'", async () => {
+  const { client, rpcs } = writeClient({ lead_id: "L1", created: true });
+  const args = JSON.stringify({ name: "Sara", email: "sara@example.com" });
+  const failed = await executeTool("save_lead", args, { ...ctx, client }, { ...quiet, confirmState: () => Promise.reject(new Error("db down")) });
+  assert.deepEqual(failed.output, UNAVAILABLE);
+  const hung = await executeTool("save_lead", args, { ...ctx, client }, { ...quiet, timeoutMs: 50, confirmState: () => new Promise(() => {}) });
+  assert.deepEqual(hung.output, UNAVAILABLE, "nothing was written, so the outcome is known");
+  assert.deepEqual(rpcs, []);
+});
+
+test("tools without a confirmation spec (search, read tools) are never gated", async () => {
+  let loaded = false;
+  const out = await executeTool("probe", '{"x": 1}', ctx, {
+    tools: { probe: { name: "probe", description: "", parameters: {}, writes: false, schema: z.object({ x: z.number() }), run: async () => ({ output: { ok: true } }) } },
+    ...quiet,
+    audit: async () => {},
+    confirmState: async () => ((loaded = true), { exchange: { customer: null, readBack: null }, saved: NOTHING_SAVED }),
+  });
+  assert.equal(loaded, false);
+  assert.equal(out.output.ok, true);
+  assert.ok(TOOLS.save_lead.confirm && TOOLS.create_consultation_request.confirm && !TOOLS.search_knowledge.confirm, "both write tools are gated");
+});
+
+test("the last exchange: the latest customer message and the assistant reply before it", () => {
+  // Newest first, as loaded.
+  assert.deepEqual(
+    lastExchange([
+      { role: "user", content: "yes" },
+      { role: "assistant", content: "Sara, sara@x.com. Is that right?" },
+      { role: "user", content: "I'm Sara, sara@x.com" },
+    ]),
+    { customer: "yes", readBack: "Sara, sara@x.com. Is that right?" },
+  );
+  assert.deepEqual(
+    lastExchange([
+      { role: "user", content: null },
+      { role: "assistant", content: null },
+      { role: "assistant", content: "Read-back" },
+    ]),
+    { customer: null, readBack: "Read-back" },
+    "voice: the transcript isn't in yet, and an empty assistant item is skipped",
+  );
+  assert.deepEqual(lastExchange([{ role: "assistant", content: "Read-back" }]), { customer: null, readBack: null });
+  assert.deepEqual(lastExchange([]), { customer: null, readBack: null });
 });

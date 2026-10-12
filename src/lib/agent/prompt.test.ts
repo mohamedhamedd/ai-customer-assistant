@@ -104,6 +104,8 @@ test("actions are confirmed in an earlier reply than the one that performs them"
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.match(p, /Never call save_lead in the same reply in which the details were first given or changed/);
   assert.match(p, /Never call create_consultation_request in the same reply/);
+  // The code refuses an unconfirmed write (confirm.ts); the model must ask, not report a failure.
+  assert.match(p, /confirm_first means nothing was saved yet .* read the details back and ask/);
 });
 
 test("the assistant stays on the business and keeps conditions in short answers", () => {
