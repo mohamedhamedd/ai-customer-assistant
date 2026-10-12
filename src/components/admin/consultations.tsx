@@ -26,6 +26,8 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
   // Rows with a status change in flight: their select is locked, so a second
   // change can't race the first (and a revert can't undo a later change).
   const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
+  // Bumped to load the current tab again (after a save whose outcome is unknown).
+  const [reloadKey, setReloadKey] = useState(0);
   const toast = useToast();
 
   // Only the latest tab's answer is kept: clicking through tabs quickly can
@@ -43,7 +45,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
     return () => {
       live = false;
     };
-  }, [api, filter]);
+  }, [api, filter, reloadKey]);
 
   const setRowSaving = (id: string, on: boolean) =>
     setSaving((s) => {
@@ -82,12 +84,20 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
         // A stalled request must not lock the row forever.
         signal: AbortSignal.timeout(15_000),
       });
-      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error);
+      if (!res.ok) throw new SaveError(((await res.json().catch(() => ({}))) as { error?: string }).error);
       toast.show(`Marked as ${STATUS_LABEL[status].toLowerCase()}`);
       window.dispatchEvent(new Event(CONSULTATIONS_CHANGED));
     } catch (err) {
-      move(status, row.status);
-      toast.show(err instanceof Error && err.message ? err.message : "Couldn't change the status. Please try again.", "danger");
+      if (err instanceof DOMException && err.name === "TimeoutError") {
+        // The request may have reached the server and saved: don't guess,
+        // load what the database says.
+        setReloadKey((k) => k + 1);
+        toast.show("The server took too long to answer. The list was refreshed: check the status.", "danger");
+      } else {
+        move(status, row.status);
+        // The server's own message when it gave one; a plain one otherwise.
+        toast.show(err instanceof SaveError && err.message ? err.message : "Couldn't change the status. Please try again.", "danger");
+      }
     } finally {
       setRowSaving(row.id, false);
     }
@@ -188,6 +198,9 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
     </>
   );
 }
+
+// A failed save the server answered (its message is safe to show).
+class SaveError extends Error {}
 
 // A native select, tinted like the status badge: keyboard and screen-reader
 // friendly without a custom menu.

@@ -19,6 +19,11 @@ const schema = z.object({
   // Transcribes the customer's speech for captions and the stored transcript.
   OPENAI_TRANSCRIBE_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
 
+  // Set when the app runs behind a proxy you control that sets the client's
+  // address (Vercel, a load balancer, nginx). Without it, client-supplied
+  // X-Forwarded-For headers are ignored and per-IP rate limits are off.
+  TRUST_PROXY: z.stringbool().default(false),
+
   // Demo / testing only: the two write tools fail as if the database were
   // down (search still works), to show the assistant never claims a save
   // that didn't happen (US-11.1). Logged at boot when on.

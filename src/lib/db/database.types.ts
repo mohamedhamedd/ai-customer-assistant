@@ -272,6 +272,9 @@ isOneToOne: false
               "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"similarity": number
             }[]
                            },
+"prune_rate_limits":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
                            },

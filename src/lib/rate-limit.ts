@@ -1,10 +1,16 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
+import { env } from "@/lib/env";
 import { ChatHttpError } from "@/lib/chat/turn";
 
-// Rate limits (US-12.6), counted in Postgres (take_rate_limit). Each request
-// is checked against a per-session limit (the browser's anonymous id) and a
-// per-IP one: a script can make up new session ids, not new addresses.
+// Rate limits (US-12.6), counted in Postgres (take_rate_limit).
+//
+// Three kinds of key, each covering what the others can't:
+//   - per session: the browser's anonymous id (one visitor's pace),
+//   - per IP: only behind a trusted proxy (TRUST_PROXY), since a client can
+//     write any X-Forwarded-For it likes and the app can't see the address,
+//   - per business: a ceiling nobody can get around by making up sessions or
+//     addresses, which bounds the cost of the paid calls.
 
 export interface Limit {
   key: string;
@@ -15,21 +21,34 @@ export interface Limit {
 export const LIMITS = {
   chatSession: (sessionId: string): Limit => ({ key: `chat:session:${sessionId}`, windowSeconds: 60, max: 20 }),
   chatIp: (ip: string): Limit => ({ key: `chat:ip:${ip}`, windowSeconds: 60, max: 60 }),
+  chatBusiness: (slug: string): Limit => ({ key: `chat:business:${slug}`, windowSeconds: 60, max: 300 }),
   // Voice costs per minute: a few call starts per 10 minutes.
   voiceSession: (sessionId: string): Limit => ({ key: `voice:session:${sessionId}`, windowSeconds: 600, max: 3 }),
   voiceIp: (ip: string): Limit => ({ key: `voice:ip:${ip}`, windowSeconds: 600, max: 6 }),
+  voiceBusiness: (slug: string): Limit => ({ key: `voice:business:${slug}`, windowSeconds: 600, max: 30 }),
   // Each upload is embedded and each test search embeds the question.
-  uploadIp: (ip: string): Limit => ({ key: `upload:ip:${ip}`, windowSeconds: 600, max: 30 }),
-  searchIp: (ip: string): Limit => ({ key: `search:ip:${ip}`, windowSeconds: 60, max: 30 }),
+  uploadBusiness: (slug: string): Limit => ({ key: `upload:business:${slug}`, windowSeconds: 600, max: 30 }),
+  searchBusiness: (slug: string): Limit => ({ key: `search:business:${slug}`, windowSeconds: 60, max: 30 }),
 };
 
 export const TOO_MANY = "You're sending messages quickly. Please wait a moment and try again.";
 
-// The client's address: the first X-Forwarded-For entry when behind a proxy
-// (only trustworthy if the proxy sets it), else X-Real-IP, else "local".
-export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip") || "local";
+// The client's address, or null when it can't be known. Only behind a
+// trusted proxy: X-Real-IP, else the LAST X-Forwarded-For entry (the one
+// the proxy added; earlier entries are whatever the client sent).
+export function clientIp(request: Request, trustProxy = env().TRUST_PROXY): string | null {
+  if (!trustProxy) return null;
+  const realIp = request.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean);
+  return forwarded?.at(-1) ?? null;
+}
+
+// The per-IP limit when the address is known; nothing otherwise (sharing
+// one "unknown" bucket would cap all visitors together).
+export function ipLimit(request: Request, limit: (ip: string) => Limit): Limit[] {
+  const ip = clientIp(request);
+  return ip ? [limit(ip)] : [];
 }
 
 // Throws a 429 if any limit is exceeded. If the counter itself fails, the

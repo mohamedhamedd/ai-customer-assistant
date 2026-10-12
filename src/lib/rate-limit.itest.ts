@@ -20,7 +20,16 @@ test("requests over a limit get a 429 with a friendly message; limits are indepe
   await enforce([{ ...session, key: `${prefix}:other-session` }, ip]);
 });
 
-test("the client address comes from the proxy header when there is one", () => {
-  assert.equal(clientIp(new Request("http://x", { headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.1" } })), "203.0.113.7");
-  assert.equal(clientIp(new Request("http://x")), "local");
+test("client-supplied forwarding headers are ignored unless a proxy is trusted", () => {
+  const spoofed = new Request("http://x", { headers: { "x-forwarded-for": "1.2.3.4" } });
+  assert.equal(clientIp(spoofed, false), null, "no trusted proxy: unknown, never the client's claim");
+  assert.equal(clientIp(new Request("http://x"), true), null);
+});
+
+test("behind a trusted proxy: X-Real-IP, else the address the proxy appended", () => {
+  // The client sent "6.6.6.6"; the proxy appended the real address last.
+  const appended = new Request("http://x", { headers: { "x-forwarded-for": "6.6.6.6, 203.0.113.7" } });
+  assert.equal(clientIp(appended, true), "203.0.113.7");
+  const real = new Request("http://x", { headers: { "x-real-ip": "198.51.100.2", "x-forwarded-for": "6.6.6.6" } });
+  assert.equal(clientIp(real, true), "198.51.100.2");
 });

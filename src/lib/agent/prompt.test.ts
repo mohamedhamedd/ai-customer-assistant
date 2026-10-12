@@ -91,6 +91,7 @@ test("actions are confirmed in an earlier reply than the one that performs them"
 
 test("the assistant stays on the business and keeps conditions in short answers", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
-  assert.match(p, /Do not answer general-knowledge questions, write code/);
+  assert.match(p, /in scope even when they sound general/);
+  assert.match(p, /Decline only requests that have nothing to do with the business \(trivia, coding/);
   assert.match(p, /keep any condition that changes the answer/);
 });
