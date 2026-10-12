@@ -1,13 +1,14 @@
 // Integration tests: voice storage and the tool relay against the local
-// database. No OpenAI calls (save_lead doesn't need the model). Needs
-// `npm run db:start`. Run with `npm run test:integration`.
+// database. No OpenAI calls (a call is opened directly in the database, and
+// save_lead doesn't need the model). Needs `npm run db:start`.
+// Run with `npm run test:integration`.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
-import { loadHistory, recentHistory } from "@/lib/chat/turn";
-import { recordVoiceItem, runVoiceTool } from "./voice";
+import { ChatHttpError, conversationFor, findBusiness, loadHistory, recentHistory } from "@/lib/chat/turn";
+import { CALL_EXPIRED, recordVoiceItem, runVoiceTool } from "./voice";
 
 const sessions: string[] = [];
 after(async () => {
@@ -15,29 +16,40 @@ after(async () => {
   await db().from("leads").delete().like("email", "voice-itest-%@example.com");
 });
 
-function target() {
-  const sessionId = randomUUID();
-  sessions.push(sessionId);
-  return { businessSlug: env().DEMO_BUSINESS_SLUG, sessionId };
+// What /api/voice/session does after OpenAI accepts the call.
+async function openCall(opts: { sessionId?: string; expiresInMs?: number } = {}) {
+  const sessionId = opts.sessionId ?? randomUUID();
+  if (!opts.sessionId) sessions.push(sessionId);
+  const business = (await findBusiness(env().DEMO_BUSINESS_SLUG))!;
+  const conversation = await conversationFor(business.id, sessionId);
+  const callToken = randomBytes(32).toString("base64url");
+  const { data, error } = await db()
+    .from("voice_calls")
+    .insert({
+      conversation_id: conversation.id,
+      token_hash: createHash("sha256").update(callToken).digest("hex"),
+      expires_at: new Date(Date.now() + (opts.expiresInMs ?? 60_000)).toISOString(),
+    })
+    .select("id")
+    .single();
+  assert.ifError(error);
+  return { callToken, callId: data!.id, sessionId, conversationId: conversation.id };
 }
 
 const item = () => `item_${randomUUID().replaceAll("-", "")}`;
-
-async function conversationId(sessionId: string) {
-  const { data } = await db().from("conversations").select("id").eq("session_id", sessionId).single();
-  return data!.id;
-}
+const businessSlug = () => env().DEMO_BUSINESS_SLUG;
+const isExpired = (err: unknown) => err instanceof ChatHttpError && err.status === 401 && err.message === CALL_EXPIRED;
 
 test("voice messages keep conversation order even when the question's transcript arrives last", async () => {
-  const t = target();
+  const { callToken, sessionId } = await openCall();
   const question = item();
   const answer = item();
-  await recordVoiceItem({ ...t, itemId: question, role: "user" });
-  await recordVoiceItem({ ...t, itemId: answer, role: "assistant" });
-  await recordVoiceItem({ ...t, itemId: answer, role: "assistant", transcript: "We're open nine to five." });
-  await recordVoiceItem({ ...t, itemId: question, role: "user", transcript: "  When are you open?  " });
+  await recordVoiceItem({ callToken, itemId: question, role: "user" });
+  await recordVoiceItem({ callToken, itemId: answer, role: "assistant" });
+  await recordVoiceItem({ callToken, itemId: answer, role: "assistant", transcript: "We're open nine to five." });
+  await recordVoiceItem({ callToken, itemId: question, role: "user", transcript: "  When are you open?  " });
 
-  const history = await loadHistory(t.businessSlug, t.sessionId);
+  const history = await loadHistory(businessSlug(), sessionId);
   assert.deepEqual(
     history.map((m) => [m.role, m.channel, m.content]),
     [
@@ -48,71 +60,102 @@ test("voice messages keep conversation order even when the question's transcript
 });
 
 test("reporting an item twice stores it once; an empty transcript stays null", async () => {
-  const t = target();
+  const { callToken, conversationId } = await openCall();
   const cough = item();
-  await recordVoiceItem({ ...t, itemId: cough, role: "user" });
-  await recordVoiceItem({ ...t, itemId: cough, role: "user" });
-  await recordVoiceItem({ ...t, itemId: cough, role: "user", transcript: "   " });
+  await recordVoiceItem({ callToken, itemId: cough, role: "user" });
+  await recordVoiceItem({ callToken, itemId: cough, role: "user" });
+  await recordVoiceItem({ callToken, itemId: cough, role: "user", transcript: "   " });
 
-  const { data } = await db().from("messages").select("content").eq("conversation_id", await conversationId(t.sessionId));
+  const { data } = await db().from("messages").select("content").eq("conversation_id", conversationId);
   assert.deepEqual(data, [{ content: null }]);
   // Null rows never reach the model.
-  assert.deepEqual(await recentHistory(await conversationId(t.sessionId)), []);
+  assert.deepEqual(await recentHistory(conversationId), []);
 });
 
 test("a transcript reported before its item is still stored", async () => {
-  const t = target();
-  const said = item();
-  await recordVoiceItem({ ...t, itemId: said, role: "user", transcript: "Hello" });
-  const history = await loadHistory(t.businessSlug, t.sessionId);
+  const { callToken, sessionId } = await openCall();
+  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: "Hello" });
+  const history = await loadHistory(businessSlug(), sessionId);
   assert.deepEqual(history.map((m) => m.content), ["Hello"]);
 });
 
-test("a voice answer's cards come from the tools the server ran, once per answer", async () => {
-  const t = target();
-  await recordVoiceItem({ ...t, itemId: item(), role: "user", transcript: "I'm Sam, sam's email follows" });
+test("without a live call's secret nothing runs and nothing is stored", async () => {
+  const { conversationId } = await openCall();
+  const forged = randomBytes(32).toString("base64url");
+  await assert.rejects(runVoiceTool({ callToken: forged, callId: "call_x", name: "save_lead", arguments: "{}" }), isExpired);
+  await assert.rejects(recordVoiceItem({ callToken: forged, itemId: item(), role: "user", transcript: "hi" }), isExpired);
+
+  const expired = await openCall({ expiresInMs: -1000 });
+  const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
+  await assert.rejects(
+    runVoiceTool({ callToken: expired.callToken, callId: "call_y", name: "save_lead", arguments: JSON.stringify({ name: "Late", email }) }),
+    isExpired,
+  );
+  const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("email", email);
+  assert.equal(count, 0, "an expired call can't save a lead");
+  const { count: calls } = await db().from("tool_calls").select("id", { count: "exact", head: true }).eq("conversation_id", conversationId);
+  assert.equal(calls, 0);
+});
+
+test("an answer's cards come from exactly the tool calls it used, once", async () => {
+  const { callToken, conversationId } = await openCall();
+  await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: "I'm Sam" });
   const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
   const args = JSON.stringify({ name: "Sam Voice", email });
-  const relayed = await runVoiceTool({ ...t, name: "save_lead", arguments: args });
+  const relayed = await runVoiceTool({ callToken, callId: "call_a", name: "save_lead", arguments: args });
   assert.equal(relayed.output.ok, true);
   assert.equal(relayed.action?.kind, "lead_saved");
   // The model repeats the call: still one card.
-  await runVoiceTool({ ...t, name: "save_lead", arguments: args });
+  await runVoiceTool({ callToken, callId: "call_b", name: "save_lead", arguments: args });
 
   const answer = item();
-  await recordVoiceItem({ ...t, itemId: answer, role: "assistant" });
-  const next = item();
-  await recordVoiceItem({ ...t, itemId: next, role: "assistant" });
+  await recordVoiceItem({ callToken, itemId: answer, role: "assistant", toolCallIds: ["call_a", "call_b"] });
+  // A later answer naming the same tool calls gets nothing: already attached.
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", toolCallIds: ["call_a", "call_b"] });
 
-  const { data } = await db()
-    .from("messages")
-    .select("client_message_id, actions")
-    .eq("conversation_id", await conversationId(t.sessionId))
-    .eq("role", "assistant")
-    .order("id");
+  const { data } = await db().from("messages").select("id, actions").eq("conversation_id", conversationId).eq("role", "assistant").order("id");
   assert.deepEqual(data![0].actions, [{ kind: "lead_saved", details: { name: "Sam Voice", email } }]);
-  assert.deepEqual(data![1].actions, [], "the next answer doesn't repeat the card");
+  assert.deepEqual(data![1].actions, []);
 
-  const { data: calls } = await db().from("tool_calls").select("channel").eq("conversation_id", await conversationId(t.sessionId));
-  assert.ok(calls!.every((c) => c.channel === "voice"), "audited as voice");
+  const { data: calls } = await db().from("tool_calls").select("channel, message_id").eq("conversation_id", conversationId);
+  assert.ok(calls!.every((c) => c.channel === "voice" && c.message_id === data![0].id), "audited as voice, linked to the answer");
 });
 
-test("a voice answer's citations come from the server's own tool calls", async () => {
-  const t = target();
-  await recordVoiceItem({ ...t, itemId: item(), role: "user", transcript: "Prices?" });
-  const source = { documentId: randomUUID(), title: "Pricing", heading: "Whitening", excerpt: "$349", similarity: 0.6 };
-  await db()
-    .from("tool_calls")
-    .insert({ conversation_id: await conversationId(t.sessionId), channel: "voice", name: "search_knowledge", arguments: {}, result: { ok: true, found: true }, ok: true, duration_ms: 5, sources: [source] });
-  await recordVoiceItem({ ...t, itemId: item(), role: "assistant" });
+test("another call can't borrow a call's tool results, even in the same conversation", async () => {
+  const first = await openCall();
+  const second = await openCall({ sessionId: first.sessionId });
+  const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
+  await runVoiceTool({ callToken: first.callToken, callId: "call_1", name: "save_lead", arguments: JSON.stringify({ name: "First", email }) });
 
-  const history = await loadHistory(t.businessSlug, t.sessionId);
+  await recordVoiceItem({ callToken: second.callToken, itemId: item(), role: "assistant", toolCallIds: ["call_1"] });
+  const { data } = await db().from("messages").select("actions").eq("conversation_id", first.conversationId);
+  assert.deepEqual(data, [{ actions: [] }]);
+});
+
+test("an answer's citations come from the server's own tool calls", async () => {
+  const { callToken, callId, sessionId, conversationId } = await openCall();
+  const source = { documentId: randomUUID(), title: "Pricing", heading: "Whitening", excerpt: "$349", similarity: 0.6 };
+  await db().from("tool_calls").insert({
+    conversation_id: conversationId,
+    voice_call_id: callId,
+    realtime_call_id: "call_search",
+    channel: "voice",
+    name: "search_knowledge",
+    arguments: {},
+    result: { ok: true, found: true },
+    ok: true,
+    duration_ms: 5,
+    sources: [source],
+  });
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", toolCallIds: ["call_search"] });
+
+  const history = await loadHistory(businessSlug(), sessionId);
   assert.deepEqual(history.at(-1)!.sources, [source]);
 });
 
 test("an unknown tool name is refused as a tool error, not a crash", async () => {
-  const t = target();
-  const relayed = await runVoiceTool({ ...t, name: "delete_everything", arguments: "{}" });
+  const { callToken } = await openCall();
+  const relayed = await runVoiceTool({ callToken, callId: "call_z", name: "delete_everything", arguments: "{}" });
   assert.equal(relayed.output.ok, false);
   assert.equal(relayed.action, null);
 });

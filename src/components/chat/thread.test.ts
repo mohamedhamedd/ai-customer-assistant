@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   applyEvent,
   canRetry,
+  heardPart,
   endVoice,
   voiceAssistantItem,
   voiceCaption,
@@ -222,4 +223,12 @@ test("history: an unanswered voice question isn't treated as in progress or retr
   assert.equal(turns[0].reply, null);
   assert.equal(turns[0].clientMessageId, null);
   assert.equal(isAnsweredElsewhere(turns), false);
+});
+
+test("an interrupted answer keeps roughly what was heard, marked", () => {
+  const answer = "In-office whitening is three hundred forty-nine dollars and the take-home kit is one hundred ninety-nine dollars.";
+  // 2 s of audio at ~2.7 words/s: the first 6 words.
+  assert.equal(heardPart(answer, 2000), "In-office whitening is three hundred forty-nine… (interrupted)");
+  assert.equal(heardPart(answer, 0), "(interrupted)", "cut off before any audio played");
+  assert.equal(heardPart(answer, 60_000), answer, "the whole answer had played");
 });

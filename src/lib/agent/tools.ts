@@ -20,6 +20,10 @@ export interface ToolContext {
   channel: Channel;
   timeZone: string;
   now: () => Date;
+  // Voice only, for the audit trail: the call this ran in and the model's id
+  // for the tool call, so an answer's cards come from exactly its tool calls.
+  voiceCallId?: string;
+  realtimeCallId?: string;
   // Defaults to the service-role client; tests pass a stub.
   client?: SupabaseClient<Database>;
 }

@@ -32,6 +32,8 @@ export interface AuditRow {
   duration_ms: number;
   // Citations (search_knowledge), so a voice answer can take them from here.
   sources: Source[];
+  voice_call_id?: string;
+  realtime_call_id?: string;
 }
 
 export interface ExecuteDeps {
@@ -126,6 +128,8 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
       ok: output.ok,
       duration_ms: Date.now() - started,
       sources,
+      voice_call_id: ctx.voiceCallId,
+      realtime_call_id: ctx.realtimeCallId,
     });
   } catch (err) {
     // The audit trail must never break the customer's conversation.

@@ -226,7 +226,14 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 | `result` | jsonb | no | | The exact payload returned to the model, `{ok, data}` or `{ok:false, error}` |
 | `ok` | boolean | no | | Denormalised from `result` for easy filtering of failures |
 | `duration_ms` | int | no | | Latency of the tool execution |
-| `sources` | jsonb | no | `'[]'` | Citations the call produced (`search_knowledge`). A voice answer's `sources` and `actions` are copied from the voice tool calls since the previous answer, by the server, so the browser can't forge them (PR-09) |
+| `sources` | jsonb | no | `'[]'` | Citations the call produced (`search_knowledge`) |
+| `voice_call_id` | uuid | yes | | Voice only: FK → `voice_calls`, set null. The call this tool ran in |
+| `realtime_call_id` | text | yes | | Voice only: the model's id for this tool call |
+| `message_id` | bigint | yes | | Voice only: FK → `messages`, set null. The answer this call's results were attached to. A voice answer's `sources` and `actions` are copied by the server from the tool calls the browser names, **limited to the same voice call and to calls not yet attached**, so the browser can't forge, borrow or repeat a card (PR-09) |
+
+### 3.6.1 `voice_calls`
+
+One row per voice call (PR-09). `/api/voice/session` creates it after OpenAI accepts the call and returns a random secret to the browser; only its **sha256** is stored (`token_hash`, unique). Every tool relay and transcript report must carry the secret: it resolves the call's conversation and business in one query, and an unknown or expired secret (`expires_at`, 70 minutes) is a 401 before anything runs. `openai_call_id` (from the `Location` header) is kept so the server can hang a call up later. RLS on, no anon/authenticated privileges.
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 ### 3.7 `leads`
@@ -522,7 +529,7 @@ The reverse order would not work: deleting the lead first sets `conversations.le
 
 | # | Limitation | Impact | Mitigation now | Production fix |
 |---|---|---|---|---|
-| L1 | **Voice transcripts are reported by the browser.** With WebRTC, transcripts arrive in the browser, which posts them to the server. A user could write fake "assistant" turns into **their own** history | Can only mislead the model within that visitor's own conversation. Database records come only from validated tool calls, and `customer_facts` is written only by `save_lead`, never from message text | Transcripts are stored with `channel = 'voice'`; tools re-validate every input server-side | Have the server observe the voice session directly. The Realtime API appears to support a server-side connection to a browser's WebRTC call, but this needs verifying before relying on it |
+| L1 | **Voice transcripts are reported by the browser.** With WebRTC, transcripts arrive in the browser, which posts them to the server. A user could write fake "assistant" turns into **their own** history | Can only mislead the model within that visitor's own conversation. Database records come only from validated tool calls, and `customer_facts` is written only by `save_lead`, never from message text | Transcripts are stored with `channel = 'voice'`; tools re-validate every input server-side; every voice request must carry the live call's secret, so this is limited to the visitor's own call and conversation (PR-09) | Have the server observe the voice session directly. The Realtime API appears to support a server-side connection to a browser's WebRTC call, but this needs verifying before relying on it |
 | L2 | **`session_id` is a bearer token.** Whoever holds it can read that conversation | An XSS bug or a shared computer exposes one conversation | Random UUID (122 bits), never in URLs, only in the visitor's localStorage | Short-lived signed session cookie (`HttpOnly`) instead of localStorage |
 | L3 | **Lead spam.** Anyone can create leads with made-up details | Junk rows in the leads list | Per-session rate limit (PR-13); validation | Bot protection (e.g. Turnstile) before voice/lead actions; email verification for high-value actions |
 | L4 | **Phone matching is best effort.** `555-1234` and `+1 555 1234` normalise to different values without a country | The same person can appear as two leads | Normalise to `+` and digits; email is the primary match key | Parse with a phone library (libphonenumber) using a default country from business settings |

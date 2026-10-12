@@ -224,6 +224,23 @@ export const voiceCaption = (turns: Turn[], itemId: string, delta: string) => up
 export const voiceCaptionDone = (turns: Turn[], itemId: string, transcript: string) =>
   updateVoiceReply(turns, itemId, (r) => ({ ...r, text: transcript || r.text, phase: "done" }));
 
+// The customer talked over the assistant. The caption text runs ahead of
+// the audio, so the full transcript includes words they never heard (and
+// OpenAI drops the text of a truncated answer from its own context). Keep
+// roughly what was heard, from how much audio played (audio_end_ms) at a
+// typical speaking rate, and say it was interrupted: that is what the screen
+// shows and what later turns, text or voice, see.
+export const SPOKEN_WORDS_PER_SECOND = 2.7; // about 160 words a minute
+export const INTERRUPTED = "(interrupted)";
+
+export function heardPart(text: string, audioEndMs: number): string {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const heard = Math.ceil((Math.max(0, audioEndMs) / 1000) * SPOKEN_WORDS_PER_SECOND);
+  if (heard >= words.length) return text.trim();
+  if (heard === 0) return INTERRUPTED;
+  return `${words.slice(0, heard).join(" ")}… ${INTERRUPTED}`;
+}
+
 // The call ended: nothing is streaming any more, and a line marks the end.
 export function endVoice(turns: Turn[], noticeKey: string): Turn[] {
   const settled = turns.map((t) => {

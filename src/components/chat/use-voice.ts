@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   endVoice,
+  heardPart,
+  INTERRUPTED,
   voiceAssistantItem,
   voiceCaption,
   voiceCaptionDone,
@@ -16,9 +18,14 @@ import {
 // Voice mode over the OpenAI Realtime API (US-2.x, design D-07).
 //
 // Audio flows browser <-> OpenAI over WebRTC. Our server opens the call
-// (/api/voice/session, so no key or token reaches the browser), runs the
-// tools the model calls (/api/voice/tool), and stores the transcripts
-// (/api/voice/items). Events arrive on the "oai-events" data channel.
+// (/api/voice/session, so no OpenAI key or token reaches the browser) and
+// returns a secret for this call; with it, the browser relays the tools the
+// model calls (/api/voice/tool) and reports transcripts (/api/voice/items).
+// Events arrive on the "oai-events" data channel.
+
+// A "disconnected" connection often recovers by itself (a network switch);
+// only end the call if it stays down this long, or "failed" outright.
+const DISCONNECT_GRACE_MS = 5000;
 
 export type VoiceState =
   | "off"
@@ -45,6 +52,9 @@ interface Connection {
   channel: RTCDataChannel;
   mic: MediaStream;
   audio: HTMLAudioElement;
+  // Proves to our server that requests belong to this live call.
+  callToken: string | null;
+  disconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface Deps {
@@ -72,34 +82,45 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     return run;
   }, []);
 
-  const post = useCallback(
-    async (path: string, body: Record<string, unknown>) => {
-      const res = await fetch(path, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ businessSlug, sessionId: getSessionId(), ...body }),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(err.error ?? `${path} failed (${res.status})`);
-      }
-      return res;
-    },
-    [businessSlug, getSessionId],
-  );
+  const post = useCallback(async (path: string, body: Record<string, unknown>) => {
+    const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? `${path} failed (${res.status})`);
+    }
+    return res;
+  }, []);
 
   // Storing a transcript is best effort: a failure costs one line of
-  // history, not the call.
+  // history, not the call. The secret is read now, not when the queue gets
+  // to it, so a report made just before the call ends still goes out.
   const report = useCallback(
-    (itemId: string, role: "user" | "assistant", transcript?: string) =>
-      void enqueue(() => post("/api/voice/items", { itemId, role, transcript })).catch((err) => console.error("[voice] report failed", err)),
+    (itemId: string, role: "user" | "assistant", transcript?: string, toolCallIds?: string[]) => {
+      const callToken = conn.current?.callToken;
+      if (!callToken) return;
+      void enqueue(() => post("/api/voice/items", { callToken, itemId, role, transcript, toolCallIds })).catch((err) =>
+        console.error("[voice] report failed", err),
+      );
+    },
     [enqueue, post],
   );
 
-  // Tool results waiting for the answer they belong to, and the tool calls
-  // of the current response (it continues only once all have answered).
-  const pending = useRef<{ sources: Source[]; actions: Action[] }>({ sources: [], actions: [] });
+  // Tool results waiting for the answer they belong to (the server attaches
+  // the same tool calls, by id, to the stored answer), and the tool calls of
+  // the current response (it continues only once all have answered).
+  const emptyPending = () => ({ sources: [] as Source[], actions: [] as Action[], toolCallIds: [] as string[] });
+  const pending = useRef(emptyPending());
   const toolCalls = useRef<Promise<void>[]>([]);
+
+  // Assistant captions, so an interruption or a cut-short response can be
+  // settled with what was actually heard. Once finished, late events for
+  // the item are ignored (an interruption wins over the full transcript).
+  const captions = useRef(new Map<string, { text: string; finished: boolean }>());
+  const finishCaption = (itemId: string, text: string) => {
+    captions.current.set(itemId, { text, finished: true });
+    updateTurns((ts) => voiceCaptionDone(ts, itemId, text));
+    report(itemId, "assistant", text);
+  };
 
   const send = (event: Record<string, unknown>) => {
     const channel = conn.current?.channel;
@@ -108,10 +129,12 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
 
   const runTool = (callId: string, name: string, args: string) => {
     setState("checking");
+    const callToken = conn.current?.callToken;
+    pending.current.toolCallIds.push(callId);
     const call = enqueue(async () => {
       let output: unknown;
       try {
-        const res = await post("/api/voice/tool", { name, arguments: args });
+        const res = await post("/api/voice/tool", { callToken, callId, name, arguments: args });
         const result = (await res.json()) as { output: unknown; sources: Source[]; action: Action | null };
         output = result.output;
         pending.current.sources.push(...result.sources);
@@ -145,10 +168,11 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
           updateTurns((ts) => voiceUserItem(ts, item.id));
           report(item.id, "user");
         } else if (item.role === "assistant") {
-          const extras = pending.current;
-          pending.current = { sources: [], actions: [] };
+          const { toolCallIds, ...extras } = pending.current;
+          pending.current = emptyPending();
+          captions.current.set(item.id, { text: "", finished: false });
           updateTurns((ts) => voiceAssistantItem(ts, item.id, extras));
-          report(item.id, "assistant");
+          report(item.id, "assistant", undefined, toolCallIds);
         }
         break;
       }
@@ -162,14 +186,26 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
       case "conversation.item.input_audio_transcription.failed":
         updateTurns((ts) => voiceUserTranscript(ts, event.item_id as string, ""));
         break;
-      case "response.output_audio_transcript.delta":
-        updateTurns((ts) => voiceCaption(ts, event.item_id as string, event.delta as string));
+      case "response.output_audio_transcript.delta": {
+        const itemId = event.item_id as string;
+        const caption = captions.current.get(itemId);
+        if (caption?.finished) break;
+        captions.current.set(itemId, { text: (caption?.text ?? "") + (event.delta as string), finished: false });
+        updateTurns((ts) => voiceCaption(ts, itemId, event.delta as string));
         break;
+      }
+      case "conversation.item.truncated": {
+        // The customer talked over this answer: keep what they heard.
+        const itemId = event.item_id as string;
+        const caption = captions.current.get(itemId);
+        if (caption) finishCaption(itemId, heardPart(caption.text, event.audio_end_ms as number));
+        break;
+      }
       case "response.output_audio_transcript.done": {
         const itemId = event.item_id as string;
         const transcript = (event.transcript as string) ?? "";
-        updateTurns((ts) => voiceCaptionDone(ts, itemId, transcript));
-        report(itemId, "assistant", transcript);
+        if (captions.current.get(itemId)?.finished) break; // interrupted first
+        finishCaption(itemId, transcript);
         if (transcript) announce(transcript);
         break;
       }
@@ -177,6 +213,15 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
         runTool(event.call_id as string, event.name as string, event.arguments as string);
         break;
       case "response.done": {
+        // An answer the response cut short (cancelled before its transcript
+        // finished) is settled with what arrived, marked as interrupted.
+        const response = event.response as { status?: string; output?: { id: string; type: string; role?: string }[] };
+        for (const out of response.output ?? []) {
+          const caption = out.type === "message" && out.role === "assistant" ? captions.current.get(out.id) : undefined;
+          if (!caption || caption.finished) continue;
+          const text = caption.text.trim();
+          finishCaption(out.id, response.status === "completed" ? text : text ? `${text}… ${INTERRUPTED}` : INTERRUPTED);
+        }
         // With tool calls, the model continues once every output is in.
         const calls = toolCalls.current;
         toolCalls.current = [];
@@ -205,13 +250,15 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
     const c = conn.current;
     conn.current = null;
     if (!c) return;
+    clearTimeout(c.disconnectTimer);
     c.channel.close();
     c.pc.close();
     c.mic.getTracks().forEach((t) => t.stop());
     c.audio.srcObject = null;
     setStreams({ mic: null, remote: null });
     toolCalls.current = [];
-    pending.current = { sources: [], actions: [] };
+    pending.current = emptyPending();
+    captions.current.clear();
   }, []);
 
   const connect = useCallback(async () => {
@@ -244,23 +291,33 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
         console.error("[voice] bad event", err);
       }
     };
+    const drop = () => {
+      if (conn.current?.pc !== pc) return;
+      teardown();
+      setError("Voice disconnected.");
+      setState("failed");
+    };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        if (conn.current?.pc !== pc) return;
-        teardown();
-        setError("Voice disconnected.");
-        setState("failed");
+      const c = conn.current;
+      if (c?.pc !== pc) return;
+      clearTimeout(c.disconnectTimer);
+      if (pc.connectionState === "failed") drop();
+      else if (pc.connectionState === "disconnected") {
+        c.disconnectTimer = setTimeout(() => {
+          if (pc.connectionState === "disconnected" || pc.connectionState === "failed") drop();
+        }, DISCONNECT_GRACE_MS);
       }
     };
-    conn.current = { pc, channel, mic, audio };
+    conn.current = { pc, channel, mic, audio, callToken: null };
     setStreams({ mic, remote: null });
 
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      const res = await post("/api/voice/session", { sdp: offer.sdp });
-      const { sdp } = (await res.json()) as { sdp: string };
+      const res = await post("/api/voice/session", { businessSlug, sessionId: getSessionId(), sdp: offer.sdp });
+      const { sdp, callToken } = (await res.json()) as { sdp: string; callToken: string };
       if (conn.current?.pc !== pc) return; // ended while connecting
+      conn.current.callToken = callToken;
       await pc.setRemoteDescription({ type: "answer", sdp });
     } catch (err) {
       if (conn.current?.pc !== pc) return;
@@ -268,7 +325,7 @@ export function useVoice({ businessSlug, getSessionId, updateTurns, announce }: 
       setError(err instanceof Error ? err.message : "Voice isn't available right now.");
       setState("failed");
     }
-  }, [post, teardown]);
+  }, [businessSlug, getSessionId, post, teardown]);
 
   // The explainer shows unless the browser already granted the microphone
   // (Firefox can't tell us, so it always shows there).
