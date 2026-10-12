@@ -5,11 +5,14 @@ import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
 import { executeTool } from "@/lib/agent/execute";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
-import { buildSystemPrompt, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
+import { buildSystemPrompt, promptFacts, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { formatHuman } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
+import { checkAnswer } from "@/lib/guard/check-answer";
+import { canary, liveGuards, type Guards, type Screen } from "@/lib/guard/guards";
+import { declineReply } from "@/lib/guard/prompts";
 
 // One customer message, end to end (design §7, §7.1): conversation, memory,
 // the agent loop, persistence and retries. The browser sends only
@@ -32,7 +35,9 @@ export type ChatEvent =
   | TurnEvent
   | { type: "sources"; sources: Source[] }
   | { type: "done"; messageId: number; replayed?: boolean }
-  | { type: "error"; message: string; retryable: boolean };
+  | { type: "error"; message: string; retryable: boolean }
+  // A guard rejected the streamed answer: show this text instead (PR-16).
+  | { type: "replace"; text: string };
 
 export class ChatHttpError extends Error {
   constructor(
@@ -227,11 +232,23 @@ export const REPLY_NOT_SAVED = "That answer couldn't be saved, so it may not app
 
 export interface ChatTurnDeps {
   complete: AgentDeps["complete"];
+  guards: Guards;
+  // The eval's baseline only: no output checks at all, to measure what the
+  // guards add. Never set in the app.
+  skipChecks?: boolean;
 }
 
 const defaultTurnDeps: ChatTurnDeps = {
   complete: (params, signal) => openai().chat.completions.create(params, { signal }),
+  guards: liveGuards,
 };
+
+// The input guard blocked the message: the turn stops.
+class Blocked extends Error {
+  constructor(readonly screen: Extract<Screen, { allowed: false }>) {
+    super("blocked by the input guard");
+  }
+}
 
 export async function runChatTurn(
   prepared: Extract<Awaited<ReturnType<typeof prepareChatTurn>>, { kind: "run" }>,
@@ -243,29 +260,86 @@ export async function runChatTurn(
   const started = Date.now();
   emit({ type: "start", userMessageId });
 
+  // The input guard screens the message while the agent starts, so it costs
+  // no time when it's faster than the agent's first words (it usually is).
+  // Until it clears the message nothing is shown and no tool runs; if it
+  // blocks, the agent is stopped and a standard reply goes out.
+  const stop = new AbortController();
+  const held: ChatEvent[] = [];
+  let cleared = false;
+  const screened = deps.guards.screen(business, input.message).then((screen) => {
+    if (screen.allowed) {
+      cleared = true;
+      for (const event of held.splice(0)) emit(event);
+    } else {
+      stop.abort(new Blocked(screen));
+    }
+    return screen;
+  });
+  const shown = (event: ChatEvent) => (cleared ? emit(event) : held.push(event));
+
   // Everything from here on is covered: any failure marks the turn failed, so
   // a retry re-runs at once instead of waiting out the in-progress window.
   let result: TurnResult;
+  let system = "";
+  let facts = "";
+  let history: HistoryMessage[] = [];
   try {
     // Independent reads, in parallel: both sit before the first model call.
-    const [history, state] = await Promise.all([recentHistory(conversation.id, userMessageId), conversationState(conversation, business.timezone)]);
+    let state: ConversationState;
+    [history, state] = await Promise.all([recentHistory(conversation.id, userMessageId), conversationState(conversation, business.timezone)]);
+    const promptInput = { business, now: new Date(), customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state };
+    system = buildSystemPrompt({ ...promptInput, channel: "text", canary: canary() });
+    facts = promptFacts(promptInput);
     result = await runAgentTurn(
       {
         model: env().OPENAI_CHAT_MODEL,
-        system: buildSystemPrompt({ business, now: new Date(), channel: "text", customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state }),
+        system,
         history,
         userText: input.message,
         tools: toolDefinitions(),
         toolCtx: { businessId: business.id, conversationId: conversation.id, channel: "text", timeZone: business.timezone, now: () => new Date() },
-        emit,
+        emit: shown,
+        signal: stop.signal,
+        beforeTool: async () => {
+          const screen = await screened;
+          if (!screen.allowed) throw new Blocked(screen);
+        },
       },
       { complete: deps.complete, executeTool },
     );
+    // A short answer can finish before the guard does: it still waits.
+    const screen = await screened;
+    if (!screen.allowed) throw new Blocked(screen);
   } catch (err) {
+    if (err instanceof Blocked) {
+      await sendBlocked(prepared, err.screen, input.message, emit, deps.guards, started);
+      return;
+    }
     await markFailed(userMessageId);
     log({ outcome: err instanceof TurnDeadlineError ? "deadline" : "error", conversationId: conversation.id, ms: Date.now() - started, error: errorText(err) });
     emit({ type: "error", message: AI_UNAVAILABLE, retryable: true });
     return;
+  }
+
+  // The output checks: the customer has seen the streamed answer, so a
+  // failed one is replaced on screen, and only the replacement is saved.
+  const checked = deps.skipChecks
+    ? { text: result.text, replaced: false, keepSources: true, failures: [] }
+    : await checkAnswer({
+    guards: deps.guards,
+    business,
+    canary: canary(),
+    question: input.message,
+    answer: result.text,
+    sources: result.sources.map((s) => s.title),
+    evidence: [facts, ...history.map((m) => m.content), input.message, ...result.evidence].join("\n"),
+    conversation: [{ role: "system", content: system }, ...history, { role: "user", content: input.message }],
+  });
+  const firstAnswer = result.text;
+  if (checked.replaced) {
+    emit({ type: "replace", text: checked.text });
+    result = { ...result, text: checked.text, sources: checked.keepSources ? result.sources : [] };
   }
 
   // The customer has now read the whole answer. Saving it gets one retry; if
@@ -281,9 +355,58 @@ export async function runChatTurn(
     return;
   }
 
+  for (const f of checked.failures) {
+    await deps.guards.record({ business_id: business.id, conversation_id: conversation.id, message_id: messageId, ...f, original: firstAnswer });
+  }
   emit({ type: "sources", sources: result.sources });
   emit({ type: "done", messageId });
-  log({ outcome: "ok", conversationId: conversation.id, ms: Date.now() - started, rounds: result.rounds, tools: result.toolCalls, usage: result.usage });
+  log({
+    outcome: "ok",
+    conversationId: conversation.id,
+    ms: Date.now() - started,
+    rounds: result.rounds,
+    tools: result.toolCalls,
+    usage: result.usage,
+    ...(checked.failures.length ? { replaced: checked.failures.map((f) => f.layer) } : {}),
+  });
+}
+
+// The input guard blocked the message: a standard reply, saved like any
+// answer (so history and retries behave), and the message recorded as a
+// flag the guard learns from.
+async function sendBlocked(
+  prepared: Extract<Awaited<ReturnType<typeof prepareChatTurn>>, { kind: "run" }>,
+  screen: Extract<Screen, { allowed: false }>,
+  message: string,
+  emit: (e: ChatEvent) => void,
+  guards: Guards,
+  started: number,
+) {
+  const { business, conversation, userMessageId } = prepared;
+  const text = declineReply(business.name);
+  emit({ type: "delta", text });
+  let messageId: number;
+  try {
+    messageId = await withOneRetry(() => saveReply(conversation.id, userMessageId, { text, sources: [], actions: [], toolCalls: [], evidence: [], rounds: 0, usage: { input: 0, output: 0, cachedInput: 0 } }));
+  } catch (err) {
+    await markFailed(userMessageId);
+    log({ outcome: "save_failed", conversationId: conversation.id, ms: Date.now() - started, error: errorText(err) });
+    emit({ type: "error", message: REPLY_NOT_SAVED, retryable: false });
+    return;
+  }
+  await guards.record({
+    business_id: business.id,
+    conversation_id: conversation.id,
+    message_id: userMessageId,
+    layer: "input",
+    category: screen.category,
+    reason: screen.reason,
+    original: message,
+    embedding: screen.embedding,
+  });
+  emit({ type: "sources", sources: [] });
+  emit({ type: "done", messageId });
+  log({ outcome: "blocked", conversationId: conversation.id, ms: Date.now() - started, category: screen.category });
 }
 
 // History before this message (the current one is passed separately), or

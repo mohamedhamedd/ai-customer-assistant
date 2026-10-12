@@ -17,6 +17,16 @@ export interface TranscriptMessage {
   createdAt: string;
   // A customer message the assistant never answered (the turn failed).
   replyFailed: boolean;
+  // What the guards blocked or replaced here (PR-16).
+  flags: MessageFlag[];
+}
+
+export interface MessageFlag {
+  layer: "input" | "canary" | "scope" | "numbers";
+  category: string;
+  reason: string;
+  // The customer's message, or the answer before it was replaced.
+  original: string;
 }
 
 export interface TranscriptToolCall {

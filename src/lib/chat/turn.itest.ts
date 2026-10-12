@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
+import type { Guards } from "@/lib/guard/guards";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -37,7 +38,16 @@ function session(): string {
   return id;
 }
 
+// The guards let everything through: these tests are about the turn itself.
+const allowAll: Guards = {
+  screen: async () => ({ allowed: true }),
+  scope: async () => ({ inScope: true, reason: "" }),
+  rewrite: async () => "",
+  record: async () => {},
+};
+
 const replies = (text: string): ChatTurnDeps => ({
+  guards: allowAll,
   complete: async () =>
     (async function* (): AsyncGenerator<ChatCompletionChunk> {
       yield { id: "c", object: "chat.completion.chunk", created: 0, model: "fake", choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] };
@@ -45,6 +55,7 @@ const replies = (text: string): ChatTurnDeps => ({
 });
 
 const failing: ChatTurnDeps = {
+  guards: allowAll,
   complete: async () => {
     throw new Error("model unavailable");
   },

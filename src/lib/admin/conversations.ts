@@ -3,7 +3,7 @@ import { db } from "@/lib/db/supabase";
 import type { Channel } from "@/lib/db/enums";
 import type { Source } from "@/lib/rag/retrieve";
 import { ChatHttpError } from "@/lib/chat/turn";
-import { interleave, type TranscriptItem, type TranscriptMessage, type TranscriptToolCall } from "./transcript";
+import { interleave, type MessageFlag, type TranscriptItem, type TranscriptMessage, type TranscriptToolCall } from "./transcript";
 
 // Conversation review (US-9.1 – 9.3). Every query is scoped to one business:
 // a conversation id from another business is a 404, like one that doesn't
@@ -61,7 +61,7 @@ export interface Transcript {
 }
 
 export async function conversationTranscript(businessId: string, conversationId: string): Promise<Transcript> {
-  const [conversation, messages, calls] = await Promise.all([
+  const [conversation, messages, calls, flags] = await Promise.all([
     db().from("conversations").select("id, created_at, last_message_at, leads(id, name)").eq("business_id", businessId).eq("id", conversationId).maybeSingle(),
     // One more than shown, to know whether older ones exist.
     db()
@@ -76,15 +76,22 @@ export async function conversationTranscript(businessId: string, conversationId:
       .eq("conversation_id", conversationId)
       .order("id", { ascending: false })
       .limit(TRANSCRIPT_LIMIT * 2),
+    db().from("flags").select("message_id, layer, category, reason, original").eq("conversation_id", conversationId).order("id"),
   ]);
   if (conversation.error) throw new Error(`Loading conversation failed: ${conversation.error.message}`);
   if (messages.error) throw new Error(`Loading messages failed: ${messages.error.message}`);
   if (calls.error) throw new Error(`Loading tool calls failed: ${calls.error.message}`);
+  if (flags.error) throw new Error(`Loading flags failed: ${flags.error.message}`);
   // Checked after the reads (which ran in parallel): nothing read for a
   // conversation of another business is returned.
   if (!conversation.data) throw new ChatHttpError(404, "That conversation doesn't exist.");
 
   const earlierOmitted = (messages.data ?? []).length > TRANSCRIPT_LIMIT;
+  const flagsByMessage = new Map<number, MessageFlag[]>();
+  for (const f of flags.data ?? []) {
+    if (f.message_id === null) continue;
+    flagsByMessage.set(f.message_id, [...(flagsByMessage.get(f.message_id) ?? []), { layer: f.layer as MessageFlag["layer"], category: f.category, reason: f.reason, original: f.original }]);
+  }
   const shown: TranscriptMessage[] = (messages.data ?? []).slice(0, TRANSCRIPT_LIMIT).map((m) => ({
     kind: "message",
     id: m.id,
@@ -94,6 +101,7 @@ export async function conversationTranscript(businessId: string, conversationId:
     sources: Array.isArray(m.sources) ? (m.sources as unknown as Source[]) : [],
     createdAt: m.created_at,
     replyFailed: m.reply_failed_at !== null,
+    flags: flagsByMessage.get(m.id) ?? [],
   }));
   // With older messages left out, their tool calls are left out too.
   const oldest = earlierOmitted ? new Date(shown[shown.length - 1].createdAt).getTime() : -Infinity;

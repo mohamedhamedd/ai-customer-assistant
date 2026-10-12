@@ -16,6 +16,7 @@
     "test": "node --conditions=react-server --import tsx --test \"src/**/*.test.ts\"",
     "ingest": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/ingest.ts",
     "eval:retrieval": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/eval-retrieval.ts",
+    "eval:guards": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/eval-guards.ts",
     "test:db": "supabase test db",
     "test:integration": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx --test --test-concurrency=1 \"src/**/*.itest.ts\""
   },

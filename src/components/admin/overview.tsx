@@ -19,7 +19,18 @@ interface OverviewData {
   recentRequests: RequestRow[];
   recentLeads: LeadRow[];
   knowledgeGaps: KnowledgeGap[];
+  flags7d: number;
+  recentFlags: { id: number; layer: string; category: string; conversationId: string; at: string }[];
 }
+
+const GUARD_LABEL: Record<string, string> = {
+  injection: "Prompt injection",
+  authority_claim: "Claim of authority",
+  internals: "Question about the assistant",
+  off_topic: "Off-topic request",
+  off_business: "Off-business answer replaced",
+  prompt_leak: "Prompt leak replaced",
+};
 
 // The admin's landing page: the week at a glance and what's new.
 export function Overview({ slug, timeZone }: { slug: string; timeZone: string }) {
@@ -109,6 +120,30 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
                       </span>
                       <time className="shrink-0 text-[12px] text-text-muted" title={new Date(g.askedAt).toLocaleString()}>
                         {relativeTime(g.askedAt)}
+                      </time>
+                    </Link>
+                  </li>
+                ))}
+              </Panel>
+              <Panel
+                title="Blocked by the guards"
+                subtitle={`Attacks and off-business answers stopped before a customer kept them. Last 7 days: ${data.flags7d}.`}
+                href={`${base}/conversations`}
+                linkLabel="Conversations"
+                empty="Nothing blocked yet."
+              >
+                {data.recentFlags.map((f) => (
+                  <li key={f.id}>
+                    <Link
+                      href={`${base}/conversations?c=${f.conversationId}`}
+                      className="flex min-h-12 items-center justify-between gap-3 px-5 py-2 text-[14px] hover:bg-surface-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+                    >
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium">{GUARD_LABEL[f.category] ?? (f.layer === "numbers" ? "Unsupported figure replaced" : f.category)}</span>
+                        <span className="text-text-muted"> · View conversation</span>
+                      </span>
+                      <time className="shrink-0 text-[12px] text-text-muted" title={new Date(f.at).toLocaleString()}>
+                        {relativeTime(f.at)}
                       </time>
                     </Link>
                   </li>

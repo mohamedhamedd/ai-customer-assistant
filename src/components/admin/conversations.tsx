@@ -1,10 +1,10 @@
 "use client";
 
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquare, Mic, RefreshCw, Volume2, Wrench, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquare, Mic, RefreshCw, ShieldAlert, Volume2, Wrench, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ConversationRow, Transcript } from "@/lib/admin/conversations";
-import { summarizeToolCall, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
+import { summarizeToolCall, type MessageFlag, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
 import { Markdown } from "@/components/chat/markdown";
 import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
@@ -283,6 +283,7 @@ function Message({ message: m, businessName, timeZone }: { message: TranscriptMe
             Not answered: the reply failed
           </p>
         )}
+        <Flags flags={m.flags} />
         {time}
       </div>
     );
@@ -296,6 +297,7 @@ function Message({ message: m, businessName, timeZone }: { message: TranscriptMe
         {m.content ? <Markdown text={m.content} /> : noTranscript}
       </div>
       <Sources sources={m.sources} businessName={businessName} />
+      <Flags flags={m.flags} />
       {time}
     </div>
   );
@@ -361,5 +363,43 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? <Check aria-hidden className="size-3.5 text-success" /> : <Copy aria-hidden className="size-3.5" />}
     </button>
+  );
+}
+
+const FLAG_LABEL: Record<string, string> = {
+  injection: "prompt injection",
+  authority_claim: "claim of authority",
+  internals: "question about the assistant itself",
+  off_topic: "off-topic request",
+  off_business: "answer not about the business",
+  prompt_leak: "system prompt leak",
+};
+const flagLabel = (f: MessageFlag) => FLAG_LABEL[f.category] ?? (f.layer === "numbers" ? "figure not in the documents" : f.category);
+
+// What the guards did here (PR-16). On a customer message: it was blocked
+// (or, by voice, flagged after it was heard). On an answer: the customer
+// saw a replacement; the original is one click away.
+function Flags({ flags }: { flags: MessageFlag[] }) {
+  if (flags.length === 0) return null;
+  return (
+    <div className="flex max-w-full flex-col gap-1">
+      {flags.map((f, i) => (
+        <div key={i} className={`rounded-lg border px-3 py-2 text-[12px] ${f.layer === "input" ? "border-danger/40 bg-danger/5 text-danger" : "border-warning/40 bg-warning/5 text-warning"}`}>
+          <p className="flex items-start gap-1.5 font-medium">
+            <ShieldAlert aria-hidden className="mt-px size-3.5 shrink-0" />
+            <span>
+              {f.layer === "input" ? "Guard" : "Replaced"}: {flagLabel(f)}
+              {f.reason && <span className="font-normal text-text-muted"> · {f.reason}</span>}
+            </span>
+          </p>
+          {f.layer !== "input" && (
+            <details className="mt-1 text-text-muted">
+              <summary className="cursor-pointer">Original answer (not kept)</summary>
+              <p className="mt-1 whitespace-pre-wrap break-words">{f.original}</p>
+            </details>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
