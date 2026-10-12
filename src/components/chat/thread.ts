@@ -25,6 +25,8 @@ export interface Reply {
   // The tool running right now, for the status line; null between tools.
   activeTool: string | null;
   error?: ReplyError;
+  // Voice: the Realtime item this caption belongs to.
+  voiceItemId?: string;
 }
 
 export interface Turn {
@@ -41,6 +43,11 @@ export interface Turn {
   // that is "waiting" is being answered elsewhere (the page was reloaded
   // mid-answer, or another tab): the hook polls history until it lands.
   restored?: boolean;
+  channel?: "text" | "voice";
+  // Voice: the customer's speech is still being transcribed.
+  transcribing?: boolean;
+  // A centred system line ("Voice session ended") instead of a message.
+  notice?: string;
 }
 
 const emptyReply = (): Reply => ({ phase: "waiting", text: "", sources: [], actions: [], activeTool: null });
@@ -124,6 +131,7 @@ export const isBusy = (turns: Turn[]) => {
 export interface HistoryMessage {
   id: number;
   role: "user" | "assistant";
+  channel: "text" | "voice";
   content: string | null;
   sources: unknown;
   actions: unknown;
@@ -138,14 +146,17 @@ export function turnsFromHistory(messages: HistoryMessage[]): Turn[] {
   const turns: Turn[] = [];
   for (const m of messages) {
     if (m.role === "user") {
+      const text = m.channel === "text";
       turns.push({
         key: `m${m.id}`,
-        clientMessageId: m.clientMessageId,
+        // A voice row's id is a Realtime item id: nothing to retry with.
+        clientMessageId: text ? m.clientMessageId : null,
         userText: m.content ?? "",
         sendState: "sent",
         // Retryable: the server re-runs a failed message with the same id.
-        reply: m.replyFailed ? { ...emptyReply(), phase: "error", error: { message: NOT_ANSWERED, retryable: true } } : null,
+        reply: text && m.replyFailed ? { ...emptyReply(), phase: "error", error: { message: NOT_ANSWERED, retryable: true } } : null,
         restored: true,
+        channel: m.channel,
       });
       continue;
     }
@@ -160,13 +171,13 @@ export function turnsFromHistory(messages: HistoryMessage[]): Turn[] {
     // An assistant message without a question before it (the page cut it
     // off) gets a turn of its own with no user bubble.
     if (last && last.reply?.phase !== "done") last.reply = reply;
-    else turns.push({ key: `m${m.id}`, clientMessageId: null, userText: "", sendState: "sent", reply, restored: true });
+    else turns.push({ key: `m${m.id}`, clientMessageId: null, userText: "", sendState: "sent", reply, restored: true, channel: m.channel });
   }
-  // The last question with no reply and no failure is still being answered
-  // (one turn at a time, so only the last can be). Older unanswered ones were
-  // abandoned and stay without a reply.
+  // The last text question with no reply and no failure is still being
+  // answered (one turn at a time, so only the last can be). Older unanswered
+  // ones were abandoned, and an unanswered voice question ended with its call.
   const last = turns.at(-1);
-  if (last && last.userText && !last.reply) last.reply = emptyReply();
+  if (last && last.channel === "text" && last.userText && !last.reply) last.reply = emptyReply();
   return turns;
 }
 
@@ -175,6 +186,69 @@ export function turnsFromHistory(messages: HistoryMessage[]): Turn[] {
 export function stopWaiting(turn: Turn): Turn {
   if (turn.reply?.phase !== "waiting") return turn;
   return { ...turn, reply: { ...emptyReply(), phase: "error", error: { message: NOT_ANSWERED, retryable: true } } };
+}
+
+// ---------------------------------------------------------------------------
+// Voice (Realtime items). Captions live in the same thread as text.
+// ---------------------------------------------------------------------------
+
+const voiceKey = (itemId: string) => `v:${itemId}`;
+
+// The customer started speaking: a turn whose text arrives when it's transcribed.
+export function voiceUserItem(turns: Turn[], itemId: string): Turn[] {
+  if (turns.some((t) => t.key === voiceKey(itemId))) return turns;
+  return [...turns, { key: voiceKey(itemId), clientMessageId: null, userText: "", sendState: "sent", reply: null, channel: "voice", transcribing: true }];
+}
+
+export function voiceUserTranscript(turns: Turn[], itemId: string, transcript: string): Turn[] {
+  return turns.map((t) => (t.key === voiceKey(itemId) ? { ...t, userText: transcript.trim(), transcribing: false } : t));
+}
+
+// The assistant started answering. Citations and cards from the tools it
+// just ran are attached here, as the server does for the stored copy.
+export function voiceAssistantItem(turns: Turn[], itemId: string, extras: { sources: Source[]; actions: Action[] }): Turn[] {
+  if (turns.some((t) => t.reply?.voiceItemId === itemId)) return turns;
+  const reply: Reply = { ...emptyReply(), phase: "streaming", sources: extras.sources, actions: extras.actions, voiceItemId: itemId };
+  const last = turns.at(-1);
+  if (last && last.channel === "voice" && !last.reply && !last.notice) return [...turns.slice(0, -1), { ...last, reply }];
+  // A second answer in a row (or an opening line): its own turn, no question.
+  return [...turns, { key: `${voiceKey(itemId)}:a`, clientMessageId: null, userText: "", sendState: "sent", reply, channel: "voice" }];
+}
+
+function updateVoiceReply(turns: Turn[], itemId: string, change: (r: Reply) => Reply): Turn[] {
+  return turns.map((t) => (t.reply?.voiceItemId === itemId ? { ...t, reply: change(t.reply) } : t));
+}
+
+export const voiceCaption = (turns: Turn[], itemId: string, delta: string) => updateVoiceReply(turns, itemId, (r) => ({ ...r, text: r.text + delta }));
+
+export const voiceCaptionDone = (turns: Turn[], itemId: string, transcript: string) =>
+  updateVoiceReply(turns, itemId, (r) => ({ ...r, text: transcript || r.text, phase: "done" }));
+
+// The customer talked over the assistant. The caption text runs ahead of
+// the audio, so the full transcript includes words they never heard (and
+// OpenAI drops the text of a truncated answer from its own context). Keep
+// roughly what was heard, from how much audio played (audio_end_ms) at a
+// typical speaking rate, and say it was interrupted: that is what the screen
+// shows and what later turns, text or voice, see.
+export const SPOKEN_WORDS_PER_SECOND = 2.7; // about 160 words a minute
+export const INTERRUPTED = "(interrupted)";
+
+export function heardPart(text: string, audioEndMs: number): string {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const heard = Math.ceil((Math.max(0, audioEndMs) / 1000) * SPOKEN_WORDS_PER_SECOND);
+  if (heard >= words.length) return text.trim();
+  if (heard === 0) return INTERRUPTED;
+  return `${words.slice(0, heard).join(" ")}… ${INTERRUPTED}`;
+}
+
+// The call ended: nothing is streaming any more, and a line marks the end.
+export function endVoice(turns: Turn[], noticeKey: string): Turn[] {
+  const settled = turns.map((t) => {
+    if (t.channel !== "voice") return t;
+    const reply = t.reply && t.reply.phase === "streaming" ? { ...t.reply, phase: "done" as const } : t.reply;
+    return { ...t, reply, transcribing: false };
+  });
+  return [...settled, { key: noticeKey, clientMessageId: null, userText: "", sendState: "sent", reply: null, notice: "Voice session ended" }];
 }
 
 export const isAnsweredElsewhere = (turns: Turn[]) => {

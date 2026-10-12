@@ -80,7 +80,7 @@ export async function findBusiness(slug: string): Promise<Business | null> {
 
 export const UNKNOWN_BUSINESS = "This assistant doesn't exist.";
 
-async function requireBusiness(slug: string): Promise<Business> {
+export async function requireBusiness(slug: string): Promise<Business> {
   const business = await findBusiness(slug);
   if (!business) throw new ChatHttpError(404, UNKNOWN_BUSINESS);
   return business;
@@ -88,7 +88,7 @@ async function requireBusiness(slug: string): Promise<Business> {
 
 // Race-safe get-or-create (design Q2): two tabs opening at once both end up
 // with the same row.
-async function conversationFor(businessId: string, sessionId: string) {
+export async function conversationFor(businessId: string, sessionId: string) {
   const { error: insertError } = await db()
     .from("conversations")
     .upsert({ business_id: businessId, session_id: sessionId }, { onConflict: "business_id,session_id", ignoreDuplicates: true });
@@ -267,23 +267,19 @@ export async function runChatTurn(
   log({ outcome: "ok", conversationId: conversation.id, ms: Date.now() - started, rounds: result.rounds, tools: result.toolCalls, usage: result.usage });
 }
 
-// History before this message (the current one is passed separately).
-async function recentHistory(conversationId: string, userMessageId: number): Promise<HistoryMessage[]> {
-  const { data, error } = await db()
-    .from("messages")
-    .select("role, content")
-    .eq("conversation_id", conversationId)
-    .not("content", "is", null)
-    .lt("id", userMessageId)
-    .order("id", { ascending: false })
-    .limit(HISTORY_LIMIT - 1);
+// History before this message (the current one is passed separately), or
+// the latest messages when there is no current one (a voice session start).
+export async function recentHistory(conversationId: string, beforeMessageId?: number): Promise<HistoryMessage[]> {
+  let query = db().from("messages").select("role, content").eq("conversation_id", conversationId).not("content", "is", null);
+  if (beforeMessageId !== undefined) query = query.lt("id", beforeMessageId);
+  const { data, error } = await query.order("id", { ascending: false }).limit(beforeMessageId === undefined ? HISTORY_LIMIT : HISTORY_LIMIT - 1);
   if (error) throw new Error(`Loading history failed: ${error.message}`);
   return (data ?? []).reverse().map((r) => ({ role: r.role as HistoryMessage["role"], content: r.content! }));
 }
 
 // Live from the database, so a request staff confirmed or cancelled shows its
 // current status.
-async function conversationState(conversation: { id: string; lead_id: string | null }, timeZone: string): Promise<ConversationState> {
+export async function conversationState(conversation: { id: string; lead_id: string | null }, timeZone: string): Promise<ConversationState> {
   const { data, error } = await db()
     .from("consultation_requests")
     .select("service, preferred_at, status")

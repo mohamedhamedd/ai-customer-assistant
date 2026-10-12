@@ -236,5 +236,26 @@ export function useChat(businessSlug: string) {
     void loadHistory();
   }, [loadHistory]);
 
-  return { turns, history, online, startedFresh, announcement, busy: isBusy(turns), send, retry, newConversation, reloadHistory };
+  // For voice: captions go into the same thread, under the same session.
+  const updateTurns = useCallback((change: (ts: Turn[]) => Turn[]) => {
+    generation.current++; // a history refresh in flight must not undo this
+    setTurns(change);
+  }, []);
+  const getSessionId = useCallback(() => sessionId.current, []);
+
+  return {
+    turns,
+    history,
+    online,
+    startedFresh,
+    announcement,
+    busy: isBusy(turns),
+    send,
+    retry,
+    newConversation,
+    reloadHistory,
+    updateTurns,
+    getSessionId,
+    announce: setAnnouncement,
+  };
 }

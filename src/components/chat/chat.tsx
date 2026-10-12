@@ -1,13 +1,15 @@
 "use client";
 
-import { AlertCircle, ArrowDown, Loader2, MoreHorizontal, RefreshCw, Sparkles, WifiOff } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ArrowDown, Loader2, Mic, MoreHorizontal, RefreshCw, Sparkles, Volume2, WifiOff } from "lucide-react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActionCard } from "./action-card";
 import { Composer, COMPOSER_ID } from "./composer";
 import { Markdown } from "./markdown";
 import { Sources } from "./sources";
 import { canRetry, toolStatus, visibleActions, type Action, type Turn } from "./thread";
 import { useChat } from "./use-chat";
+import { useVoice, voiceSupported } from "./use-voice";
+import { VoiceExplainer, VoicePanel } from "./voice-panel";
 
 export interface ChatBusiness {
   slug: string;
@@ -29,6 +31,10 @@ const initials = (name: string) =>
 export function Chat({ business }: { business: ChatBusiness }) {
   const chat = useChat(business.slug);
   const actions = useMemo(() => visibleActions(chat.turns), [chat.turns]);
+  const voice = useVoice({ businessSlug: business.slug, getSessionId: chat.getSessionId, updateTurns: chat.updateTurns, announce: chat.announce });
+  const voiceOn = voice.state !== "off" && voice.state !== "explain";
+  // Known only in the browser; false while server-rendering.
+  const canVoice = useSyncExternalStore(noSubscribe, voiceSupported, () => false);
   const empty = chat.history === "ready" && chat.turns.length === 0;
 
   // Follow the reply while the reader is at the bottom; if they scrolled up
@@ -73,7 +79,7 @@ export function Chat({ business }: { business: ChatBusiness }) {
 
   return (
     <div className="flex h-dvh flex-col bg-bg">
-      <Header business={business} onNewConversation={chat.newConversation} canReset={!chat.busy && chat.turns.length > 0} />
+      <Header business={business} onNewConversation={chat.newConversation} canReset={!chat.busy && !voiceOn && chat.turns.length > 0} />
 
       {!chat.online && (
         <div role="status" className="flex items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2.5 text-[13px] font-medium text-warning">
@@ -133,15 +139,31 @@ export function Chat({ business }: { business: ChatBusiness }) {
         {chat.announcement}
       </div>
 
+      {voice.state === "explain" && <VoiceExplainer onStart={voice.connect} onCancel={voice.cancel} />}
+
       <footer className="shrink-0 px-4 pb-4 pt-2">
         <div className="mx-auto max-w-[760px]">
-          <Composer
-            busy={chat.busy || chat.history !== "ready"}
-            businessName={business.name}
-            text={draft}
-            setText={setDraft}
-            onSend={send}
-          />
+          {voiceOn ? (
+            <VoicePanel
+              state={voice.state}
+              muted={voice.muted}
+              error={voice.error}
+              businessName={business.name}
+              level={voice.state === "speaking" ? voice.streams.remote : voice.streams.mic}
+              onToggleMute={voice.toggleMute}
+              onEnd={voice.end}
+              onReconnect={voice.connect}
+            />
+          ) : (
+            <Composer
+              busy={chat.busy || chat.history !== "ready"}
+              businessName={business.name}
+              text={draft}
+              setText={setDraft}
+              onSend={send}
+              onVoice={canVoice ? voice.start : undefined}
+            />
+          )}
         </div>
       </footer>
     </div>
@@ -272,16 +294,19 @@ function TurnViewInner({
   onTryAgain?: () => void;
 }) {
   const reply = turn.reply;
+  const spoken = turn.channel === "voice";
+  if (turn.notice) return <Notice text={turn.notice} />;
   return (
     <>
-      {turn.userText && (
+      {(turn.userText || turn.transcribing) && (
         <div className="flex flex-col items-end gap-1.5">
           <div
             className={`max-w-[85%] rounded-2xl rounded-br-[4px] bg-accent px-5 py-3.5 text-[16px] leading-[1.5] whitespace-pre-wrap text-accent-contrast [overflow-wrap:anywhere] md:max-w-[520px] ${
               turn.sendState === "notSent" ? "outline-2 outline-offset-2 outline-danger" : ""
             } ${turn.sendState === "sending" ? "opacity-80" : ""}`}
           >
-            {turn.userText}
+            {spoken && <Mic aria-label="Spoken" className="mr-2 inline size-4 -translate-y-px" />}
+            {turn.userText || <span aria-label="Transcribing">…</span>}
           </div>
           {turn.sendState === "notSent" && (
             <p role="alert" className="flex max-w-[85%] items-start gap-1 text-right text-[12px] font-medium text-danger md:max-w-[520px]">
@@ -326,6 +351,7 @@ function TurnViewInner({
 
             {reply.text && (
               <div className="rounded-2xl rounded-bl-[4px] bg-surface-muted px-5 py-3.5 text-[16px] leading-[1.5] [overflow-wrap:anywhere]">
+                {spoken && <Volume2 aria-label="Spoken answer" className="float-left mr-2 mt-1 size-4 text-text-muted" />}
                 <Markdown text={reply.text} />
                 {reply.phase === "streaming" && <span aria-hidden className="caret ml-0.5 inline-block h-4 w-2 translate-y-0.5 bg-accent" />}
               </div>
@@ -358,6 +384,8 @@ function TurnViewInner({
     </>
   );
 }
+
+const noSubscribe = () => () => {};
 
 function AssistantRow({ children }: { children: React.ReactNode }) {
   return (

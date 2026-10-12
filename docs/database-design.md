@@ -209,7 +209,7 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 **Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
-1. When the browser receives `conversation.item.created` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order. **Only items with `type = 'message'` and role `user` or `assistant` are reported.** The same event also fires for tool-call items, which belong in `tool_calls`, not here.
+1. When the browser receives `conversation.item.added` (which the Realtime API emits in conversation order), it reports the item and the server inserts the row with `content = NULL`. The `id` is now in the right order. **Only items with `type = 'message'` and role `user` or `assistant` are reported.** The same event also fires for tool-call items, which belong in `tool_calls`, not here.
 2. When the transcript completes, the browser sends it and the server fills `content` for that `(conversation_id, client_message_id)`. Both calls are idempotent. **An empty or whitespace-only transcript** (a cough, background noise) is stored as `NULL`, never `''`, which the `CHECK` would reject.
 
 ### 3.6 `tool_calls`
@@ -226,6 +226,14 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 | `result` | jsonb | no | | The exact payload returned to the model, `{ok, data}` or `{ok:false, error}` |
 | `ok` | boolean | no | | Denormalised from `result` for easy filtering of failures |
 | `duration_ms` | int | no | | Latency of the tool execution |
+| `sources` | jsonb | no | `'[]'` | Citations the call produced (`search_knowledge`) |
+| `voice_call_id` | uuid | yes | | Voice only: FK → `voice_calls`, set null. The call this tool ran in |
+| `realtime_call_id` | text | yes | | Voice only: the model's id for this tool call |
+| `message_id` | bigint | yes | | Voice only: FK → `messages`, set null. The answer this call's results were attached to. A voice answer's `sources` and `actions` are copied by the server from the tool calls the browser names, **limited to the same voice call and to calls not yet attached**, so the browser can't forge, borrow or repeat a card (PR-09) |
+
+### 3.6.1 `voice_calls`
+
+One row per voice call (PR-09). `/api/voice/session` creates it after OpenAI accepts the call and returns a random secret to the browser; only its **sha256** is stored (`token_hash`, unique). Every tool relay and transcript report must carry the secret: it resolves the call's conversation and business in one query, and an unknown or expired secret (`expires_at`, 70 minutes) is a 401 before anything runs. `openai_call_id` (from the `Location` header) is kept so the server can hang a call up later. RLS on, no anon/authenticated privileges.
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 ### 3.7 `leads`
@@ -433,7 +441,7 @@ A text turn is: store the user message → run the agent → store the assistant
 
 **Turn deadline.** A whole turn (all model calls and tool calls) has a hard limit of **45 s**; when it expires the turn stops and stores the fallback reply. Without this, a slow but live turn could pass the 60 s mark and a retry would start a second copy of it in parallel. The deadline is shorter than the window, so "≥ 60 s with no reply" reliably means the original is dead.
 
-**One turn at a time per conversation.** A new customer message goes through `begin_user_message()`, which locks the conversation row, refuses (409) if another turn in the conversation is still in progress, and only then inserts. Without it, a second message sent before the first was answered would run in parallel on stale history and state, and could create a second request. "In progress" is defined once, in `turn_in_progress()`, and used by both entry points.
+**One turn at a time per conversation.** A new customer message goes through `begin_user_message()`, which locks the conversation row, refuses (409) if another turn in the conversation is still in progress, and only then inserts. Without it, a second message sent before the first was answered would run in parallel on stale history and state, and could create a second request. "In progress" is defined once, in `turn_in_progress()`, and used by both entry points. Only **text** questions count: a voice question is answered by the Realtime session and its answer isn't linked through `reply_to_message_id`, so counting it blocked typing for 60 s after a voice call (found in live testing, PR-09).
 
 **Re-runs are claimed atomically.** A re-run is only started by the caller that wins `claim_reply_attempt()`: one conditional `UPDATE` that clears the failure flag and restarts `reply_attempt_at`, only if the message is failed or its last attempt is older than the window, and has no reply. Two concurrent retries can't both win: the second waits on the row lock, re-checks the condition after the first commits, finds it false and gets 409. The window is measured from the latest attempt, not from when the message was sent, so a re-run of an old message is itself "in progress" for 60 s.
 
@@ -521,7 +529,7 @@ The reverse order would not work: deleting the lead first sets `conversations.le
 
 | # | Limitation | Impact | Mitigation now | Production fix |
 |---|---|---|---|---|
-| L1 | **Voice transcripts are reported by the browser.** With WebRTC, transcripts arrive in the browser, which posts them to the server. A user could write fake "assistant" turns into **their own** history | Can only mislead the model within that visitor's own conversation. Database records come only from validated tool calls, and `customer_facts` is written only by `save_lead`, never from message text | Transcripts are stored with `channel = 'voice'`; tools re-validate every input server-side | Have the server observe the voice session directly. The Realtime API appears to support a server-side connection to a browser's WebRTC call, but this needs verifying before relying on it |
+| L1 | **Voice transcripts are reported by the browser.** With WebRTC, transcripts arrive in the browser, which posts them to the server. A user could write fake "assistant" turns into **their own** history | Can only mislead the model within that visitor's own conversation. Database records come only from validated tool calls, and `customer_facts` is written only by `save_lead`, never from message text | Transcripts are stored with `channel = 'voice'`; tools re-validate every input server-side; every voice request must carry the live call's secret, so this is limited to the visitor's own call and conversation (PR-09) | Have the server observe the voice session directly. The Realtime API appears to support a server-side connection to a browser's WebRTC call, but this needs verifying before relying on it |
 | L2 | **`session_id` is a bearer token.** Whoever holds it can read that conversation | An XSS bug or a shared computer exposes one conversation | Random UUID (122 bits), never in URLs, only in the visitor's localStorage | Short-lived signed session cookie (`HttpOnly`) instead of localStorage |
 | L3 | **Lead spam.** Anyone can create leads with made-up details | Junk rows in the leads list | Per-session rate limit (PR-13); validation | Bot protection (e.g. Turnstile) before voice/lead actions; email verification for high-value actions |
 | L4 | **Phone matching is best effort.** `555-1234` and `+1 555 1234` normalise to different values without a country | The same person can appear as two leads | Normalise to `+` and digits; email is the primary match key | Parse with a phone library (libphonenumber) using a default country from business settings |

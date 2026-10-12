@@ -171,18 +171,50 @@ isOneToOne: true
                   ]
                 },"tool_calls": {
                   Row: {
-                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"name": string,"ok": boolean,"result": NonNullable<Json>
+                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"message_id": number | null,"name": string,"ok": boolean,"realtime_call_id": string | null,"result": NonNullable<Json>,"sources": NonNullable<Json>,"voice_call_id": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at"?: string,"duration_ms": number,"id"?: never,"name": string,"ok": boolean,"result": NonNullable<Json>
+                    "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at"?: string,"duration_ms": number,"id"?: never,"message_id"?: number | null,"name": string,"ok": boolean,"realtime_call_id"?: string | null,"result": NonNullable<Json>,"sources"?: NonNullable<Json>,"voice_call_id"?: string | null
                   }
                   Update: {
-                    "arguments"?: NonNullable<Json>,"channel"?: string,"conversation_id"?: string,"created_at"?: string,"duration_ms"?: number,"id"?: never,"name"?: string,"ok"?: boolean,"result"?: NonNullable<Json>
+                    "arguments"?: NonNullable<Json>,"channel"?: string,"conversation_id"?: string,"created_at"?: string,"duration_ms"?: number,"id"?: never,"message_id"?: number | null,"name"?: string,"ok"?: boolean,"realtime_call_id"?: string | null,"result"?: NonNullable<Json>,"sources"?: NonNullable<Json>,"voice_call_id"?: string | null
                   }
                   Relationships: [
                     {
       foreignKeyName: "tool_calls_conversation_id_fkey"
+      columns: ["conversation_id"]
+isOneToOne: false
+      referencedRelation: "conversations"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "tool_calls_message_id_fkey"
+      columns: ["message_id"]
+isOneToOne: false
+      referencedRelation: "messages"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "tool_calls_voice_call_id_fkey"
+      columns: ["voice_call_id"]
+isOneToOne: false
+      referencedRelation: "voice_calls"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"voice_calls": {
+                  Row: {
+                    "conversation_id": string,"created_at": string,"expires_at": string,"id": string,"openai_call_id": string | null,"token_hash": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "conversation_id": string,"created_at"?: string,"expires_at": string,"id"?: string,"openai_call_id"?: string | null,"token_hash": string
+                  }
+                  Update: {
+                    "conversation_id"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"openai_call_id"?: string | null,"token_hash"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "voice_calls_conversation_id_fkey"
       columns: ["conversation_id"]
 isOneToOne: false
       referencedRelation: "conversations"
