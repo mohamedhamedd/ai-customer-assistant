@@ -138,16 +138,19 @@ test("several tool calls in one step run sequentially in the model's order", asy
     },
     { text: "Done." },
   ]);
-  const tools = fakeTools({
-    save_lead: { ok: true, saved: true, details: { name: "Sara" } },
-    create_consultation_request: { ok: true, request_id: "r1", status: "pending", service: "whitening", preferred_time: "Tue 3 PM", already_requested: false },
-  });
+  const outputs = {
+    save_lead: { ok: true as const, saved: true, details: { name: "Sara" } },
+    create_consultation_request: { ok: true as const, request_id: "r1", status: "pending", service: "whitening", preferred_time: "Tue 3 PM", already_requested: false },
+  };
+  const tools = fakeTools(outputs);
   const events: TurnEvent[] = [];
   const result = await runAgentTurn(baseInput(events), { complete: model.complete, executeTool: tools.executeTool });
 
   assert.deepEqual(tools.ran.map((r) => r.name), ["save_lead", "create_consultation_request"]);
   assert.deepEqual(result.actions.map((a) => a.kind), ["lead_saved", "consultation_requested"]);
   assert.equal(events.filter((e) => e.type === "action").length, 2);
+  // What the tools returned is the evidence the answer's figures are checked against (PR-16).
+  assert.deepEqual(result.evidence, [JSON.stringify(outputs.save_lead), JSON.stringify(outputs.create_consultation_request)]);
 });
 
 test("saving the same details twice in one turn gives one action", async () => {

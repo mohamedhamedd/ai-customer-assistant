@@ -138,12 +138,23 @@ test("an invented price is replaced: the rewrite fails too, so the safe reply st
 
 test("figures from this turn's tools or the customer pass; numbers in the rules don't count; a good rewrite replaces a bad answer", async () => {
   const { g, rewrites } = guards();
-  // From a tool result (save_lead returns the details it saved).
-  const tool = await turn(`I'm Sam, ${leadEmail}`, {
-    guards: g,
-    complete: scripted([{ tool: "save_lead", args: { name: "Sam", email: leadEmail, phone: "(503) 555-0199" } }, { text: "Saved. We'll call you at (503) 555-0199." }]),
-  });
-  assert.ok(!tool.events.some((e) => e.type === "replace"), "the phone is in the tool's result");
+  // From the conversation and a tool result: the customer's details, read
+  // back, confirmed, then saved (save_lead runs only after the yes, see
+  // confirm.ts; that tool results count as evidence is in loop.test.ts).
+  const sessionId = randomUUID();
+  const readBack = await turn(
+    `I'm Sam, ${leadEmail}, 503 555 0199`,
+    { guards: g, complete: scripted([{ text: `Just to confirm: Sam, ${leadEmail}, (503) 555-0199. Is that right?` }]) },
+    sessionId,
+  );
+  assert.ok(!readBack.events.some((e) => e.type === "replace"), "the read-back's phone is the customer's own");
+  const tool = await turn(
+    "Yes",
+    { guards: g, complete: scripted([{ tool: "save_lead", args: { name: "Sam", email: leadEmail, phone: "(503) 555-0199" } }, { text: "Saved. We'll call you at (503) 555-0199." }]) },
+    sessionId,
+  );
+  assert.ok(tool.events.some((e) => e.type === "action" && e.action.kind === "lead_saved"), "confirmed, so saved");
+  assert.ok(!tool.events.some((e) => e.type === "replace"), "the phone is in the tool's result and the conversation");
   // From the customer's own words.
   const own = await turn("I was quoted $480 last year, is that still the price?", { guards: g, complete: scripted([{ text: "I don't have this year's price for that, but you mentioned $480." }]) });
   assert.ok(!own.events.some((e) => e.type === "replace"));
