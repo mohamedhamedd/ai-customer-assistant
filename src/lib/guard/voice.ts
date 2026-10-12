@@ -26,6 +26,10 @@ export async function flagVoiceItem(item: StoredVoiceItem, guards: Guards = live
     if (error) throw new Error(error.message);
     const profile = { id: business.id, name: business.name, description: business.description, guidelines: business.assistant_guidelines };
     const base = { business_id: item.businessId, conversation_id: item.conversationId, message_id: item.messageId, original: item.text };
+    // A transcript can be reported again (corrected): the latest one is
+    // what's checked, so its earlier flags go, and nothing is counted twice.
+    const { error: clearError } = await db().from("flags").delete().eq("message_id", item.messageId);
+    if (clearError) throw new Error(clearError.message);
 
     if (item.role === "user") {
       const screen = await guards.screen(profile, item.text);

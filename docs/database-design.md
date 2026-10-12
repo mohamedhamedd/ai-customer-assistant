@@ -250,13 +250,13 @@ What the guards blocked or replaced. One row per event: the customer message the
 | `conversation_id` | uuid | yes | FK, cascade |
 | `message_id` | bigint | yes | The blocked customer message, or the stored replacement answer |
 | `layer` | text | no | `input`, `canary`, `scope`, `numbers` |
-| `category` | text | no | e.g. `injection`, `authority_claim`, `off_business`, `money` |
+| `category` | text | no | e.g. `injection`, `authority_claim`, `off_business`, `money`; `missed` for an attack caught in the answer, recorded on the customer message so the input guard learns it |
 | `reason` | text | no | The guard's one-line reason |
 | `original` | text | no | What was blocked: the message, or the answer before it was replaced. Staff-only |
 | `embedding` | vector(1536) | yes | Input layer only: the guard's examples come from the most similar past blocks (`similar_flags()`, same business) |
 | `created_at` | timestamptz | no | |
 
-Indexes: `(business_id, created_at desc)` for the overview, `message_id` and `conversation_id` for the transcript, HNSW on `embedding` where present. `clone_business_for_eval()` copies a business (profile, ready documents, chunks with embeddings, input flags) for `npm run eval:guards`, which deletes the copy afterwards.
+Input-layer flags also keep a message out of the model's history on later turns. Indexes: `(business_id, created_at desc)` for the overview, `message_id` and `conversation_id` for the transcript, HNSW on `embedding` where present. `clone_business_for_eval()` copies a business (profile, ready documents, chunks with embeddings, input flags) for `npm run eval:guards`, which deletes the copy afterwards.
 
 ### 3.7 `leads`
 

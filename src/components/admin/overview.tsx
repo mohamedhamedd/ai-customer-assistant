@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { KnowledgeGap } from "@/lib/admin/conversations";
 import type { LeadRow, RequestRow } from "@/lib/admin/crm";
+import { guardLabel } from "@/lib/guard/labels";
 import { maskEmail, maskPhone } from "@/components/chat/thread";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -23,14 +24,6 @@ interface OverviewData {
   recentFlags: { id: number; layer: string; category: string; conversationId: string; at: string }[];
 }
 
-const GUARD_LABEL: Record<string, string> = {
-  injection: "Prompt injection",
-  authority_claim: "Claim of authority",
-  internals: "Question about the assistant",
-  off_topic: "Off-topic request",
-  off_business: "Off-business answer replaced",
-  prompt_leak: "Prompt leak replaced",
-};
 
 // The admin's landing page: the week at a glance and what's new.
 export function Overview({ slug, timeZone }: { slug: string; timeZone: string }) {
@@ -139,7 +132,7 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
                       className="flex min-h-12 items-center justify-between gap-3 px-5 py-2 text-[14px] hover:bg-surface-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
                     >
                       <span className="min-w-0 truncate">
-                        <span className="font-medium">{GUARD_LABEL[f.category] ?? (f.layer === "numbers" ? "Unsupported figure replaced" : f.category)}</span>
+                        <span className="font-medium">{guardLabel(f)}</span>
                         <span className="text-text-muted"> · View conversation</span>
                       </span>
                       <time className="shrink-0 text-[12px] text-text-muted" title={new Date(f.at).toLocaleString()}>

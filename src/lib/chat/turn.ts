@@ -11,7 +11,7 @@ import { isBusinessSlug } from "@/lib/chat/limits";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 import { checkAnswer } from "@/lib/guard/check-answer";
-import { canary, liveGuards, type Guards, type Screen } from "@/lib/guard/guards";
+import { canary, liveGuards, screenFailOpen, type Guards, type Screen } from "@/lib/guard/guards";
 import { declineReply } from "@/lib/guard/prompts";
 
 // One customer message, end to end (design §7, §7.1): conversation, memory,
@@ -264,19 +264,30 @@ export async function runChatTurn(
   // no time when it's faster than the agent's first words (it usually is).
   // Until it clears the message nothing is shown and no tool runs; if it
   // blocks, the agent is stopped and a standard reply goes out.
+  //
+  // If the guard allows the message but wasn't sure ("hold"), the answer's
+  // text isn't streamed at all: it's checked first and sent in one piece, so
+  // a leak can't reach even someone reading the raw stream. Tool progress
+  // and cards still show.
   const stop = new AbortController();
   const held: ChatEvent[] = [];
   let cleared = false;
-  const screened = deps.guards.screen(business, input.message).then((screen) => {
+  let holdText = false;
+  const show = (event: ChatEvent) => {
+    if (!(holdText && event.type === "delta")) emit(event);
+  };
+  const onScreen = (screen: Screen) => {
     if (screen.allowed) {
       cleared = true;
-      for (const event of held.splice(0)) emit(event);
+      holdText = screen.hold === true;
+      for (const event of held.splice(0)) show(event);
     } else {
       stop.abort(new Blocked(screen));
     }
     return screen;
-  });
-  const shown = (event: ChatEvent) => (cleared ? emit(event) : held.push(event));
+  };
+  const shown = (event: ChatEvent) => (cleared ? show(event) : held.push(event));
+  let screened: Promise<Screen> = Promise.resolve({ allowed: true });
 
   // Everything from here on is covered: any failure marks the turn failed, so
   // a retry re-runs at once instead of waiting out the in-progress window.
@@ -288,6 +299,9 @@ export async function runChatTurn(
     // Independent reads, in parallel: both sit before the first model call.
     let state: ConversationState;
     [history, state] = await Promise.all([recentHistory(conversation.id, userMessageId), conversationState(conversation, business.timezone)]);
+    // The guard gets the last few turns: an attack can be set up over several
+    // messages. It fails open (an error or a slow guard counts as allowed).
+    screened = screenFailOpen(deps.guards.screen(business, input.message, history)).then(onScreen);
     const promptInput = { business, now: new Date(), customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state };
     system = buildSystemPrompt({ ...promptInput, channel: "text", canary: canary() });
     facts = promptFacts(promptInput);
@@ -322,8 +336,10 @@ export async function runChatTurn(
     return;
   }
 
-  // The output checks: the customer has seen the streamed answer, so a
-  // failed one is replaced on screen, and only the replacement is saved.
+  const screen = (await screened) as Extract<Screen, { allowed: true }>;
+
+  // The output checks. A streamed answer that fails is replaced on screen; a
+  // held one is sent only now, already checked. Only the final text is saved.
   const checked = deps.skipChecks
     ? { text: result.text, replaced: false, keepSources: true, failures: [] }
     : await checkAnswer({
@@ -337,8 +353,9 @@ export async function runChatTurn(
     conversation: [{ role: "system", content: system }, ...history, { role: "user", content: input.message }],
   });
   const firstAnswer = result.text;
+  if (holdText) emit({ type: "delta", text: checked.text });
+  else if (checked.replaced) emit({ type: "replace", text: checked.text });
   if (checked.replaced) {
-    emit({ type: "replace", text: checked.text });
     result = { ...result, text: checked.text, sources: checked.keepSources ? result.sources : [] };
   }
 
@@ -357,6 +374,23 @@ export async function runChatTurn(
 
   for (const f of checked.failures) {
     await deps.guards.record({ business_id: business.id, conversation_id: conversation.id, message_id: messageId, ...f, original: firstAnswer });
+  }
+  // An attack the input guard let through and an output check caught (a leak
+  // or an off-business answer, not a wrong figure): the customer's message is
+  // recorded as an input example too, so the input guard stops it next time,
+  // and it leaves the history of later turns.
+  const missed = checked.failures.find((f) => f.layer === "canary" || f.layer === "scope");
+  if (missed) {
+    await deps.guards.record({
+      business_id: business.id,
+      conversation_id: conversation.id,
+      message_id: userMessageId,
+      layer: "input",
+      category: "missed",
+      reason: `Got past the input guard; caught in the answer (${missed.layer}).`,
+      original: input.message,
+      embedding: screen.embedding,
+    });
   }
   emit({ type: "sources", sources: result.sources });
   emit({ type: "done", messageId });
@@ -411,12 +445,27 @@ async function sendBlocked(
 
 // History before this message (the current one is passed separately), or
 // the latest messages when there is no current one (a voice session start).
+//
+// Messages the input guard blocked are left out, with the standard reply to
+// them (PR-16): a blocked injection must not reach the model on a later turn
+// through the history ("ignore your rules…", blocked, then "ok, go on").
 export async function recentHistory(conversationId: string, beforeMessageId?: number): Promise<HistoryMessage[]> {
-  let query = db().from("messages").select("role, content").eq("conversation_id", conversationId).not("content", "is", null);
+  const limit = beforeMessageId === undefined ? HISTORY_LIMIT : HISTORY_LIMIT - 1;
+  let query = db().from("messages").select("id, role, content, reply_to_message_id").eq("conversation_id", conversationId).not("content", "is", null);
   if (beforeMessageId !== undefined) query = query.lt("id", beforeMessageId);
-  const { data, error } = await query.order("id", { ascending: false }).limit(beforeMessageId === undefined ? HISTORY_LIMIT : HISTORY_LIMIT - 1);
-  if (error) throw new Error(`Loading history failed: ${error.message}`);
-  return (data ?? []).reverse().map((r) => ({ role: r.role as HistoryMessage["role"], content: r.content! }));
+  const [messages, blocked] = await Promise.all([
+    // Extra rows, so dropping blocked pairs still leaves a full window.
+    query.order("id", { ascending: false }).limit(limit + 10),
+    db().from("flags").select("message_id").eq("conversation_id", conversationId).eq("layer", "input").not("message_id", "is", null),
+  ]);
+  if (messages.error) throw new Error(`Loading history failed: ${messages.error.message}`);
+  if (blocked.error) throw new Error(`Loading flags failed: ${blocked.error.message}`);
+  const hidden = new Set((blocked.data ?? []).map((f) => f.message_id));
+  return (messages.data ?? [])
+    .filter((m) => !hidden.has(m.id) && !(m.reply_to_message_id !== null && hidden.has(m.reply_to_message_id)))
+    .slice(0, limit)
+    .reverse()
+    .map((r) => ({ role: r.role as HistoryMessage["role"], content: r.content! }));
 }
 
 // Live from the database, so a request staff confirmed or cancelled shows its

@@ -15,7 +15,15 @@ import { inputGuardMessages, inputGuardSchema, scopeCheckMessages, scopeCheckSch
 // customer still gets an answer (the plain-code checks still run). Blocking
 // every customer because a classifier timed out would be the worse outage.
 
-export type Screen = { allowed: true; embedding?: number[] } | { allowed: false; category: Exclude<InputCategory, "ok">; reason: string; embedding?: number[] };
+// `hold`: allowed, but the guard wasn't sure (the message touches on the
+// assistant itself, roles, rules). The answer is then checked before any of
+// it is shown, instead of streaming and being replaced afterwards.
+export type Screen =
+  | { allowed: true; hold?: boolean; embedding?: number[] }
+  | { allowed: false; category: Exclude<InputCategory, "ok">; reason: string; embedding?: number[] };
+
+// The last few turns, for context: an attack can be spread over messages.
+export type GuardContext = { role: "user" | "assistant"; content: string }[];
 
 export interface FlagRow {
   business_id: string;
@@ -30,7 +38,7 @@ export interface FlagRow {
 
 export interface Guards {
   // The input guard: is this customer message safe to answer?
-  screen(business: GuardBusiness & { id: string }, message: string): Promise<Screen>;
+  screen(business: GuardBusiness & { id: string }, message: string, context?: GuardContext): Promise<Screen>;
   // The scope check: is this answer about the business?
   scope(business: GuardBusiness, question: string, answer: string, sources: string[]): Promise<{ inScope: boolean; reason: string }>;
   // One more try at an answer that failed a check, with the reason.
@@ -38,8 +46,9 @@ export interface Guards {
   record(flag: FlagRow): Promise<void>;
 }
 
-// How long the input guard may take before the turn goes on without it.
-export const SCREEN_TIMEOUT_MS = 3_000;
+// How long the input guard may take, all steps included (embedding,
+// examples, classification), before the turn goes on without it.
+export const SCREEN_TIMEOUT_MS = 3_500;
 const SCOPE_TIMEOUT_MS = 5_000;
 
 const log = (message: string, err?: unknown) => console.error(`[guard] ${message}`, err instanceof Error ? err.message : (err ?? ""));
@@ -53,14 +62,18 @@ async function classify<T>(messages: ChatCompletionMessageParam[], schema: typeo
 }
 
 export const liveGuards: Guards = {
-  async screen(business, message) {
+  async screen(business, message, context = []) {
     let embedding: number[] | undefined;
     try {
       // The past blocked messages most like this one are the guard's examples.
       [embedding] = await embedTexts([message.slice(0, 2000)]);
       const { data: examples } = await db().rpc("similar_flags", { p_business_id: business.id, p_embedding: JSON.stringify(embedding), p_limit: 3 });
-      const verdict = await classify<{ category: InputCategory; reason: string }>(inputGuardMessages(business, message, examples ?? []), inputGuardSchema, SCREEN_TIMEOUT_MS);
-      if (verdict.category === "ok" || !verdict.category) return { allowed: true, embedding };
+      const verdict = await classify<{ category: InputCategory; risk: "low" | "elevated"; reason: string }>(
+        inputGuardMessages(business, message, examples ?? [], context),
+        inputGuardSchema,
+        SCREEN_TIMEOUT_MS,
+      );
+      if (verdict.category === "ok" || !verdict.category) return { allowed: true, hold: verdict.risk === "elevated", embedding };
       return { allowed: false, category: verdict.category, reason: verdict.reason ?? "", embedding };
     } catch (err) {
       log("screen failed; allowing", err);
@@ -94,6 +107,30 @@ export const liveGuards: Guards = {
     if (error) log(`recording a ${flag.layer} flag failed`, error.message);
   },
 };
+
+// Whatever the guard does, the turn goes on: a guard that errors, or takes
+// longer than SCREEN_TIMEOUT_MS in total, counts as "allowed". Enforced here,
+// around any implementation, not inside one: fail-open is a property of the
+// chat turn, not something each guard has to remember.
+export function screenFailOpen(screen: Promise<Screen>, ms = SCREEN_TIMEOUT_MS): Promise<Screen> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      log(`screen took over ${ms} ms; allowing`);
+      resolve({ allowed: true });
+    }, ms);
+    screen.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (err) => {
+        clearTimeout(timer);
+        log("screen failed; allowing", err);
+        resolve({ allowed: true });
+      },
+    );
+  });
+}
 
 // A string placed in the system prompt that must never appear in an answer.
 // If it does, the prompt leaked, whatever the wording of the attack. Derived

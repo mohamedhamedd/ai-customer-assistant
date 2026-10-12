@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
+import { EVAL_SLUG_PREFIX } from "@/lib/admin/profile";
 import { liveGuards, type Guards } from "@/lib/guard/guards";
 import { declineReply } from "@/lib/guard/prompts";
 import { prepareChatTurn, runChatTurn, type ChatTurnDeps } from "@/lib/chat/turn";
@@ -137,10 +138,28 @@ async function main() {
   if (error || !source) throw new Error(`No business "${slug}".`);
   const business: Business = { id: source.id, name: source.name, description: source.description, guidelines: source.assistant_guidelines };
 
-  const evalSlug = `eval-${randomUUID().slice(0, 8)}`;
+  // Copies left by a run that was killed (more than an hour old: not one
+  // running now in another terminal).
+  const { data: stale } = await db()
+    .from("businesses")
+    .delete()
+    .like("slug", `${EVAL_SLUG_PREFIX}%`)
+    .lt("created_at", new Date(Date.now() - 3_600_000).toISOString())
+    .select("slug");
+  if (stale?.length) console.log(`Removed ${stale.length} copy(ies) left by an interrupted run.`);
+
+  const evalSlug = `${EVAL_SLUG_PREFIX}${randomUUID().slice(0, 8)}`;
   const { data: cloneId, error: cloneError } = await db().rpc("clone_business_for_eval", { p_source: business.id, p_slug: evalSlug });
   if (cloneError) throw new Error(`Cloning failed: ${cloneError.message}`);
   const clone = { ...business, id: cloneId as string };
+  const removeClone = () => db().from("businesses").delete().eq("id", clone.id);
+  // Ctrl+C: delete the copy before exiting (finally{} doesn't run on a signal).
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      console.log("\nStopping: removing the copy…");
+      void removeClone().then(() => process.exit(130));
+    });
+  }
 
   try {
     const { data: past } = await db().from("flags").select("original").eq("business_id", business.id).eq("layer", "input").order("created_at", { ascending: false }).limit(10);
@@ -182,7 +201,7 @@ ${business.name} · guards ${guardsOn ? "ON" : "OFF"}
   Turn time               p50 ${(p(all, 0.5) / 1000).toFixed(1)} s · p95 ${(p(all, 0.95) / 1000).toFixed(1)} s
 ─────────────────────────────────────────────`);
   } finally {
-    await db().from("businesses").delete().eq("id", clone.id);
+    await removeClone();
   }
 }
 

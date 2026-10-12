@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConversationRow, Transcript } from "@/lib/admin/conversations";
 import { summarizeToolCall, type MessageFlag, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
 import { Markdown } from "@/components/chat/markdown";
+import { guardLabel } from "@/lib/guard/labels";
 import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -366,15 +367,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-const FLAG_LABEL: Record<string, string> = {
-  injection: "prompt injection",
-  authority_claim: "claim of authority",
-  internals: "question about the assistant itself",
-  off_topic: "off-topic request",
-  off_business: "answer not about the business",
-  prompt_leak: "system prompt leak",
-};
-const flagLabel = (f: MessageFlag) => FLAG_LABEL[f.category] ?? (f.layer === "numbers" ? "figure not in the documents" : f.category);
 
 // What the guards did here (PR-16). On a customer message: it was blocked
 // (or, by voice, flagged after it was heard). On an answer: the customer
@@ -388,7 +380,7 @@ function Flags({ flags }: { flags: MessageFlag[] }) {
           <p className="flex items-start gap-1.5 font-medium">
             <ShieldAlert aria-hidden className="mt-px size-3.5 shrink-0" />
             <span>
-              {f.layer === "input" ? "Guard" : "Replaced"}: {flagLabel(f)}
+              {f.layer === "input" ? "Guard" : "Replaced"}: {guardLabel(f)}
               {f.reason && <span className="font-normal text-text-muted"> · {f.reason}</span>}
             </span>
           </p>
