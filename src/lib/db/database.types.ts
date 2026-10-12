@@ -239,6 +239,9 @@ isOneToOne: false
 "commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
                            },
+"consultation_status_counts":
+{ Args: { "p_business_id": string }; Returns: Json
+                           },
 "create_consultation_request":
 { Args: { "p_business_id": string,"p_conversation_id": string,"p_notes"?: string,"p_preferred_at": string,"p_service": string }; Returns: Json
                            },

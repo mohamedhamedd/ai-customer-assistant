@@ -44,7 +44,10 @@ async function request(businessId: string, leadId: string, preferredAt: string, 
   return data!.id;
 }
 
-const day = (n: number) => new Date(Date.UTC(2026, 9, 20 + n, 17)).toISOString();
+// Relative to when the suite runs, so "upcoming" stays upcoming: fixed
+// dates would turn into past requests (listed differently) a week later.
+const BASE = Math.ceil(Date.now() / 3_600_000) * 3_600_000; // next whole hour
+const day = (n: number) => new Date(BASE + n * 86_400_000).toISOString();
 
 before(async () => {
   mine = await business("Mine");

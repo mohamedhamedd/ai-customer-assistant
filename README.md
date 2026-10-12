@@ -133,7 +133,7 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 - **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest and consultation requests.
 - **Consultations** (`/admin/[slug]/consultations`): Pending by default, then Confirmed / Cancelled / All. Upcoming requests first (soonest first), then past ones (most recent first), each part capped, so history never pushes next week off the list. The contact shown is the snapshot taken with the request. Status changes apply at once (optimistic) with a toast; the row's menu is locked while it saves, and if the save fails the row goes back and the toast says why. Reopening a cancelled request whose time slot was requested again is refused (one active request per slot).
 - **Times** are stored in UTC and always shown in the business's timezone, each with its own zone label ("3:00 PM PDT", and "PST" after the clock change), so staff and customer mean the same 3:00 PM.
-- **Counts** (tabs, sidebar badge, overview) come from one SQL function, `admin_counts()`.
+- **Counts:** the overview's numbers come from one SQL function, `admin_counts()` (the 7-day conversation count uses an index on message dates); the status tabs and the sidebar badge use the lighter `consultation_status_counts()`.
 - Lists are capped at 200 rows; past that, the next step is cursor pagination. Every query is scoped to the business in the URL.
 
 ## Agent: prompt and tools

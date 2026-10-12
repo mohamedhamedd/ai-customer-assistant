@@ -131,9 +131,12 @@ async function adminCounts(businessId: string): Promise<AdminCounts> {
   return data as unknown as AdminCounts;
 }
 
+// The tabs and the sidebar badge: one indexed pass over this business's
+// requests (consultation_status_counts in SQL), not the overview's counts.
 export async function statusCounts(businessId: string): Promise<Record<ConsultationStatus, number>> {
-  const { pending, confirmed, cancelled } = await adminCounts(businessId);
-  return { pending, confirmed, cancelled };
+  const { data, error } = await db().rpc("consultation_status_counts", { p_business_id: businessId });
+  if (error) throw new Error(`Counting requests failed: ${error.message}`);
+  return data as unknown as Record<ConsultationStatus, number>;
 }
 
 // Upcoming requests first (soonest first: what staff confirm next), then
