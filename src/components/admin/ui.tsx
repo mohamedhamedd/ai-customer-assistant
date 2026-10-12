@@ -50,6 +50,20 @@ export function useDialog(onClose: () => void, opts: { busy?: boolean; fallback?
   return panel;
 }
 
+// Copy to the clipboard; `copied` is true for a moment after, for a check
+// mark. A blocked clipboard (no permission, insecure page) does nothing.
+export function useCopy() {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }, []);
+  return { copied, copy };
+}
+
 // One message at a time, bottom right, gone after a few seconds.
 export function useToast() {
   const [toast, setToast] = useState<{ text: string; tone: "success" | "danger"; key: number } | null>(null);

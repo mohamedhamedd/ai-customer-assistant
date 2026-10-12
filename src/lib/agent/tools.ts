@@ -106,7 +106,7 @@ const searchKnowledge = defineTool({
   parameters: {
     type: "object",
     properties: {
-      query: { type: "string", description: "A short, specific search query, e.g. 'teeth whitening price'." },
+      query: { type: "string", description: "A short, specific search query, e.g. 'monthly membership price'." },
     },
     required: ["query"],
     additionalProperties: false,
@@ -228,7 +228,7 @@ const createConsultationRequest = defineTool({
   parameters: {
     type: "object",
     properties: {
-      service: { type: "string", description: "The service the consultation is for, e.g. 'teeth whitening'." },
+      service: { type: "string", description: "The service the consultation is for, e.g. 'initial consultation'." },
       preferred_datetime: {
         type: "string",
         description: "Preferred date and time as LOCAL time in the business's timezone, format YYYY-MM-DDTHH:mm, e.g. 2026-10-20T15:00.",

@@ -19,7 +19,24 @@ test("carries the grounding, request-not-booking and tool-result rules", () => {
   assert.match(p, /found: false/);
   assert.match(p, /Never say it is booked, scheduled or confirmed/);
   assert.match(p, /Only say an action succeeded if its result says ok: true/);
-  assert.match(p, /911/);
+});
+
+test("the shared rules fit any business: no clinic rule, no dental example", () => {
+  const gym = { name: "Acme Fitness", description: "A neighbourhood gym.", timezone: "America/Chicago" };
+  for (const channel of ["text", "voice"] as const) {
+    const p = buildSystemPrompt({ business: gym, now, channel, customerFacts: {} });
+    assert.doesNotMatch(p, /911|diagnos|dental|teeth|whitening|treatment|emergency room/i);
+    assert.doesNotMatch(p, /# Rules from/, "no guidelines section when the business has none");
+  }
+});
+
+test("a business's own guidelines come after the shared rules, and can't override them", () => {
+  const rules = "Never quote a repair price before an inspection.";
+  const p = buildSystemPrompt({ business: { ...business, guidelines: `  ${rules}\n` }, now, channel: "text", customerFacts: {} });
+  const at = p.indexOf("# Rules from Lakeside Dental Clinic");
+  assert.ok(at > p.indexOf("# Boundaries"), "after the shared rules");
+  assert.ok(at < p.indexOf("# Date and time"), "before the clock: part of the cached prefix");
+  assert.ok(p.includes(`follow the rules above.\n${rules}`), "the rules, trimmed");
 });
 
 test("contains no business facts: those must come from retrieval", () => {
