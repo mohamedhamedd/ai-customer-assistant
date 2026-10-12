@@ -239,6 +239,25 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 One row per voice call (PR-09). `/api/voice/session` creates it after OpenAI accepts the call and returns a random secret to the browser; only its **sha256** is stored (`token_hash`, unique). Every tool relay and transcript report must carry the secret: it resolves the call's conversation and business in one query, and an unknown or expired secret (`expires_at`, 70 minutes) is a 401 before anything runs. `openai_call_id` (from the `Location` header) is kept so the server can hang a call up later. RLS on, no anon/authenticated privileges.
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
+### 3.6b `flags` (PR-16)
+
+What the guards blocked or replaced. One row per event: the customer message the input guard blocked, or the answer an output check replaced (canary, numbers, scope).
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `id` | bigint identity | no | PK |
+| `business_id` | uuid | no | FK, cascade |
+| `conversation_id` | uuid | yes | FK, cascade |
+| `message_id` | bigint | yes | The blocked customer message, or the stored replacement answer |
+| `layer` | text | no | `input`, `canary`, `scope`, `numbers` |
+| `category` | text | no | e.g. `injection`, `authority_claim`, `off_business`, `money`; `missed` for an attack caught in the answer, recorded on the customer message so the input guard learns it |
+| `reason` | text | no | The guard's one-line reason |
+| `original` | text | no | What was blocked: the message, or the answer before it was replaced. Staff-only |
+| `embedding` | vector(1536) | yes | Input layer only: the guard's examples come from the most similar past blocks (`similar_flags()`, same business) |
+| `created_at` | timestamptz | no | |
+
+Input-layer flags also keep a message out of the model's history on later turns. Indexes: `(business_id, created_at desc)` for the overview, `message_id` and `conversation_id` for the transcript, HNSW on `embedding` where present. `clone_business_for_eval()` copies a business (profile, ready documents, chunks with embeddings, input flags) for `npm run eval:guards`, which deletes the copy afterwards.
+
 ### 3.7 `leads`
 
 A person who shared contact details with the agent.

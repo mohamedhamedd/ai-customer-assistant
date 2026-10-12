@@ -50,6 +50,11 @@ export interface TurnInput {
   toolCtx: ToolContext;
   emit: (event: TurnEvent) => void;
   deadlineMs?: number;
+  // Stops the turn from outside (the input guard blocked the message).
+  signal?: AbortSignal;
+  // Awaited before any tool runs: nothing is executed until the input guard
+  // has cleared the message. Throws to stop the turn.
+  beforeTool?: () => Promise<void>;
 }
 
 export interface TurnResult {
@@ -57,6 +62,9 @@ export interface TurnResult {
   sources: Source[];
   actions: Action[];
   toolCalls: { name: string; ok: boolean }[];
+  // What the tools returned, as the model saw it: the evidence the answer's
+  // figures are checked against.
+  evidence: string[];
   rounds: number;
   usage: { input: number; output: number; cachedInput: number };
 }
@@ -80,6 +88,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
   const deadlineAt = Date.now() + budget;
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(new TurnDeadlineError()), budget);
+  const signal = input.signal ? AbortSignal.any([deadline.signal, input.signal]) : deadline.signal;
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: input.system },
@@ -95,6 +104,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
   const sources: Source[] = [];
   const actions: Action[] = [];
   const toolCalls: TurnResult["toolCalls"] = [];
+  const evidence: string[] = [];
   const usage = { input: 0, output: 0, cachedInput: 0 };
   let rounds = 0;
 
@@ -113,7 +123,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
           stream: true,
           stream_options: { include_usage: true },
         },
-        deadline.signal,
+        signal,
         // A new round's text starts as a new paragraph.
         (text, first) => input.emit({ type: "delta", text: first && texts.length > 0 ? `\n\n${text}` : text }),
         usage,
@@ -129,6 +139,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
         // A tool can't be cancelled once started, so only start one whose full
         // timeout fits in the remaining budget: the turn really ends by its deadline.
         if (deadline.signal.aborted || deadlineAt - Date.now() < TOOL_TIMEOUT_MS) throw new TurnDeadlineError();
+        await input.beforeTool?.();
         input.emit({ type: "tool", name: call.function.name, status: "started" });
         const outcome = await deps.executeTool(call.function.name, call.function.arguments, input.toolCtx);
         input.emit({ type: "tool", name: call.function.name, status: "finished", ok: outcome.ok });
@@ -139,11 +150,14 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
           actions.push(action);
           input.emit({ type: "action", action });
         }
-        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(outcome.output) });
+        const output = JSON.stringify(outcome.output);
+        evidence.push(output);
+        messages.push({ role: "tool", tool_call_id: call.id, content: output });
       }
     }
   } catch (err) {
     if (deadline.signal.aborted) throw deadline.signal.reason;
+    if (input.signal?.aborted) throw input.signal.reason;
     throw err;
   } finally {
     clearTimeout(timer);
@@ -151,7 +165,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
 
   const text = texts.join("\n\n").trim();
   if (!text) input.emit({ type: "delta", text: EMPTY_REPLY });
-  return { text: text || EMPTY_REPLY, sources: dedupeSources(sources), actions, toolCalls, rounds, usage };
+  return { text: text || EMPTY_REPLY, sources: dedupeSources(sources), actions, toolCalls, evidence, rounds, usage };
 }
 
 interface StepResult {

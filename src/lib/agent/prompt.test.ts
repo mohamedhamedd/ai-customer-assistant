@@ -112,3 +112,9 @@ test("the assistant stays on the business and keeps conditions in short answers"
   assert.match(p, /Decline only requests that have nothing to do with the business \(trivia, coding/);
   assert.match(p, /keep any condition that changes the answer/);
 });
+
+test("the canary sits in the static part of the prompt, before the clock", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, canary: "ref-abc123" });
+  assert.ok(p.indexOf("ref-abc123") > 0 && p.indexOf("ref-abc123") < p.indexOf("# Date and time"));
+  assert.doesNotMatch(buildSystemPrompt({ business, now, channel: "text", customerFacts: {} }), /Reference code/);
+});

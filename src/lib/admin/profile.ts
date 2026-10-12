@@ -7,8 +7,10 @@ import { BUSINESS_SLUG, MAX_SLUG_CHARS } from "@/lib/chat/limits";
 
 export const PROFILE_LIMITS = { name: 100, description: 500, guidelines: 2000 } as const;
 
-// /admin/new is the create page, so no business can be called "new".
+// /admin/new is the create page, so no business can be called "new"; and
+// "eval-…" is the guard eval's throwaway copies (npm run eval:guards).
 const RESERVED_SLUGS = new Set(["new"]);
+export const EVAL_SLUG_PREFIX = "eval-";
 
 // The form's list: every IANA timezone this browser knows. UTC isn't in
 // Intl's list but is a valid choice.
@@ -37,7 +39,7 @@ export const profileSchema = z.object({
     .min(1, "Enter a slug.")
     .max(MAX_SLUG_CHARS, `Keep the slug under ${MAX_SLUG_CHARS} characters.`)
     .regex(BUSINESS_SLUG, "Use lowercase letters, numbers and single dashes (e.g. acme-fitness).")
-    .refine((s) => !RESERVED_SLUGS.has(s), "This slug is reserved. Choose another one."),
+    .refine((s) => !RESERVED_SLUGS.has(s) && !s.startsWith(EVAL_SLUG_PREFIX), "This slug is reserved. Choose another one."),
   description: z.string().trim().max(PROFILE_LIMITS.description, `Keep the description under ${PROFILE_LIMITS.description} characters.`),
   timezone: z.string().refine(isTimeZone, "Choose a timezone from the list."),
   guidelines: z.string().trim().max(PROFILE_LIMITS.guidelines, `Keep the guidelines under ${PROFILE_LIMITS.guidelines} characters.`),

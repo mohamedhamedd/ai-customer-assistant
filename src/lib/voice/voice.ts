@@ -7,7 +7,9 @@ import { openai } from "@/lib/openai";
 import { executeTool } from "@/lib/agent/execute";
 import { repeatsAction, toAction, type Action } from "@/lib/agent/loop";
 import type { CustomerFacts } from "@/lib/agent/prompt";
+import { canary } from "@/lib/guard/guards";
 import { toolDefinitions, type ToolOutput } from "@/lib/agent/tools";
+import type { StoredVoiceItem } from "@/lib/guard/voice";
 import { ChatHttpError, conversationFor, conversationState, recentHistory, requireBusiness } from "@/lib/chat/turn";
 import type { Source } from "@/lib/rag/retrieve";
 import { realtimeSession } from "./session";
@@ -43,6 +45,7 @@ export async function startVoiceCall(target: { businessSlug: string; sessionId: 
     model: env().OPENAI_REALTIME_MODEL,
     voice: env().OPENAI_REALTIME_VOICE,
     transcribeModel: env().OPENAI_TRANSCRIBE_MODEL,
+    canary: canary(),
   });
 
   let answer: Response;
@@ -126,6 +129,8 @@ export async function runVoiceTool(input: { callToken: string; callId: string; n
 // A voice message in two steps (design §3.5): reported when the Realtime
 // item is created (so its id is in conversation order) and again when its
 // transcript is ready. Both are idempotent on (conversation, item id).
+// Returns the message when new text was stored, for the guards' after-the-
+// fact checks (PR-16); null otherwise.
 export async function recordVoiceItem(input: {
   callToken: string;
   itemId: string;
@@ -133,8 +138,10 @@ export async function recordVoiceItem(input: {
   transcript?: string;
   // Assistant only: the Realtime ids of the tool calls this answer used.
   toolCallIds?: string[];
-}) {
+}): Promise<StoredVoiceItem | null> {
   const call = await liveCall(input.callToken);
+  const stored = (messageId: number, text: string | null): StoredVoiceItem | null =>
+    text ? { businessId: call.businessId, conversationId: call.conversationId, messageId, role: input.role, text } : null;
   // A cough or silence transcribes to nothing: stored as null, never "".
   const content = input.transcript?.trim() || null;
 
@@ -150,8 +157,9 @@ export async function recordVoiceItem(input: {
     if (content && existing.content !== content) {
       const { error } = await db().from("messages").update({ content }).eq("id", existing.id);
       if (error) throw new Error(`Saving voice transcript failed: ${error.message}`);
+      return stored(existing.id, content);
     }
-    return;
+    return null;
   }
 
   const used = input.role === "assistant" ? await unattachedToolCalls(call.id, input.toolCallIds ?? []) : [];
@@ -174,7 +182,8 @@ export async function recordVoiceItem(input: {
   if (error) throw new Error(`Saving voice item failed: ${error.message}`);
   const messageId = inserted?.[0]?.id;
   // A concurrent report inserted it first; that one owns the tool calls.
-  if (messageId === undefined || used.length === 0) return;
+  if (messageId === undefined) return null;
+  if (used.length === 0) return stored(messageId, content);
   const { error: linkError } = await db()
     .from("tool_calls")
     .update({ message_id: messageId })
@@ -183,6 +192,7 @@ export async function recordVoiceItem(input: {
       used.map((c) => c.id),
     );
   if (linkError) throw new Error(`Linking tool calls failed: ${linkError.message}`);
+  return stored(messageId, content);
 }
 
 interface UsedToolCall {

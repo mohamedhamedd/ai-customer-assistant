@@ -13,6 +13,7 @@ const msg = (id: number, role: "user" | "assistant", s: number, channel: "text" 
   sources: [],
   createdAt: t(s),
   replyFailed: false,
+  flags: [],
 });
 
 const call = (id: number, s: number, messageId: number | null = null): TranscriptToolCall => ({

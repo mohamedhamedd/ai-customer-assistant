@@ -1,11 +1,12 @@
 "use client";
 
-import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquare, Mic, RefreshCw, Volume2, Wrench, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, Copy, Loader2, MessageSquare, Mic, RefreshCw, ShieldAlert, Volume2, Wrench, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ConversationRow, Transcript } from "@/lib/admin/conversations";
-import { summarizeToolCall, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
+import { summarizeToolCall, type MessageFlag, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
 import { Markdown } from "@/components/chat/markdown";
+import { guardLabel } from "@/lib/guard/labels";
 import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -252,7 +253,7 @@ function TranscriptPane({
             item.kind === "tool" ? (
               showActivity && <ToolCallRow key={`t${item.id}`} call={item} />
             ) : (
-              <Message key={`m${item.id}`} message={item} businessName={businessName} timeZone={timeZone} />
+              <Message key={`m${item.id}`} message={item} businessName={businessName} timeZone={timeZone} api={api} />
             ),
           )}
         </div>
@@ -262,7 +263,7 @@ function TranscriptPane({
 }
 
 // The customer side's message styles, smaller and read-only.
-function Message({ message: m, businessName, timeZone }: { message: TranscriptMessage; businessName: string; timeZone: string }) {
+function Message({ message: m, businessName, timeZone, api }: { message: TranscriptMessage; businessName: string; timeZone: string; api: string }) {
   const voice = m.channel === "voice";
   const time = (
     <time dateTime={m.createdAt} className="text-[11px] text-text-muted">
@@ -283,6 +284,7 @@ function Message({ message: m, businessName, timeZone }: { message: TranscriptMe
             Not answered: the reply failed
           </p>
         )}
+        <Flags flags={m.flags} api={api} />
         {time}
       </div>
     );
@@ -296,6 +298,7 @@ function Message({ message: m, businessName, timeZone }: { message: TranscriptMe
         {m.content ? <Markdown text={m.content} /> : noTranscript}
       </div>
       <Sources sources={m.sources} businessName={businessName} />
+      <Flags flags={m.flags} api={api} />
       {time}
     </div>
   );
@@ -361,5 +364,92 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? <Check aria-hidden className="size-3.5 text-success" /> : <Copy aria-hidden className="size-3.5" />}
     </button>
+  );
+}
+
+
+// What the guards did here (PR-16). On a customer message: it was blocked
+// (or, by voice, flagged after it was heard), or its answer was caught. On
+// an answer: the customer saw a replacement; the original is one click away.
+function Flags({ flags, api }: { flags: MessageFlag[]; api: string }) {
+  if (flags.length === 0) return null;
+  return (
+    <div className="flex max-w-full flex-col gap-1">
+      {flags.map((f) => (
+        <FlagNote key={f.id} flag={f} api={api} />
+      ))}
+    </div>
+  );
+}
+
+const REVIEWED: Record<Exclude<MessageFlag["status"], "new">, string> = {
+  confirmed: "Confirmed attack: the guard learns from it.",
+  dismissed: "Dismissed: a real customer. Not used for learning.",
+};
+
+function FlagNote({ flag, api }: { flag: MessageFlag; api: string }) {
+  const [status, setStatus] = useState(flag.status);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const blockedMessage = flag.layer === "input" || flag.layer === "caught";
+  const review = async (next: "confirmed" | "dismissed") => {
+    setSaving(true);
+    setFailed(false);
+    try {
+      const res = await fetch(`${api}/flags/${flag.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: next }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) throw new Error();
+      setStatus(next);
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-[12px] ${blockedMessage ? "border-danger/40 bg-danger/5 text-danger" : "border-warning/40 bg-warning/5 text-warning"}`}>
+      <p className="flex items-start gap-1.5 font-medium">
+        <ShieldAlert aria-hidden className="mt-px size-3.5 shrink-0" />
+        <span>
+          {blockedMessage ? "Guard" : "Replaced"}: {guardLabel(flag)}
+          {flag.reason && <span className="font-normal text-text-muted"> · {flag.reason}</span>}
+        </span>
+      </p>
+      {!blockedMessage && (
+        <details className="mt-1 text-text-muted">
+          <summary className="cursor-pointer">Original answer (not kept)</summary>
+          <p className="mt-1 whitespace-pre-wrap break-words">{flag.original}</p>
+        </details>
+      )}
+      {blockedMessage &&
+        (status === "new" ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-text">
+            <span className="text-text-muted">Teach the guard?</span>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => review("confirmed")}
+              className="h-7 rounded-md border border-border bg-surface px-2 font-medium hover:bg-surface-muted disabled:opacity-50"
+            >
+              Confirm attack
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => review("dismissed")}
+              className="h-7 rounded-md border border-border bg-surface px-2 font-medium hover:bg-surface-muted disabled:opacity-50"
+            >
+              Not an attack
+            </button>
+            {failed && <span className="text-danger">Couldn&apos;t save. Try again.</span>}
+          </div>
+        ) : (
+          <p className="mt-1 text-text-muted">{REVIEWED[status]}</p>
+        ))}
+    </div>
   );
 }
