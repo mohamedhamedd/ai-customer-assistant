@@ -8,7 +8,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { ChatHttpError, conversationFor, findBusiness, loadHistory, recentHistory } from "@/lib/chat/turn";
-import { CALL_EXPIRED, CALL_TIME_LIMIT, recordVoiceItem, runVoiceTool } from "./voice";
+import { CALL_EXPIRED, CALL_TIME_LIMIT, claimHangUp, recordVoiceItem, runVoiceTool } from "./voice";
 
 const sessions: string[] = [];
 after(async () => {
@@ -160,4 +160,13 @@ test("an unknown tool name is refused as a tool error, not a crash", async () =>
   const relayed = await runVoiceTool({ callToken, callId: "call_z", name: "delete_everything", arguments: "{}" });
   assert.equal(relayed.output.ok, false);
   assert.equal(relayed.action, null);
+});
+
+test("a hang-up is claimed once, then again only after a minute", async () => {
+  const { callId } = await openCall({ expiresInMs: -1000 });
+  const now = Date.now();
+  assert.equal(await claimHangUp(callId, now), true, "first attempt");
+  assert.equal(await claimHangUp(callId, now + 1_000), false, "a second request right after: skipped");
+  const [a, b] = await Promise.all([claimHangUp(callId, now + 61_000), claimHangUp(callId, now + 61_000)]);
+  assert.equal(Number(a) + Number(b), 1, "after a minute, exactly one of two concurrent requests retries");
 });

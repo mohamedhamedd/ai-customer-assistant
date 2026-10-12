@@ -102,7 +102,7 @@ export function Chat({ business }: { business: ChatBusiness }) {
             )}
             {chat.history === "failed" && (
               <div className="flex flex-col items-start gap-2">
-                <p className="text-[14px] text-text-muted">Couldn&apos;t load this conversation.</p>
+                <p className="text-[14px] text-text-muted">{chat.historyError || "Couldn't load this conversation."}</p>
                 <SmallButton onClick={chat.reloadHistory}>
                   <RefreshCw aria-hidden className="size-3.5" />
                   Try again

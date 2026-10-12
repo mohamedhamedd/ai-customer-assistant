@@ -228,20 +228,31 @@ const HANGUP_RETRY_MS = 60_000;
 // OpenAI outage is retried a minute later; a call OpenAI no longer knows
 // (it answers 404 or 503 for those) costs one request a minute at most.
 async function hangUp(voiceCallId: string, openaiCallId: string, conversationId: string) {
-  const retryBefore = new Date(Date.now() - HANGUP_RETRY_MS).toISOString();
-  const { data: claimed, error } = await db()
-    .from("voice_calls")
-    .update({ hangup_attempted_at: new Date().toISOString() })
-    .eq("id", voiceCallId)
-    .or(`hangup_attempted_at.is.null,hangup_attempted_at.lt.${retryBefore}`)
-    .select("id");
-  if (error || !claimed?.length) return; // tried less than a minute ago
+  if (!(await claimHangUp(voiceCallId))) return; // tried less than a minute ago
   try {
     await openai().realtime.calls.hangup(openaiCallId);
     log({ outcome: "call_hung_up", reason: "time_limit", conversationId });
   } catch (err) {
     log({ outcome: "hangup_failed", conversationId, error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+// True if this request may try the hang-up now: no attempt yet, or the last
+// one over a minute ago. One UPDATE, so concurrent requests can't both win.
+export async function claimHangUp(voiceCallId: string, now = Date.now()): Promise<boolean> {
+  const retryBefore = new Date(now - HANGUP_RETRY_MS).toISOString();
+  const { data, error } = await db()
+    .from("voice_calls")
+    .update({ hangup_attempted_at: new Date(now).toISOString() })
+    .eq("id", voiceCallId)
+    .or(`hangup_attempted_at.is.null,hangup_attempted_at.lt.${retryBefore}`)
+    .select("id");
+  if (error) {
+    // Logged, not thrown: the caller is answering a 401 either way.
+    log({ outcome: "hangup_claim_failed", voiceCallId, error: error.message });
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
 }
 
 function log(fields: Record<string, unknown>) {
