@@ -3,6 +3,7 @@ import type { z } from "zod";
 import { db } from "@/lib/db/supabase";
 import type { Json } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
+import { env } from "@/lib/env";
 import type { Source } from "@/lib/rag/retrieve";
 import { TOOLS, type Tool, type ToolContext, type ToolOutput } from "./tools";
 
@@ -40,7 +41,12 @@ export interface ExecuteDeps {
   tools: Record<string, Tool>;
   audit: (row: AuditRow) => Promise<void>;
   log: (message: string, err?: unknown) => void;
+  // One structured line per call (no arguments: they hold customer details,
+  // which stay in the tool_calls audit table).
+  trace: (fields: Record<string, unknown>) => void;
   timeoutMs: number;
+  // SIMULATE_DB_FAILURE: write tools fail as if the database were down.
+  simulateDbFailure: () => boolean;
 }
 
 export const UNAVAILABLE: ToolOutput = {
@@ -79,7 +85,9 @@ const defaultDeps: ExecuteDeps = {
   tools: TOOLS,
   audit: auditToDb,
   log: (message, err) => console.error(`[tools] ${message}`, err ?? ""),
+  trace: (fields) => console.log(JSON.stringify({ event: "tool_call", ...fields })),
   timeoutMs: TOOL_TIMEOUT_MS,
+  simulateDbFailure: () => env().SIMULATE_DB_FAILURE,
 };
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
@@ -107,6 +115,9 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
       output = { ok: false, error: "invalid_input", message: describeIssues(parsed.error) };
     } else {
       try {
+        // Thrown where a real database error would be, so a simulated
+        // outage takes exactly the real path below.
+        if (tool.writes && d.simulateDbFailure()) throw new Error("SIMULATE_DB_FAILURE: database unavailable");
         const result = await withTimeout(tool.run(parsed.data, ctx), d.timeoutMs);
         output = result.output;
         sources = result.sources ?? [];
@@ -118,6 +129,14 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
   }
 
   const outcome: ToolOutcome = { name, ok: output.ok, output, sources };
+  d.trace({
+    conversationId: ctx.conversationId,
+    channel: ctx.channel,
+    tool: name,
+    ok: output.ok,
+    ...(output.ok ? {} : { error: output.error }),
+    ms: Date.now() - started,
+  });
   try {
     await d.audit({
       conversation_id: ctx.conversationId,

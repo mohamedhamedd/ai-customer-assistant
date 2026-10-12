@@ -169,6 +169,20 @@ isOneToOne: true
       referencedColumns: ["id"]
     }
                   ]
+                },"rate_limit_hits": {
+                  Row: {
+                    "hits": number,"key": string,"window_start": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "hits"?: number,"key": string,"window_start": string
+                  }
+                  Update: {
+                    "hits"?: number,"key"?: string,"window_start"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
                 },"tool_calls": {
                   Row: {
                     "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"message_id": number | null,"name": string,"ok": boolean,"realtime_call_id": string | null,"result": NonNullable<Json>,"sources": NonNullable<Json>,"voice_call_id": string | null
@@ -203,14 +217,14 @@ isOneToOne: false
                   ]
                 },"voice_calls": {
                   Row: {
-                    "conversation_id": string,"created_at": string,"expires_at": string,"id": string,"openai_call_id": string | null,"token_hash": string
+                    "conversation_id": string,"created_at": string,"expires_at": string,"hangup_attempted_at": string | null,"id": string,"openai_call_id": string | null,"token_hash": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "conversation_id": string,"created_at"?: string,"expires_at": string,"id"?: string,"openai_call_id"?: string | null,"token_hash": string
+                    "conversation_id": string,"created_at"?: string,"expires_at": string,"hangup_attempted_at"?: string | null,"id"?: string,"openai_call_id"?: string | null,"token_hash": string
                   }
                   Update: {
-                    "conversation_id"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"openai_call_id"?: string | null,"token_hash"?: string
+                    "conversation_id"?: string,"created_at"?: string,"expires_at"?: string,"hangup_attempted_at"?: string | null,"id"?: string,"openai_call_id"?: string | null,"token_hash"?: string
                   }
                   Relationships: [
                     {
@@ -258,8 +272,14 @@ isOneToOne: false
               "chunk_id": number,"content": string,"document_id": string,"document_title": string,"heading": string,"similarity": number
             }[]
                            },
+"prune_rate_limits":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
+                           },
+"take_rate_limit":
+{ Args: { "p_key": string,"p_max": number,"p_window_seconds": number }; Returns: boolean
                            },
 "turn_in_progress":
 { Args: { "p_conversation_id": string,"p_except_message_id": number,"p_window_seconds": number }; Returns: boolean

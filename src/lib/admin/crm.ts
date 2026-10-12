@@ -95,6 +95,15 @@ const toRequestRow = (r: RequestRecord): RequestRow => ({
   requestedAt: r.created_at,
 });
 
+// Upcoming requests first (soonest first), then past ones (latest first):
+// the same order as the consultations page.
+function upcomingFirst(rows: RequestRow[], now = Date.now()): RequestRow[] {
+  const at = (r: RequestRow) => new Date(r.preferredAt).getTime();
+  const upcoming = rows.filter((r) => at(r) >= now).sort((a, b) => at(a) - at(b));
+  const past = rows.filter((r) => at(r) < now).sort((a, b) => at(b) - at(a));
+  return [...upcoming, ...past];
+}
+
 export async function leadDetail(businessId: string, leadId: string) {
   const [lead, requests] = await Promise.all([
     db().from("leads").select("id, name, email, phone, interest, source_channel, created_at").eq("business_id", businessId).eq("id", leadId).maybeSingle(),
@@ -106,7 +115,7 @@ export async function leadDetail(businessId: string, leadId: string) {
   const l = lead.data;
   return {
     lead: { id: l.id, name: l.name, email: l.email, phone: l.phone, interest: l.interest, channel: l.source_channel as Channel, capturedAt: l.created_at },
-    requests: (requests.data ?? []).map(toRequestRow),
+    requests: upcomingFirst((requests.data ?? []).map(toRequestRow)),
   };
 }
 

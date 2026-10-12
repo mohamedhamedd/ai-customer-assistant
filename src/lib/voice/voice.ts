@@ -21,9 +21,7 @@ import { realtimeSession } from "./session";
 
 export const VOICE_UNAVAILABLE = "Voice isn't available right now. You can keep typing.";
 export const CALL_EXPIRED = "This voice call has ended. Start voice again to keep talking.";
-
-// Longer than the Realtime API's maximum session (60 minutes).
-const CALL_TTL_MS = 70 * 60_000;
+export const CALL_TIME_LIMIT = "This voice call reached its time limit. Start voice again, or keep typing.";
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
@@ -55,6 +53,9 @@ export async function startVoiceCall(target: { businessSlug: string; sessionId: 
     throw new ChatHttpError(502, VOICE_UNAVAILABLE);
   }
 
+  // The call's secret expires at the maximum call length (cost control):
+  // past it, the server hangs the call up (see liveCall).
+  const maxMs = env().VOICE_MAX_MINUTES * 60_000;
   const callToken = randomBytes(32).toString("base64url");
   const { error } = await db()
     .from("voice_calls")
@@ -63,11 +64,12 @@ export async function startVoiceCall(target: { businessSlug: string; sessionId: 
       token_hash: hashToken(callToken),
       // "/v1/realtime/calls/rtc_…": kept to hang the call up from the server.
       openai_call_id: answer.headers.get("location")?.split("/").pop() ?? null,
-      expires_at: new Date(Date.now() + CALL_TTL_MS).toISOString(),
+      expires_at: new Date(Date.now() + maxMs).toISOString(),
     });
   if (error) throw new Error(`Saving voice call failed: ${error.message}`);
   log({ outcome: "call_started", conversationId: conversation.id, historyMessages: history.length });
-  return { sdp: await answer.text(), callToken };
+  // The browser also ends the call on its own at the limit.
+  return { sdp: await answer.text(), callToken, maxSeconds: maxMs / 1000 };
 }
 
 interface LiveCall {
@@ -82,11 +84,17 @@ interface LiveCall {
 async function liveCall(callToken: string): Promise<LiveCall> {
   const { data, error } = await db()
     .from("voice_calls")
-    .select("id, conversation_id, expires_at, conversations!inner(business_id, businesses!inner(timezone))")
+    .select("id, conversation_id, expires_at, openai_call_id, conversations!inner(business_id, businesses!inner(timezone))")
     .eq("token_hash", hashToken(callToken))
     .maybeSingle();
   if (error) throw new Error(`Loading voice call failed: ${error.message}`);
-  if (!data || new Date(data.expires_at).getTime() < Date.now()) throw new ChatHttpError(401, CALL_EXPIRED);
+  if (!data) throw new ChatHttpError(401, CALL_EXPIRED);
+  if (new Date(data.expires_at).getTime() < Date.now()) {
+    // Over the time limit: hang up at OpenAI, so the audio (and the bill)
+    // stops even if the browser keeps the connection open.
+    if (data.openai_call_id) await hangUp(data.id, data.openai_call_id, data.conversation_id);
+    throw new ChatHttpError(401, CALL_TIME_LIMIT);
+  }
   return {
     id: data.id,
     conversationId: data.conversation_id,
@@ -210,6 +218,41 @@ function cardsFrom(calls: UsedToolCall[]): { sources: Source[]; actions: Action[
     if (action && !repeatsAction(actions, action)) actions.push(action);
   }
   return { sources, actions };
+}
+
+const HANGUP_RETRY_MS = 60_000;
+
+// Best effort, at most one attempt per call per minute: the attempt is
+// claimed atomically (hangup_attempted_at), so concurrent late requests
+// don't each call OpenAI. A real hang-up succeeds the first time; a brief
+// OpenAI outage is retried a minute later; a call OpenAI no longer knows
+// (it answers 404 or 503 for those) costs one request a minute at most.
+async function hangUp(voiceCallId: string, openaiCallId: string, conversationId: string) {
+  if (!(await claimHangUp(voiceCallId))) return; // tried less than a minute ago
+  try {
+    await openai().realtime.calls.hangup(openaiCallId);
+    log({ outcome: "call_hung_up", reason: "time_limit", conversationId });
+  } catch (err) {
+    log({ outcome: "hangup_failed", conversationId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// True if this request may try the hang-up now: no attempt yet, or the last
+// one over a minute ago. One UPDATE, so concurrent requests can't both win.
+export async function claimHangUp(voiceCallId: string, now = Date.now()): Promise<boolean> {
+  const retryBefore = new Date(now - HANGUP_RETRY_MS).toISOString();
+  const { data, error } = await db()
+    .from("voice_calls")
+    .update({ hangup_attempted_at: new Date(now).toISOString() })
+    .eq("id", voiceCallId)
+    .or(`hangup_attempted_at.is.null,hangup_attempted_at.lt.${retryBefore}`)
+    .select("id");
+  if (error) {
+    // Logged, not thrown: the caller is answering a 401 either way.
+    log({ outcome: "hangup_claim_failed", voiceCallId, error: error.message });
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
 }
 
 function log(fields: Record<string, unknown>) {

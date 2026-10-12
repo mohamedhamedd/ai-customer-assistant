@@ -81,19 +81,26 @@ test("tool definitions match the validation schemas (no drift)", () => {
 
 const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW };
 
+// Executor deps for tests: no console output, no simulated outage unless asked.
+const quiet = { log: () => {}, trace: () => {}, simulateDbFailure: () => false };
+
 function harness(run: Tool["run"], schema: z.ZodType = z.object({ x: z.number() }), writes = false) {
   const audits: AuditRow[] = [];
   const logs: string[] = [];
+  const traces: Record<string, unknown>[] = [];
   const tool: Tool = { name: "probe", description: "", parameters: {}, writes, schema, run };
   return {
     audits,
     logs,
-    exec: (args: string, extra: { audit?: (r: AuditRow) => Promise<void>; timeoutMs?: number } = {}) =>
+    traces,
+    exec: (args: string, extra: { audit?: (r: AuditRow) => Promise<void>; timeoutMs?: number; simulateDbFailure?: boolean } = {}) =>
       executeTool("probe", args, ctx, {
         tools: { probe: tool },
         audit: extra.audit ?? (async (r) => void audits.push(r)),
         log: (m) => void logs.push(m),
+        trace: (f) => void traces.push(f),
         timeoutMs: extra.timeoutMs ?? 1000,
+        simulateDbFailure: () => extra.simulateDbFailure ?? false,
       }),
   };
 }
@@ -124,7 +131,7 @@ test("unparseable JSON and unknown tool names are reported, not thrown", async (
   assert.ok(!bad.output.ok && bad.output.error === "invalid_input");
   assert.deepEqual(h.audits[0].arguments, { _unparseable: "{not json" });
 
-  const unknown = await executeTool("nope", "{}", ctx, { tools: {}, audit: async () => {}, log: () => {} });
+  const unknown = await executeTool("nope", "{}", ctx, { ...quiet, tools: {}, audit: async () => {} });
   assert.ok(!unknown.output.ok && unknown.output.error === "unknown_tool");
 });
 
@@ -181,7 +188,7 @@ function stubClient(data: unknown) {
 
 test("R1: save_lead echoes only what the customer gave, even if the database returns a stored lead", async () => {
   const client = stubClient({ lead_id: "L1", created: false, name: STORED[0], email: STORED[1], phone: STORED[2], interest: STORED[3] });
-  const out = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "sara@x.com" }), { ...ctx, client }, { audit: async () => {}, log: () => {} });
+  const out = await executeTool("save_lead", JSON.stringify({ name: "Sara Ali", email: "sara@x.com" }), { ...ctx, client }, { ...quiet, audit: async () => {} });
   assert.equal(out.ok, true);
   const text = JSON.stringify(out.output);
   for (const s of STORED) assert.ok(!text.includes(s), `leaked ${s}`);
@@ -194,9 +201,30 @@ test("R1: create_consultation_request does not return the stored contact snapsho
     "create_consultation_request",
     JSON.stringify({ service: "teeth whitening", preferred_datetime: "2026-10-20T15:00" }),
     { ...ctx, client },
-    { audit: async () => {}, log: () => {} },
+    { ...quiet, audit: async () => {} },
   );
   assert.equal(out.ok, true);
   const text = JSON.stringify(out.output);
   for (const s of STORED) assert.ok(!text.includes(s), `leaked ${s}`);
+});
+
+test("SIMULATE_DB_FAILURE: a write tool fails like a real outage, a read tool still works", async () => {
+  let ran = false;
+  const write = harness(async () => ((ran = true), { output: { ok: true } }), z.object({ x: z.number() }), true);
+  const out = await write.exec('{"x": 1}', { simulateDbFailure: true });
+  assert.equal(ran, false, "the database is never touched");
+  assert.equal(out.output.ok, false);
+  assert.equal((out.output as { error: string }).error, "temporarily_unavailable", "the same answer as a real outage");
+  assert.equal(write.audits[0].ok, false, "audited as a failure");
+
+  const read = harness(async () => ({ output: { ok: true } }));
+  assert.equal((await read.exec('{"x": 1}', { simulateDbFailure: true })).output.ok, true);
+});
+
+test("every call leaves one structured log line, without the arguments", async () => {
+  const h = harness(async () => ({ output: { ok: false, error: "invalid_input", message: "bad email" } }));
+  await h.exec('{"x": 1}');
+  assert.equal(h.traces.length, 1);
+  assert.deepEqual(Object.keys(h.traces[0]).sort(), ["channel", "conversationId", "error", "ms", "ok", "tool"]);
+  assert.equal(h.traces[0].error, "invalid_input");
 });

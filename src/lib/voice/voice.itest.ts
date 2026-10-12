@@ -8,7 +8,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { ChatHttpError, conversationFor, findBusiness, loadHistory, recentHistory } from "@/lib/chat/turn";
-import { CALL_EXPIRED, recordVoiceItem, runVoiceTool } from "./voice";
+import { CALL_EXPIRED, CALL_TIME_LIMIT, claimHangUp, recordVoiceItem, runVoiceTool } from "./voice";
 
 const sessions: string[] = [];
 after(async () => {
@@ -39,6 +39,7 @@ async function openCall(opts: { sessionId?: string; expiresInMs?: number } = {})
 const item = () => `item_${randomUUID().replaceAll("-", "")}`;
 const businessSlug = () => env().DEMO_BUSINESS_SLUG;
 const isExpired = (err: unknown) => err instanceof ChatHttpError && err.status === 401 && err.message === CALL_EXPIRED;
+const isOverTime = (err: unknown) => err instanceof ChatHttpError && err.status === 401 && err.message === CALL_TIME_LIMIT;
 
 test("voice messages keep conversation order even when the question's transcript arrives last", async () => {
   const { callToken, sessionId } = await openCall();
@@ -89,7 +90,8 @@ test("without a live call's secret nothing runs and nothing is stored", async ()
   const email = `voice-itest-${randomUUID().slice(0, 8)}@example.com`;
   await assert.rejects(
     runVoiceTool({ callToken: expired.callToken, callId: "call_y", name: "save_lead", arguments: JSON.stringify({ name: "Late", email }) }),
-    isExpired,
+    isOverTime,
+    "past its time limit: refused, with the time-limit message",
   );
   const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("email", email);
   assert.equal(count, 0, "an expired call can't save a lead");
@@ -158,4 +160,13 @@ test("an unknown tool name is refused as a tool error, not a crash", async () =>
   const relayed = await runVoiceTool({ callToken, callId: "call_z", name: "delete_everything", arguments: "{}" });
   assert.equal(relayed.output.ok, false);
   assert.equal(relayed.action, null);
+});
+
+test("a hang-up is claimed once, then again only after a minute", async () => {
+  const { callId } = await openCall({ expiresInMs: -1000 });
+  const now = Date.now();
+  assert.equal(await claimHangUp(callId, now), true, "first attempt");
+  assert.equal(await claimHangUp(callId, now + 1_000), false, "a second request right after: skipped");
+  const [a, b] = await Promise.all([claimHangUp(callId, now + 61_000), claimHangUp(callId, now + 61_000)]);
+  assert.equal(Number(a) + Number(b), 1, "after a minute, exactly one of two concurrent requests retries");
 });

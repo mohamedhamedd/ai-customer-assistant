@@ -76,6 +76,8 @@ export type HistoryState = "loading" | "ready" | "failed";
 export function useChat(businessSlug: string) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [history, setHistory] = useState<HistoryState>("loading");
+  // Shown when loading failed with a reason worth telling (a rate limit).
+  const [historyError, setHistoryError] = useState("");
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
   const [startedFresh, setStartedFresh] = useState(false);
   // What a screen reader hears: the finished answer or an error, not every
@@ -103,13 +105,20 @@ export function useChat(businessSlug: string) {
     try {
       const url = `/api/chat?business=${encodeURIComponent(businessSlug)}&sessionId=${sessionId.current}`;
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error(`history ${res.status}`);
+      if (!res.ok) {
+        // A rate limit says to wait; anything else gets the generic message.
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(res.status === 429 && body.error ? body.error : "");
+      }
       const body = (await res.json()) as { messages: HistoryMessage[] };
       if (gen !== generation.current) return;
       setTurns(turnsFromHistory(body.messages));
       setHistory("ready");
-    } catch {
-      if (gen === generation.current) setHistory("failed");
+    } catch (err) {
+      if (gen === generation.current) {
+        setHistoryError(err instanceof Error ? err.message : "");
+        setHistory("failed");
+      }
     }
   }, [businessSlug]);
 
@@ -138,10 +147,10 @@ export function useChat(businessSlug: string) {
       }
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        // 409: another message (maybe from another tab) is being answered,
-        // so trying again shortly is right. 4xx: the same request would fail
-        // the same way.
-        return fail({ message: body.error ?? "Something went wrong. Please try again.", retryable: res.status === 409 || res.status >= 500 });
+        // 409: another message (maybe from another tab) is being answered;
+        // 429: rate limited. Trying again shortly is right for both. Other
+        // 4xx: the same request would fail the same way.
+        return fail({ message: body.error ?? "Something went wrong. Please try again.", retryable: res.status === 409 || res.status === 429 || res.status >= 500 });
       }
 
       let finished = false;
@@ -246,6 +255,7 @@ export function useChat(businessSlug: string) {
   return {
     turns,
     history,
+    historyError,
     online,
     startedFresh,
     announcement,
