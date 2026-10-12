@@ -241,7 +241,12 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "admin_counts":
+            "admin_conversations":
+{ Args: { "p_business_id": string,"p_limit": number }; Returns: {
+              "has_text": boolean,"has_voice": boolean,"id": string,"last_message_at": string,"lead_id": string,"lead_name": string,"message_count": number,"preview": string,"started_at": string
+            }[]
+                           },
+"admin_counts":
 { Args: { "p_business_id": string,"p_since": string }; Returns: Json
                            },
 "begin_user_message":

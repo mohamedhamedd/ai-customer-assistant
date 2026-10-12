@@ -3,6 +3,7 @@
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import type { KnowledgeGap } from "@/lib/admin/conversations";
 import type { LeadRow, RequestRow } from "@/lib/admin/crm";
 import { maskEmail, maskPhone } from "@/components/chat/thread";
 import { formatInZone, relativeTime } from "./format";
@@ -17,6 +18,7 @@ interface OverviewData {
   documentsTotal: number;
   recentRequests: RequestRow[];
   recentLeads: LeadRow[];
+  knowledgeGaps: KnowledgeGap[];
 }
 
 // The admin's landing page: the week at a glance and what's new.
@@ -51,7 +53,7 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
           {data && (
             <>
               <section aria-label="This week" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Kpi label="Conversations · 7 days" value={data.conversations7d} hint="Started in the last 7 days" />
+                <Kpi label="Conversations · 7 days" value={data.conversations7d} hint="With a message in the last 7 days" />
                 <Kpi label="Leads · 7 days" value={data.leads7d} />
                 <Kpi label="Pending consultations" value={data.pendingRequests} href={`${base}/consultations`} />
                 <Kpi label="Documents ready" value={data.documentsReady} suffix={`of ${data.documentsTotal}`} href={`${base}/knowledge-base`} />
@@ -86,6 +88,32 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
                   ))}
                 </Panel>
               </div>
+              <Panel
+                title="Questions the assistant couldn't answer"
+                subtitle="Searches that found nothing in the documents: add the answers to the knowledge base."
+                href={`${base}/knowledge-base`}
+                linkLabel="Knowledge base"
+                empty="None yet: every search found an answer."
+              >
+                {data.knowledgeGaps.map((g) => (
+                  <li key={g.id}>
+                    <Link
+                      href={`${base}/conversations?c=${g.conversationId}`}
+                      className="flex min-h-12 items-center justify-between gap-3 px-5 py-2 text-[14px] hover:bg-surface-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+                    >
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium">
+                          &ldquo;<bdi>{g.query}</bdi>&rdquo;
+                        </span>
+                        <span className="text-text-muted"> · View conversation</span>
+                      </span>
+                      <time className="shrink-0 text-[12px] text-text-muted" title={new Date(g.askedAt).toLocaleString()}>
+                        {relativeTime(g.askedAt)}
+                      </time>
+                    </Link>
+                  </li>
+                ))}
+              </Panel>
             </>
           )}
         </div>
@@ -116,13 +144,30 @@ function Kpi({ label, value, suffix, hint, href }: { label: string; value: numbe
   );
 }
 
-function Panel({ title, href, empty, children }: { title: string; href: string; empty: string; children: React.ReactNode[] }) {
+function Panel({
+  title,
+  subtitle,
+  href,
+  linkLabel = "View all",
+  empty,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  href: string;
+  linkLabel?: string;
+  empty: string;
+  children: React.ReactNode[];
+}) {
   return (
     <section className="overflow-hidden rounded-2xl border border-border bg-surface">
-      <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-        <h2 className="text-[14px] font-semibold">{title}</h2>
-        <Link href={href} className="text-[12px] font-medium text-accent hover:underline">
-          View all
+      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
+        <div className="min-w-0">
+          <h2 className="text-[14px] font-semibold">{title}</h2>
+          {subtitle && <p className="mt-0.5 text-[12px] text-text-muted">{subtitle}</p>}
+        </div>
+        <Link href={href} className="shrink-0 text-[12px] font-medium text-accent hover:underline">
+          {linkLabel}
         </Link>
       </div>
       {children.length === 0 ? <p className="px-5 py-4 text-[14px] text-text-muted">{empty}</p> : <ul className="divide-y divide-border">{children}</ul>}

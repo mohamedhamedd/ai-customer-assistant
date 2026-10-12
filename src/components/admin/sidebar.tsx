@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, FileText, LayoutDashboard, Users } from "lucide-react";
+import { CalendarDays, FileText, LayoutDashboard, MessagesSquare, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -14,13 +14,14 @@ const initials = (name: string) =>
     .map((w) => w[0]!.toUpperCase())
     .join("");
 
-// Only pages that exist are listed: Conversations comes with PR-12,
-// Settings and the business switcher with PR-15.
+// Only pages that exist are listed: Settings and the business switcher
+// come with PR-15.
 const NAV = [
   { href: "overview", label: "Overview", icon: LayoutDashboard },
   { href: "knowledge-base", label: "Knowledge base", icon: FileText },
   { href: "leads", label: "Leads", icon: Users },
   { href: "consultations", label: "Consultations", icon: CalendarDays },
+  { href: "conversations", label: "Conversations", icon: MessagesSquare },
 ];
 
 // Pending requests, for the badge: refreshed on navigation and whenever the

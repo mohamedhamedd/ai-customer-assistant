@@ -1,0 +1,118 @@
+import type { Json } from "@/lib/db/database.types";
+import type { Channel } from "@/lib/db/enums";
+import type { Source } from "@/lib/rag/retrieve";
+
+// A conversation as the admin reads it (US-9.1, 9.2): the messages, with
+// every tool call the assistant made shown where it happened. Pure, so the
+// ordering rule is unit-tested; the page and the server both use these types.
+
+export interface TranscriptMessage {
+  kind: "message";
+  id: number;
+  role: "user" | "assistant";
+  channel: Channel;
+  // null: a voice item that transcribed to nothing (a cough, silence).
+  content: string | null;
+  sources: Source[];
+  createdAt: string;
+  // A customer message the assistant never answered (the turn failed).
+  replyFailed: boolean;
+}
+
+export interface TranscriptToolCall {
+  kind: "tool";
+  id: number;
+  name: string;
+  channel: Channel;
+  arguments: Json;
+  result: Json;
+  ok: boolean;
+  durationMs: number;
+  createdAt: string;
+  // The voice answer that used it (set when the answer is stored).
+  messageId: number | null;
+}
+
+export type TranscriptItem = TranscriptMessage | TranscriptToolCall;
+
+// Where each tool call goes:
+// - linked to an answer (voice): right before that answer. The link is
+//   exact; times aren't, because the customer's spoken words are stored
+//   when their transcript arrives, which can be after the tool ran.
+// - otherwise (text): by time, before the first message stored after it.
+//   A text turn stores the question, runs its tools, then stores the
+//   answer, so time order is the real order.
+export function interleave(messages: TranscriptMessage[], calls: TranscriptToolCall[]): TranscriptItem[] {
+  const at = (iso: string) => new Date(iso).getTime();
+  const ordered = [...messages].sort((a, b) => a.id - b.id);
+  const shown = new Set(ordered.map((m) => m.id));
+  const byAnswer = new Map<number, TranscriptToolCall[]>();
+  const timed: TranscriptToolCall[] = [];
+  for (const call of [...calls].sort((a, b) => a.id - b.id)) {
+    if (call.messageId !== null && shown.has(call.messageId)) {
+      byAnswer.set(call.messageId, [...(byAnswer.get(call.messageId) ?? []), call]);
+    } else {
+      timed.push(call);
+    }
+  }
+  timed.sort((a, b) => at(a.createdAt) - at(b.createdAt) || a.id - b.id);
+
+  const items: TranscriptItem[] = [];
+  let next = 0;
+  for (const message of ordered) {
+    while (next < timed.length && at(timed[next].createdAt) < at(message.createdAt)) items.push(timed[next++]);
+    items.push(...(byAnswer.get(message.id) ?? []), message);
+  }
+  items.push(...timed.slice(next));
+  return items;
+}
+
+export type Tone = "success" | "warning" | "danger" | "neutral";
+
+export interface ToolSummary {
+  // What it was asked: the search query, the fields saved, the service.
+  detail: string | null;
+  // How it went, in a few words.
+  outcome: string;
+  tone: Tone;
+}
+
+const record = (value: Json): Record<string, Json | undefined> => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const text = (value: Json | undefined) => (typeof value === "string" && value.trim() ? value : null);
+
+// One line per tool call, e.g. `"whitening price" · 3 matches`. The full
+// arguments and result are one click away; this line is for scanning.
+export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "arguments" | "result" | "ok">): ToolSummary {
+  const args = record(call.arguments);
+  const result = record(call.result);
+
+  let detail: string | null = null;
+  if (call.name === "search_knowledge") {
+    const query = text(args.query);
+    detail = query && `"${query}"`;
+  } else if (call.name === "save_lead") {
+    // The field names, not the values: the values are a click away.
+    const fields = Object.keys(args).filter((k) => text(args[k]));
+    detail = fields.length ? `{${fields.join(", ")}}` : null;
+  } else if (call.name === "create_consultation_request") {
+    detail = [text(result.service) ?? text(args.service), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
+  }
+
+  if (!call.ok) {
+    const error = text(result.error) ?? "failed";
+    // Validation messages are short and say what was wrong; the others are
+    // instructions for the model, so the code says enough here.
+    const outcome = error === "invalid_input" && text(result.message) ? `invalid input: ${result.message}` : error.replace(/_/g, " ");
+    return { detail, outcome, tone: "danger" };
+  }
+  if (call.name === "search_knowledge") {
+    if (result.found === false) return { detail, outcome: "nothing found", tone: "warning" };
+    const n = Array.isArray(result.results) ? result.results.length : 0;
+    return { detail, outcome: `${n} ${n === 1 ? "match" : "matches"}`, tone: "neutral" };
+  }
+  if (call.name === "save_lead") return { detail, outcome: "saved", tone: "success" };
+  if (call.name === "create_consultation_request") {
+    return { detail, outcome: result.already_requested === true ? "already requested" : "requested", tone: "success" };
+  }
+  return { detail, outcome: "done", tone: "success" };
+}

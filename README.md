@@ -128,13 +128,23 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 
 ## Admin: overview, leads and consultations
 
-`/admin` opens on the **Overview**: conversations active and leads captured in the last 7 days, pending consultations, documents ready, and the latest requests and leads (contact details masked, as it's the screen most likely to be shared).
+`/admin` opens on the **Overview**: conversations active and leads captured in the last 7 days, pending consultations, documents ready, the latest requests and leads (contact details masked, as it's the screen most likely to be shared), and the questions the assistant couldn't answer (see below).
 
-- **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest and consultation requests.
+- **Leads** (`/admin/[slug]/leads`): newest first, searchable by name or email (`%` and `_` are matched literally). A lead opens a drawer with its contact details (copy buttons), interest, consultation requests and a link to its conversation.
 - **Consultations** (`/admin/[slug]/consultations`): Pending by default, then Confirmed / Cancelled / All. Upcoming requests first (soonest first), then past ones (most recent first), each part capped, so history never pushes next week off the list. The contact shown is the snapshot taken with the request. Status changes apply at once (optimistic) with a toast; the row's menu is locked while it saves, and if the save fails the row goes back and the toast says why. Reopening a cancelled request whose time slot was requested again is refused (one active request per slot).
 - **Times** are stored in UTC and always shown in the business's timezone, each with its own zone label ("3:00 PM PDT", and "PST" after the clock change), so staff and customer mean the same 3:00 PM.
 - **Counts:** the overview's numbers come from one SQL function, `admin_counts()` (the 7-day conversation count uses an index on message dates); the status tabs and the sidebar badge use the lighter `consultation_status_counts()`.
 - Lists are capped at 200 rows; past that, the next step is cursor pagination. Every query is scoped to the business in the URL.
+
+## Admin: conversations and the AI audit trail
+
+`/admin/[slug]/conversations` lists conversations (newest activity first: lead name or "Anonymous", last message, message count, text/voice) and shows the selected one beside the list (on a phone, full width with a back button). The open conversation is in the URL (`?c=…`), so the lead drawer and the overview link to it, and Back returns to the previous one.
+
+- **Every tool call is shown where it happened**, between the customer's question and the answer, as one line: `search_knowledge · "whitening price" · 6 matches · 412 ms ✓`. A click shows the arguments and the result as JSON (with a copy button). **Failed calls are red and start open**, so an outage or a validation error stands out while scrolling. "Show AI activity" hides them to read the conversation alone.
+- **Where a tool call goes:** a voice answer's tool calls are linked to it (`tool_calls.message_id`), so they go right before that answer; that link is exact, while times aren't (a customer's spoken words are stored when their transcript arrives, which can be after the tool ran). Text tool calls go by time: a text turn stores the question, runs its tools, then stores the answer. The rule is a pure function (`src/lib/admin/transcript.ts`) with unit tests.
+- **Questions the assistant couldn't answer** (overview): the latest searches that found nothing in the documents, each linked to its conversation, so staff can see what to add to the knowledge base. Only successful searches count: a search that failed (an outage) says nothing about the documents.
+- The list comes from one SQL function, `admin_conversations()` (per conversation: two lookups on the messages index); the unanswered searches use a partial index on just those tool calls. A long conversation shows its latest 500 messages and says so. A conversation of another business is "not found".
+- The audit trail is the `tool_calls` table, written for every call, successful or not, without ever breaking the customer's conversation (see Reliability).
 
 ## Agent: prompt and tools
 

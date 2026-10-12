@@ -340,8 +340,9 @@ Indexes are derived from the queries the app actually runs.
 | Q5b | Has this message already been stored? | Every chat request (retry) | `UNIQUE (conversation_id, client_message_id)` |
 | Q6 | Consultations by business + status, newest first | Admin | `consultation_requests (business_id, status, created_at DESC)` |
 | Q7 | Leads by business, newest first | Admin | `leads (business_id, created_at DESC)` |
-| Q8 | Conversations by business, most recent activity | Admin | `conversations (business_id, last_message_at DESC)` |
+| Q8 | Conversations by business, most recent activity, with message count, channels and last message | Admin conversations | `admin_conversations()`: walks `conversations (business_id, last_message_at DESC)`, two lookups per row on `messages (conversation_id, id)` |
 | Q9 | Tool calls of a conversation in order | Admin transcript | `tool_calls (conversation_id, id)` |
+| Q9b | Latest searches that found nothing (knowledge gaps) | Admin overview | Partial index `tool_calls (created_at DESC) WHERE name = 'search_knowledge' AND result->>'found' = 'false'` |
 | Q10 | Documents of a business | Admin | Leading column of `UNIQUE (business_id, content_hash)` |
 | Q11 | Is there a live document with this title? | Upload (replace flow) | Partial unique index `(business_id, lower(title)) WHERE status = 'ready'` |
 
