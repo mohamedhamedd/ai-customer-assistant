@@ -7,19 +7,27 @@
 //      the details exactly as they would be saved, for the model to read
 //      back. The call is recorded in tool_calls like any other: that record
 //      is the proposal.
-//   2. A call with the same details commits, but only if the customer has
-//      said something since that proposal. So the customer always gets a
-//      turn to see the details and answer before anything is written.
+//   2. A call with the same details commits, but only once the read-back
+//      reached the customer (the next assistant message, stored with words,
+//      not replaced by an answer check) and the customer answered it, within
+//      ANSWER_WINDOW_MS. A turn that failed after proposing, or a read-back
+//      a guard replaced, delivered nothing, so nothing can commit.
 //
-// "The same details" means the same key (ConfirmSpec.key): the details that
-// identify what's saved (the contact, or the time slot), compared as data,
-// never by reading the model's wording. Free text (interest, service
-// wording, notes) may differ between the two calls.
+// "The same details" means the same key (ConfirmSpec.propose): the details
+// that identify what's saved (the contact, or the time slot), compared as
+// data, never by reading the model's wording. Free text (interest, service
+// wording, notes) may differ between the two calls. A correction is a new
+// key, so a new proposal. A repeat of a committed write commits again (the
+// saves are idempotent): the answer it relies on is still the first one.
 //
-// Trade-off: the code guarantees the read-back step and the customer's turn;
-// whether the customer's answer was a yes is the model's call (it only
-// calls again after one). A correction is a new key, so a new proposal.
+// Trade-off: the code guarantees the read-back and the customer's answer;
+// whether that answer was a yes is the model's call (it only calls again
+// after one).
 import type { ToolOutput } from "./tools";
+
+// An answer much later than the read-back is not an answer to it: a customer
+// who comes back next week saying "hi" hasn't confirmed anything.
+export const ANSWER_WINDOW_MS = 30 * 60_000;
 
 // The details the customer gave, without the fields they didn't.
 export function confirmFirst(details: Record<string, unknown>): ToolOutput {
@@ -34,15 +42,18 @@ export function confirmFirst(details: Record<string, unknown>): ToolOutput {
 }
 
 export interface ProposalState {
-  // The key of this tool's latest proposal in this conversation, and when it
-  // was made. Null when there is none (or its arguments no longer parse).
+  // This tool's latest proposal in the conversation. Null when there is none
+  // (or its arguments no longer parse).
   proposal: { key: string; at: Date } | null;
-  // When the customer last sent a message (text, or a voice item, even
-  // before its transcript is in).
-  customerSpokeAt: Date | null;
+  // The first assistant message after the proposal: the read-back. Delivered
+  // when the customer saw or heard it.
+  readBack: { at: Date; delivered: boolean } | null;
+  // The customer's first message after the read-back: their answer.
+  answerAt: Date | null;
 }
 
-export function isConfirmed(key: string, state: ProposalState): boolean {
-  const { proposal, customerSpokeAt } = state;
-  return proposal !== null && proposal.key === key && customerSpokeAt !== null && customerSpokeAt.getTime() > proposal.at.getTime();
+export function isConfirmed(key: string, { proposal, readBack, answerAt }: ProposalState): boolean {
+  if (!proposal || proposal.key !== key || !readBack?.delivered || !answerAt) return false;
+  const [proposed, readOut, answered] = [proposal.at, readBack.at, answerAt].map((d) => d.getTime());
+  return proposed < readOut && readOut < answered && answered - readOut <= ANSWER_WINDOW_MS;
 }

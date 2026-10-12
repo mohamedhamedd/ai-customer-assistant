@@ -294,3 +294,33 @@ test("confirm before write: contact and consultation proposed together commit to
   const { count } = await db().from("consultation_requests").select("id", { count: "exact", head: true }).eq("conversation_id", (await conversationOf(sessionId)).id);
   assert.equal(count, 1);
 });
+
+test("confirm before write: a turn that failed after proposing delivered no read-back, so the next message can't commit", async () => {
+  const sessionId = session();
+  const phone = uniquePhone();
+  const john = { name: "Itest John Doe", phone };
+  // The model proposes, then fails before answering: no reply is stored.
+  let calls = 0;
+  const proposesThenFails: ChatTurnDeps = {
+    guards: allowAll,
+    complete: async () => {
+      if (calls++ > 0) throw new Error("model unavailable");
+      return (async function* (): AsyncGenerator<ChatCompletionChunk> {
+        yield chunk({ tool_calls: [{ index: 0, id: "call_0", type: "function", function: { name: "save_lead", arguments: JSON.stringify(john) } }] });
+      })();
+    },
+  };
+  const { events } = await run(newInput(sessionId, `Save my friend John Doe, ${phone}`), proposesThenFails);
+  assert.equal(events.at(-1)?.type, "error");
+
+  // A new message (not a retry): the model saves the same details at once.
+  const again = callsTools([{ name: "save_lead", args: john }], `Just to confirm: John Doe, ${formatted(phone)}. Is that right?`);
+  await run(newInput(sessionId, "hello?"), again.deps);
+  assert.equal(again.toolResults()[0].error, "confirm_first", "the customer never saw a read-back: proposed again");
+  assert.equal((await conversationOf(sessionId)).lead_id, null);
+
+  // That read-back was delivered: now the yes commits.
+  const yes = callsTools([{ name: "save_lead", args: john }], "Saved!");
+  await run(newInput(sessionId, "yes"), yes.deps);
+  assert.equal(yes.toolResults()[0].ok, true);
+});

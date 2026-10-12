@@ -60,9 +60,12 @@ export interface Proposals {
   // This tool's latest proposal in the conversation (a confirm_first call):
   // its arguments as the model sent them, and when.
   latest: { arguments: unknown; at: Date } | null;
-  // When the customer last sent a message.
-  customerSpokeAt: Date | null;
+  // What followed it: the read-back and the customer's answer (confirm.ts).
+  readBack: { at: Date; delivered: boolean } | null;
+  answerAt: Date | null;
 }
+
+const NO_PROPOSAL: Proposals = { latest: null, readBack: null, answerAt: null };
 
 export const UNAVAILABLE: ToolOutput = {
   ok: false,
@@ -96,27 +99,47 @@ async function auditToDb(row: AuditRow): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-// Two small indexed reads. Both tables stamp rows with clock_timestamp(), so
-// the times compare across them.
+// The answer checks that replace a text answer before the customer sees it
+// (PR-16). A voice answer is flagged after it was heard, so it still counts.
+const REPLACED = ["canary", "scope", "numbers"];
+// Messages after a proposal to look through: the read-back and the answer
+// come right after it.
+const FOLLOWING = 20;
+
+// The latest proposal, then what followed it. Both tables stamp rows with
+// clock_timestamp(), so the times compare across them.
 async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposals> {
   const client = ctx.client ?? db();
-  const [proposal, customer] = await Promise.all([
-    client
-      .from("tool_calls")
-      .select("arguments, created_at")
-      .eq("conversation_id", ctx.conversationId)
-      .eq("name", tool)
-      .eq("result->>error", "confirm_first")
-      .order("id", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    client.from("messages").select("created_at").eq("conversation_id", ctx.conversationId).eq("role", "user").order("id", { ascending: false }).limit(1).maybeSingle(),
-  ]);
-  if (proposal.error) throw new Error(`Loading the proposal failed: ${proposal.error.message}`);
-  if (customer.error) throw new Error(`Loading the customer's last message failed: ${customer.error.message}`);
+  const { data: proposal, error } = await client
+    .from("tool_calls")
+    .select("arguments, created_at")
+    .eq("conversation_id", ctx.conversationId)
+    .eq("name", tool)
+    .eq("result->>error", "confirm_first")
+    .order("id", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`Loading the proposal failed: ${error.message}`);
+  if (!proposal) return NO_PROPOSAL;
+
+  const { data: after, error: afterError } = await client
+    .from("messages")
+    .select("role, channel, content, created_at, flags(layer)")
+    .eq("conversation_id", ctx.conversationId)
+    // The database's own timestamp string: a Date would drop the microseconds.
+    .gt("created_at", proposal.created_at)
+    .order("id")
+    .limit(FOLLOWING);
+  if (afterError) throw new Error(`Loading the read-back failed: ${afterError.message}`);
+  // A voice item without words yet (still transcribing, or silence) isn't a read-back.
+  const readBack = after.find((m) => m.role === "assistant" && m.content);
+  const answer = readBack && after.find((m) => m.role === "user" && m.created_at > readBack.created_at);
   return {
-    latest: proposal.data && { arguments: proposal.data.arguments, at: new Date(proposal.data.created_at) },
-    customerSpokeAt: customer.data && new Date(customer.data.created_at),
+    latest: { arguments: proposal.arguments, at: new Date(proposal.created_at) },
+    readBack: readBack
+      ? { at: new Date(readBack.created_at), delivered: !(readBack.channel === "text" && readBack.flags.some((f) => REPLACED.includes(f.layer))) }
+      : null,
+    answerAt: answer ? new Date(answer.created_at) : null,
   };
 }
 
@@ -185,15 +208,6 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
     }
   }
 
-  const outcome: ToolOutcome = { name, ok: output.ok, output, sources };
-  d.trace({
-    conversationId: ctx.conversationId,
-    channel: ctx.channel,
-    tool: name,
-    ok: output.ok,
-    ...(output.ok ? {} : { error: output.error }),
-    ms: Date.now() - started,
-  });
   try {
     await d.audit({
       conversation_id: ctx.conversationId,
@@ -210,17 +224,29 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
   } catch (err) {
     // The audit trail must never break the customer's conversation.
     d.log(`audit write failed for ${name}`, err);
+    // Except that a proposal lives in its audit row (confirm.ts): unrecorded,
+    // it could never be confirmed, and the customer would be asked forever.
+    // Nothing was saved, so it's reported like any write that failed.
+    if (!output.ok && output.error === "confirm_first") output = UNAVAILABLE;
   }
-  return outcome;
+  d.trace({
+    conversationId: ctx.conversationId,
+    channel: ctx.channel,
+    tool: name,
+    ok: output.ok,
+    ...(output.ok ? {} : { error: output.error }),
+    ms: Date.now() - started,
+  });
+  return { name, ok: output.ok, output, sources };
 }
 
 // The latest proposal's key comes from its stored arguments, parsed and
 // keyed like the new call's.
 async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
-  const { latest, customerSpokeAt } = await d.proposals(ctx, tool.name);
+  const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
   const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
   const proposed = parsed?.success ? tool.confirm?.propose(parsed.data, ctx) : null;
-  return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, customerSpokeAt });
+  return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt });
 }
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words

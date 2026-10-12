@@ -283,3 +283,26 @@ test("a block the guard isn't sure of waits for review, even in an attack catego
     [["injection", "new"]],
   );
 });
+
+test("confirm before write: a read-back an answer check replaced was never seen, so the yes can't commit", async () => {
+  const email = `guard-itest-${randomUUID().slice(0, 8)}@example.com`;
+  const sara = { name: "Sara", email };
+  const sessionId = randomUUID();
+  try {
+    // The model proposes and reads back, but the scope check rejects the answer
+    // and the customer gets the standard reply instead (flagged on the answer).
+    const offScope = guards({ scope: async () => ({ inScope: false, reason: "Judged off-business." }), record: liveGuards.record });
+    const first = await turn(`I'm Sara, ${email}`, { guards: offScope.g, complete: scripted([{ tool: "save_lead", args: sara }, { text: `Just to confirm: Sara, ${email}?` }]) }, sessionId);
+    assert.equal(first.saved, declineReply(first.name));
+
+    // "yes" to a read-back they never saw: proposed again, nothing saved.
+    const { g } = guards();
+    const yes = await turn("yes", { guards: g, complete: scripted([{ tool: "save_lead", args: sara }, { text: "Just to confirm: …" }]) }, sessionId);
+    const { data: last } = await db().from("tool_calls").select("result").eq("conversation_id", yes.conversationId).order("id", { ascending: false }).limit(1).single();
+    assert.equal((last!.result as { error?: string }).error, "confirm_first");
+    const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("email", email);
+    assert.equal(count, 0);
+  } finally {
+    await db().from("leads").delete().eq("email", email);
+  }
+});

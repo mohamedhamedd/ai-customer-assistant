@@ -47,6 +47,7 @@ const isOverTime = (err: unknown) => err instanceof ChatHttpError && err.status 
 async function proposeAndAnswer(callToken: string, name: string, args: object) {
   const proposal = await runVoiceTool({ callToken, callId: `call_${randomUUID()}`, name, arguments: JSON.stringify(args) });
   assert.equal((proposal.output as { error?: string }).error, "confirm_first");
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", transcript: "Just to confirm: … Is that right?" });
   await recordVoiceItem({ callToken, itemId: item(), role: "user", transcript: "Yes, that's right." });
 }
 
@@ -183,8 +184,14 @@ test("voice: a save only proposes until the customer has answered; the yes needs
   assert.equal(proposal.action, null);
   assert.equal(((await save("call_again")).output as { error?: string }).error, "confirm_first", "the same response again: still a proposal");
 
-  // The customer answers. Their item is stored when they start speaking,
-  // before its transcript: that's enough, the call doesn't wait for it.
+  // The read-back is spoken, the customer answers. The answer's item is
+  // stored when they start speaking, before its transcript: that's enough.
+  const readBack = item();
+  await recordVoiceItem({ callToken, itemId: readBack, role: "assistant" });
+  await recordVoiceItem({ callToken, itemId: item(), role: "user" });
+  assert.equal(((await save("call_early")).output as { error?: string }).error, "confirm_first", "a read-back with no words yet wasn't heard");
+  // That call proposed again; this read-back has words.
+  await recordVoiceItem({ callToken, itemId: item(), role: "assistant", transcript: "That's Sam Spoken, … Is that right?" });
   await recordVoiceItem({ callToken, itemId: item(), role: "user" });
   const committed = await save("call_yes");
   assert.equal(committed.output.ok, true);
@@ -192,7 +199,7 @@ test("voice: a save only proposes until the customer has answered; the yes needs
   const { data: lead } = await db().from("leads").select("phone").eq("email", email).single();
   assert.equal(lead!.phone, "5035550142");
   const { data: audit } = await db().from("tool_calls").select("ok").eq("conversation_id", conversationId).order("id");
-  assert.deepEqual(audit!.map((a) => a.ok), [false, false, true]);
+  assert.deepEqual(audit!.map((a) => a.ok), [false, false, false, true]);
 });
 
 test("an unknown tool name is refused as a tool error, not a crash", async () => {
