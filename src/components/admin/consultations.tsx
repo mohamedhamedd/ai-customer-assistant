@@ -193,7 +193,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
           )}
         </div>
       </main>
-      {open && <LeadDrawer api={api} leadId={open} timeZone={timeZone} onClose={() => setOpen(null)} />}
+      {open && <LeadDrawer slug={slug} leadId={open} timeZone={timeZone} onClose={() => setOpen(null)} />}
       {toast.element}
     </>
   );

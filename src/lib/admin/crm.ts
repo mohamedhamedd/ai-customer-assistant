@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/lib/db/supabase";
 import type { Channel, ConsultationStatus } from "@/lib/db/enums";
 import { ChatHttpError } from "@/lib/chat/turn";
+import { knowledgeGaps } from "./conversations";
 
 // Leads, consultation requests and the overview (US-8.1 – 8.3). Every query
 // is scoped to one business (the slug in the URL). Times are returned as UTC
@@ -105,17 +106,22 @@ function upcomingFirst(rows: RequestRow[], now = Date.now()): RequestRow[] {
 }
 
 export async function leadDetail(businessId: string, leadId: string) {
-  const [lead, requests] = await Promise.all([
+  const [lead, requests, conversations] = await Promise.all([
     db().from("leads").select("id, name, email, phone, interest, source_channel, created_at").eq("business_id", businessId).eq("id", leadId).maybeSingle(),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).eq("lead_id", leadId).order("preferred_at"),
+    // Where the lead came from: usually one conversation, more if the same
+    // person came back in a new session.
+    db().from("conversations").select("id, last_message_at").eq("business_id", businessId).eq("lead_id", leadId).order("last_message_at", { ascending: false }).limit(5),
   ]);
   if (lead.error) throw new Error(`Loading lead failed: ${lead.error.message}`);
   if (requests.error) throw new Error(`Loading requests failed: ${requests.error.message}`);
+  if (conversations.error) throw new Error(`Loading conversations failed: ${conversations.error.message}`);
   if (!lead.data) throw new ChatHttpError(404, "That lead doesn't exist.");
   const l = lead.data;
   return {
     lead: { id: l.id, name: l.name, email: l.email, phone: l.phone, interest: l.interest, channel: l.source_channel as Channel, capturedAt: l.created_at },
     requests: upcomingFirst((requests.data ?? []).map(toRequestRow)),
+    conversations: (conversations.data ?? []).map((c) => ({ id: c.id, lastActivity: c.last_message_at })),
   };
 }
 
@@ -185,10 +191,11 @@ export async function setConsultationStatus(businessId: string, requestId: strin
 }
 
 export async function overview(businessId: string) {
-  const [counts, recentRequests, recentLeads] = await Promise.all([
+  const [counts, recentRequests, recentLeads, gaps] = await Promise.all([
     adminCounts(businessId),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(5),
     listLeads(businessId, "", 5),
+    knowledgeGaps(businessId, 5),
   ]);
   if (recentRequests.error) throw new Error(`Loading requests failed: ${recentRequests.error.message}`);
   return {
@@ -200,5 +207,7 @@ export async function overview(businessId: string) {
     documentsTotal: counts.documents_total,
     recentRequests: (recentRequests.data ?? []).map(toRequestRow),
     recentLeads,
+    // Questions the documents don't answer (US-9.3).
+    knowledgeGaps: gaps,
   };
 }

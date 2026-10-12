@@ -121,7 +121,7 @@ export function Leads({ slug, timeZone }: { slug: string; timeZone: string }) {
           )}
         </div>
       </main>
-      {open && <LeadDrawer api={api} leadId={open} timeZone={timeZone} onClose={() => setOpen(null)} />}
+      {open && <LeadDrawer slug={slug} leadId={open} timeZone={timeZone} onClose={() => setOpen(null)} />}
     </>
   );
 }

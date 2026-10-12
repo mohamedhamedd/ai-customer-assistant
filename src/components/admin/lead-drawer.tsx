@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy, Loader2, Mic, MessageSquare, X } from "lucide-react";
+import { Check, ChevronRight, Copy, Loader2, Mic, MessageSquare, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { RequestRow } from "@/lib/admin/crm";
 import type { Channel } from "@/lib/db/enums";
@@ -10,11 +11,13 @@ import { StatusBadge, useDialog } from "./ui";
 interface LeadDetail {
   lead: { id: string; name: string; email: string | null; phone: string | null; interest: string | null; channel: Channel; capturedAt: string };
   requests: RequestRow[];
+  conversations: { id: string; lastActivity: string }[];
 }
 
-// A lead and its consultation requests (US-8.1), opened from the leads or
-// the consultations table.
-export function LeadDrawer({ api, leadId, timeZone, onClose }: { api: string; leadId: string; timeZone: string; onClose: () => void }) {
+// A lead, its consultation requests and its conversations (US-8.1), opened
+// from the leads, consultations or conversations page.
+export function LeadDrawer({ slug, leadId, timeZone, onClose }: { slug: string; leadId: string; timeZone: string; onClose: () => void }) {
+  const api = `/api/admin/${encodeURIComponent(slug)}`;
   const panel = useDialog(onClose);
   const [detail, setDetail] = useState<LeadDetail | null>(null);
   const [failed, setFailed] = useState(false);
@@ -99,6 +102,29 @@ export function LeadDrawer({ api, leadId, timeZone, onClose }: { api: string; le
                   </ul>
                 )}
               </section>
+              {detail.conversations.length > 0 && (
+                <section>
+                  <h3 className="text-[12px] font-medium text-text-muted">Conversations</h3>
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {detail.conversations.map((c) => (
+                      <li key={c.id}>
+                        {/* Closes the drawer: on the conversations page the link only changes the open conversation. */}
+                        <Link
+                          href={`/admin/${slug}/conversations?c=${c.id}`}
+                          onClick={onClose}
+                          className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-border px-3 text-[14px] hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          <span className="font-medium text-accent">View conversation</span>
+                          <span className="flex items-center gap-1 text-[13px] text-text-muted">
+                            Last active <time title={new Date(c.lastActivity).toLocaleString()}>{relativeTime(c.lastActivity)}</time>
+                            <ChevronRight aria-hidden className="size-4" />
+                          </span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </div>
           )}
         </div>
