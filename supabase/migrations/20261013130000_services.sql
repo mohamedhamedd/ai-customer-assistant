@@ -2,8 +2,7 @@
 -- exact name, category, price, duration and a short description, and
 -- whether customers can request a consultation for it. Free-text documents
 -- stay for everything else (FAQs, policies); these are the facts that must
--- be exact. Filled in the admin, from a CSV template, or suggested from the
--- business's documents.
+-- be exact. Filled in the admin, or from a CSV template.
 --
 -- Price and duration are text: businesses write ranges and words ("$4,000
 -- to $6,000", "Free", "60 to 90 minutes"), and they are shown, not computed.
