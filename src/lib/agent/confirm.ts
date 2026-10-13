@@ -14,9 +14,9 @@
 //      the answer check replaced, delivered nothing, so nothing can commit.
 //
 // "The same details" means the same key (ConfirmSpec.propose): the details
-// that identify what's saved (the contact, or the time slot), compared as
-// data, never by reading the model's wording. Free text (interest, service
-// wording, notes) may differ between the two calls. A correction is a new
+// that identify what's saved (the contact, or the time slot and service),
+// compared as data, never by reading the model's wording. Free text
+// (interest, notes) may differ between the two calls. A correction is a new
 // key, so a new proposal. A repeat of a committed write commits again (the
 // saves are idempotent): the answer it relies on is still the first one.
 //

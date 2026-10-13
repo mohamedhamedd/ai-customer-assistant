@@ -135,7 +135,8 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
   - **By hand:** Add service, edit in place, remove.
 - **Saved at once:** the whole table is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its row and field, and nothing changes.
 - Price and duration are text ("$4,000 to $6,000", "Free"): businesses write ranges and words.
-- **Next steps:** consultation requests will take the service from this table (and ask the customer which one when several fit); the opening hours will get a table too; answers about services and prices will come from it.
+- **Consultation requests take the service from this table** (see Agent: the service of a consultation request).
+- **Next steps:** the opening hours will get a table too; answers about services and prices will come from it.
 
 ## Admin: overview, leads and consultations
 
@@ -185,9 +186,27 @@ One assistant, many businesses as data: nothing in the code is specific to one o
 - **`tools.ts`**: three tools, each a JSON schema for the model plus a zod schema that validates and normalises the arguments (lowercase email, digits-only phone, local date → UTC in the business timezone).
   - `search_knowledge`: hybrid retrieval; returns the matching sections, or `found: false`.
   - `save_lead`: records what the customer said on the conversation, then matches or creates the lead. An existing lead is never overwritten (anyone can type any email).
-  - `create_consultation_request`: a *request* (status `pending`), deduplicated per conversation, with a snapshot of the requester's contact details.
+  - `create_consultation_request`: a *request* (status `pending`), deduplicated per conversation, with a snapshot of the requester's contact details. The service comes from the business's services table, chosen by the customer (below).
 - **`execute.ts`**: runs a tool call. It never throws: invalid input, a database outage or a timeout all come back to the model as `{ ok: false, error, message }`, so the model can ask for a correction or apologise, and can never mistake a failure for a success. Every call is written to `tool_calls`. A write tool's first call with new details only proposes them (see Reliability).
 - **`confirm.ts`**: confirm before write: a proposal commits only for the same details, after its read-back reached the customer and they answered.
+
+### The service of a consultation request
+
+When a business has a services table (Admin > Services), the code decides which service a request is for, never the model (`src/lib/agent/service-choice.ts`, run by the tool before anything else). It compares the service the model sent, and the customer's own messages, with the services marked "Can request":
+
+| The customer says | What happens |
+|---|---|
+| "braces" (only one service fits) | Read back as "Traditional braces (full treatment)", saved on the yes |
+| "teeth whitening" (two fit) | `choose_service` with both options; the assistant must ask which one |
+| "the take-home kit", or "the second one" after being asked | That service, read back by its exact name |
+| "gum surgery" | `service_not_found`, with the services that can be requested |
+| "fix my overbite", and the model picks braces | `choose_service` with that one option: the customer is asked whether it is what they mean |
+
+- **Only the customer chooses.** A service goes through only when one of the customer's messages names it and nothing else as well, or when it was among the options the assistant offered and the customer has answered since. The model can't choose for them, even with the exact name, and can't answer its own question in the same reply.
+- **Matching by words, for any business:** the words of each name against the customer's words, ignoring filler ("consultation", "book", days, times), email addresses and links, and endings ("crowns", "whiter"). A message names one service when it is the only one sharing a word with it, or when it shares the most words and has all of its main words (outside brackets). So "a root canal on my molar" names "Root canal (molar)", but "teeth whitening" doesn't settle "In-office teeth whitening" against "Take-home whitening kit": the customer is asked. Trade-off: a precise phrase that leaves out a main word ("in-office whitening") gets one extra question.
+- **The read-back has the exact name**, and the service is part of what the customer confirms: a different service in answer to the read-back is a new proposal, read back before it's saved.
+- **A business without a services table** keeps free-text services, as before.
+- In the admin audit trail, "asked which service" is grey and "not on the services list" amber: neither is a failure.
 
 The two write tools are single SQL functions (`save_lead()`, `create_consultation_request()`), so their matching and dedupe rules run atomically. Tool results only contain ids, statuses and values the customer gave in this conversation, never stored lead data, because the model can repeat anything it is shown.
 
@@ -215,7 +234,7 @@ Strictness lives in the system prompt and the tools (search is the only source o
   1. **Propose.** A call with new details saves nothing. It returns `{ ok: false, error: "confirm_first", message: "Nothing is saved yet. Read the details back to the customer and ask them to confirm before saving. …", details }`, with the details exactly as they would be saved (email lowercased, phone as digits, the time spelled out). The model reads them back. The call's own `tool_calls` row is the proposal: no new table.
   2. **Commit.** A call with the same details writes, but only once the read-back reached the customer and they answered it: the first assistant message after the proposal must be stored with words and not replaced by the answer check, and the customer's next message must come within 30 minutes of it. So nothing is saved in the reply where the details were given; a turn that failed after proposing, or a read-back the check replaced, delivered nothing to confirm; and "hi" a week later doesn't confirm anything.
 
-  "The same details" is compared as data, not by reading the model's wording: the contact (name, email, phone) for `save_lead`, the time slot for `create_consultation_request` (as the dedupe does). Free text (interest, how the service is worded, notes) may differ between the two calls. A correction is new details, so a new proposal that is read back again; the old details can't commit after it. A repeat of a committed write commits again (the saves are idempotent; it relies on the same first answer), so "already done" still works. Invalid arguments skip the proposal, so the model hears the real problem first. The proposal lookup and the write share the tool's 15 s timeout (the turn deadline still holds), and a lookup that answers after the timeout never writes. A proposal that couldn't be recorded (its audit row is the proposal) is reported as an outage rather than read back with no way to confirm it. In the admin audit trail a proposal shows grey ("proposed, waiting for a yes"), not as a failure.
+  "The same details" is compared as data, not by reading the model's wording: the contact (name, email, phone) for `save_lead`, the time slot and the service for `create_consultation_request` (the service by its words, so "teeth whitening" and "teeth whitening consultation" are the same; with a services table, by the exact name that was read back). Free text (interest, notes) may differ between the two calls. A correction is new details, so a new proposal that is read back again; the old details can't commit after it. A repeat of a committed write commits again (the saves are idempotent; it relies on the same first answer), so "already done" still works. Invalid arguments skip the proposal, so the model hears the real problem first. The proposal lookup and the write share the tool's 15 s timeout (the turn deadline still holds), and a lookup that answers after the timeout never writes. A proposal that couldn't be recorded (its audit row is the proposal) is reported as an outage rather than read back with no way to confirm it. In the admin audit trail a proposal shows grey ("proposed, waiting for a yes"), not as a failure.
 
   **Trade-off:** the code guarantees the read-back step and the customer's turn; whether the customer's answer was a yes is the model's judgement (it calls again only after one). That is the part a model gets right; skipping the confirmation was the bug. An earlier version of this PR parsed the model's read-back text for the email, phone and date instead; every review found new phrasings it got wrong, so it was replaced by this.
 - **Tool failures never look like success.** Every tool returns `{ ok: false, error, message }` on failure (database down, timeout, invalid input); the assistant says plainly it couldn't save, the UI shows a failed card, and the call is audited in `tool_calls`. A write that timed out is reported as *unknown, safe to retry* (both write tools are idempotent).

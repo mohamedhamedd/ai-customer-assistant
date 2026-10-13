@@ -58,8 +58,8 @@ export interface ExecuteDeps {
 
 export interface Proposals {
   // This tool's latest proposal in the conversation (a confirm_first call):
-  // its arguments as the model sent them, and when.
-  latest: { arguments: unknown; at: Date } | null;
+  // its arguments as the model sent them, the details it read back, and when.
+  latest: { arguments: unknown; details?: unknown; at: Date } | null;
   // What followed it: the read-back and the customer's answer (confirm.ts).
   readBack: { at: Date; delivered: boolean } | null;
   answerAt: Date | null;
@@ -109,7 +109,7 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
   const client = ctx.client ?? db();
   const { data: proposal, error } = await client
     .from("tool_calls")
-    .select("arguments, created_at")
+    .select("arguments, result, created_at")
     .eq("conversation_id", ctx.conversationId)
     .eq("name", tool)
     .eq("result->>error", "confirm_first")
@@ -132,7 +132,7 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
   const readBack = after.find((m) => m.role === "assistant" && m.content);
   const answer = readBack && after.find((m) => m.role === "user" && m.created_at > readBack.created_at);
   return {
-    latest: { arguments: proposal.arguments, at: new Date(proposal.created_at) },
+    latest: { arguments: proposal.arguments, details: (proposal.result as { details?: unknown }).details, at: new Date(proposal.created_at) },
     readBack: readBack
       ? // An answer the answer check replaced never reached the customer.
         { at: new Date(readBack.created_at), delivered: readBack.replaced_reason === null }
@@ -186,13 +186,19 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
         // turn only starts a tool when TOOL_TIMEOUT_MS still fits (loop.ts).
         const result = await withTimeout(
           (async (): Promise<ToolRunResult> => {
-            const proposal = tool.confirm?.propose(parsed.data, ctx);
+            let args: unknown = parsed.data;
+            if (tool.prepare) {
+              const prepared = await tool.prepare(args, ctx);
+              if ("result" in prepared) return prepared.result;
+              args = prepared.args;
+            }
+            const proposal = tool.confirm?.propose(args, ctx);
             // Null: invalid arguments, which run() rejects without writing.
             if (proposal && !(await confirmed(tool, proposal.key, ctx, d))) return { output: confirmFirst(proposal.details) };
             // A check that finished after the timeout answered must not write.
             if (expired) return { output: UNAVAILABLE };
             writing = tool.writes;
-            return tool.run(parsed.data, ctx);
+            return tool.run(args, ctx);
           })(),
           d.timeoutMs,
           () => (expired = true),
@@ -239,11 +245,17 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
 }
 
 // The latest proposal's key comes from its stored arguments, parsed and
-// keyed like the new call's.
+// keyed like the new call's, as read back: the details it returned (the
+// service by its exact name, from prepare) over what the model sent.
 async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
   const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
   const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
-  const proposed = parsed?.success ? tool.confirm?.propose(parsed.data, ctx) : null;
+  let proposed = null;
+  if (parsed?.success) {
+    const args = parsed.data as Record<string, unknown>;
+    const details = latest?.details && typeof latest.details === "object" ? (latest.details as Record<string, unknown>) : {};
+    proposed = tool.confirm?.propose({ ...args, ...Object.fromEntries(Object.entries(details).filter(([k]) => k in args)) }, ctx);
+  }
   return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt });
 }
 

@@ -8,6 +8,7 @@ import type { ChatCompletionChunk, ChatCompletionMessageParam } from "openai/res
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
+import { listServices } from "@/lib/admin/services";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -246,13 +247,16 @@ test("confirm before write: contact and consultation proposed together commit to
   const at = zonedLocalToUtc(local, business.timezone);
   assert.ok(at.ok);
   const email = `chat-itest-${randomUUID().slice(0, 8)}@example.com`;
+  // The customer names the service exactly, so the business's services table
+  // (if it has one: src/lib/agent/service-choice.ts) takes it as is.
+  const service = (await listServices(business.id)).find((s) => s.requestable)?.name ?? "teeth whitening";
   const calls = [
     { name: "save_lead", args: { name: "Sara Ali", email } },
-    { name: "create_consultation_request", args: { service: "teeth whitening", preferred_datetime: local } },
+    { name: "create_consultation_request", args: { service, preferred_datetime: local } },
   ];
 
-  const propose = callsTools(calls, `Just to confirm: Sara Ali, ${email}, teeth whitening on ${formatHuman(at.at, business.timezone)}. Is that right?`);
-  await run(newInput(sessionId, `I'm Sara Ali, ${email}, whitening on ${local}`), propose.deps);
+  const propose = callsTools(calls, `Just to confirm: Sara Ali, ${email}, ${service} on ${formatHuman(at.at, business.timezone)}. Is that right?`);
+  await run(newInput(sessionId, `I'm Sara Ali, ${email}, ${service} on ${local}`), propose.deps);
   assert.deepEqual(
     propose.toolResults().map((r) => [r.error, r.details.preferred_time]),
     [

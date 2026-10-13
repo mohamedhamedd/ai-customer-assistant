@@ -107,6 +107,10 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   // Confirm before write (src/lib/agent/confirm.ts): a first call only
   // proposes the details; the model reads them back before they're saved.
   if (!call.ok && result.error === "confirm_first") return { detail, outcome: "proposed, waiting for a yes", tone: "neutral", failed: false };
+  // The service, from the services table (src/lib/agent/service-choice.ts):
+  // the customer is asked to choose, or told it isn't offered.
+  if (!call.ok && result.error === "choose_service") return { detail, outcome: "asked which service", tone: "neutral", failed: false };
+  if (!call.ok && result.error === "service_not_found") return { detail, outcome: "not on the services list", tone: "warning", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are

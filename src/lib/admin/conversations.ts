@@ -162,8 +162,8 @@ export interface Issue {
 }
 
 // Tool errors that are problems: the database was down, or a write's outcome
-// is unknown. Not invalid input or confirm_first: those are the conversation
-// working as intended.
+// is unknown. Not invalid input, confirm_first, choose_service or
+// service_not_found: those are the conversation working as intended.
 export const FAILED_TOOL_ERRORS = ["temporarily_unavailable", "outcome_unknown"];
 
 // The newest issues across the business, and how many since `since`: answers

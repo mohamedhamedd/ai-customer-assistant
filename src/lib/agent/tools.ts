@@ -5,6 +5,7 @@ import { db } from "@/lib/db/supabase";
 import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
+import { chooseService, MAX_LISTED, words, type ServiceEvidence } from "./service-choice";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
@@ -26,13 +27,17 @@ export interface ToolContext {
   realtimeCallId?: string;
   // Defaults to the service-role client; tests pass a stub.
   client?: SupabaseClient<Database>;
+  // What a consultation's service is checked against (service-choice.ts).
+  // Defaults to the database; tests pass their own.
+  serviceEvidence?: (ctx: ToolContext) => Promise<ServiceEvidence>;
 }
 
 // What the model sees. Always an object with ok.
 export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
   // details: confirm_first only, what would be saved (confirm.ts).
-  | { ok: false; error: string; message: string; details?: Record<string, unknown> };
+  // options: choose_service and service_not_found, service names to offer.
+  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[] };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -59,17 +64,28 @@ export interface ConfirmSpec<A> {
   propose(args: A, ctx: ToolContext): { key: string; details: Record<string, unknown> } | null;
 }
 
+// Before anything else: settles the arguments (the consultation's service, by
+// its exact name), or answers instead of running.
+export type Prepared<A> = { args: A } | { result: ToolRunResult };
+
 export interface Tool extends ToolDefinition {
   // Writes data. A write that times out may still commit, so its outcome is
   // reported as unknown rather than failed (execute.ts).
   writes: boolean;
   schema: z.ZodType;
   confirm?: ConfirmSpec<unknown>;
+  prepare?(args: unknown, ctx: ToolContext): Promise<Prepared<unknown>>;
   run(args: unknown, ctx: ToolContext): Promise<ToolRunResult>;
 }
 
 function defineTool<S extends z.ZodType>(
-  spec: ToolDefinition & { writes: boolean; schema: S; confirm?: ConfirmSpec<z.output<S>>; run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult> },
+  spec: ToolDefinition & {
+    writes: boolean;
+    schema: S;
+    confirm?: ConfirmSpec<z.output<S>>;
+    prepare?(args: z.output<S>, ctx: ToolContext): Promise<Prepared<z.output<S>>>;
+    run(args: z.output<S>, ctx: ToolContext): Promise<ToolRunResult>;
+  },
 ): Tool {
   return spec as unknown as Tool;
 }
@@ -242,6 +258,50 @@ export function resolvePreferredTime(local: string, timeZone: string, now: Date)
   return { ok: true, at: parsed.at };
 }
 
+// The business's services, what the customer said, and the options the agent
+// last offered if the customer has answered since.
+const SAID = 30;
+
+async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence> {
+  const client = ctx.client ?? db();
+  const [services, said, offer] = await Promise.all([
+    client.from("services").select("name, requestable").eq("business_id", ctx.businessId).order("position"),
+    client.from("messages").select("content").eq("conversation_id", ctx.conversationId).eq("role", "user").order("id", { ascending: false }).limit(SAID),
+    client
+      .from("tool_calls")
+      .select("result, created_at")
+      .eq("conversation_id", ctx.conversationId)
+      .eq("name", "create_consultation_request")
+      .eq("result->>error", "choose_service")
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  for (const r of [services, said, offer]) if (r.error) throw new Error(`Loading the services failed: ${r.error.message}`);
+
+  let offered: string[] = [];
+  if (offer.data) {
+    // Answered: a customer message after the offer (a voice item still being
+    // transcribed counts: the customer has spoken).
+    const { data: answer, error } = await client
+      .from("messages")
+      .select("id")
+      .eq("conversation_id", ctx.conversationId)
+      .eq("role", "user")
+      .gt("created_at", offer.data.created_at)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`Loading the services failed: ${error.message}`);
+    const options = (offer.data.result as { options?: unknown }).options;
+    if (answer && Array.isArray(options)) offered = options.filter((o): o is string => typeof o === "string");
+  }
+  return {
+    services: services.data ?? [],
+    customerSaid: (said.data ?? []).flatMap((m) => (m.content ? [m.content] : [])).reverse(),
+    offered,
+  };
+}
+
 const createConsultationRequest = defineTool({
   name: "create_consultation_request",
   writes: true,
@@ -250,7 +310,10 @@ const createConsultationRequest = defineTool({
   parameters: {
     type: "object",
     properties: {
-      service: { type: "string", description: "The service the consultation is for, e.g. 'initial consultation'." },
+      service: {
+        type: "string",
+        description: "The service the consultation is for: its exact name if you know it, otherwise the customer's words. The tool checks it against the business's services.",
+      },
       preferred_datetime: {
         type: "string",
         description: "Preferred date and time as LOCAL time in the business's timezone, format YYYY-MM-DDTHH:mm, e.g. 2026-10-20T15:00.",
@@ -261,12 +324,49 @@ const createConsultationRequest = defineTool({
     additionalProperties: false,
   },
   schema: consultationSchema,
+  // The service, from the business's services table (service-choice.ts).
+  async prepare(args, ctx) {
+    const choice = chooseService(args.service, await (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx));
+    if (choice.kind === "ok") return { args: { ...args, service: choice.service } };
+    if (choice.kind === "choose") {
+      return {
+        result: {
+          output: {
+            ok: false,
+            error: "choose_service",
+            message:
+              "Nothing is saved: the customer must choose the service. Ask them which of these options they want (or, for one option, whether it is what they mean), naming each exactly as written, and wait for their answer. Don't choose for them. Then call this tool again with the option they chose.",
+            options: choice.options,
+          },
+        },
+      };
+    }
+    const offer = choice.options.length
+      ? `Tell the customer, and offer the services they can request${choice.options.length === MAX_LISTED ? " (some of them)" : ""}: the options.`
+      : "This business takes no consultation requests here: offer to have the team contact the customer instead.";
+    return {
+      result: {
+        output: {
+          ok: false,
+          error: "service_not_found",
+          message: `Nothing is saved. "${args.service}" ${choice.listed ? "can't be requested as a consultation" : "isn't one of the services customers can request"}. ${offer}`,
+          options: choice.options,
+        },
+      },
+    };
+  },
   confirm: {
-    // The time slot, as the dedupe does: the service may be worded differently.
+    // The time slot and the service. The service by its words, so wording
+    // may differ ("teeth whitening", "teeth whitening consultation"); with a
+    // services table it is the exact name, so another service is a new
+    // proposal, read back before it's saved.
     propose: (args, ctx) => {
       const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
       if (!when.ok) return null;
-      return { key: when.at.toISOString(), details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes } };
+      return {
+        key: JSON.stringify([when.at.toISOString(), words(args.service).sort()]),
+        details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes },
+      };
     },
   },
   async run(args, ctx) {
