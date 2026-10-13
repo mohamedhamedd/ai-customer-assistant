@@ -149,6 +149,13 @@ test("saving a contact asks the team for nothing; more about a service is a cons
   assert.match(p, /know more about a service the business offers than you can tell them, offer a consultation request for it/);
 });
 
+test("one request is one visit: services for the same time together, other times separately", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /One request is one visit: one time, one or more services\. Services for the same visit go in one request/);
+  assert.match(p, /Visits at different times in one message .* are separate requests: one at a time/);
+  assert.match(p, /To add a service to a visit, or swap one, send the full new list/);
+});
+
 test("the assistant stays on the business and keeps conditions in short answers", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.match(p, /in scope, even when it sounds general/);

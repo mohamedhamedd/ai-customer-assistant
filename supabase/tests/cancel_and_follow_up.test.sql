@@ -14,9 +14,9 @@ insert into leads (id, business_id, name, phone, source_channel) values ('000000
 insert into conversations (id, business_id, session_id, lead_id, customer_facts) values
   ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000b3', gen_random_uuid(), '00000000-0000-0000-0000-0000000000a3', '{"name": "Mo", "phone": "01013514995"}'),
   ('00000000-0000-0000-0000-0000000000f2', '00000000-0000-0000-0000-0000000000b3', gen_random_uuid(), null, '{}');
-insert into consultation_requests (id, business_id, lead_id, conversation_id, contact_name, contact_phone, service, preferred_at, status) values
-  ('00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000f1', 'Mo', '01013514995', 'Invisalign consultation', '2026-10-14 22:00+00', 'pending'),
-  ('00000000-0000-0000-0000-0000000000e5', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000f1', 'Mo', '01013514995', 'Retainers', '2026-10-15 22:00+00', 'confirmed');
+insert into consultation_requests (id, business_id, lead_id, conversation_id, contact_name, contact_phone, services, preferred_at, status) values
+  ('00000000-0000-0000-0000-0000000000e4', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000f1', 'Mo', '01013514995', array['Invisalign consultation'], '2026-10-14 22:00+00', 'pending'),
+  ('00000000-0000-0000-0000-0000000000e5', '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000f1', 'Mo', '01013514995', array['Retainers'], '2026-10-15 22:00+00', 'confirmed');
 
 -- Cancel -----------------------------------------------------------------------
 select is((cancel_consultation_request('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000f1', '2026-10-14 22:00+00', 'changed my mind'))
@@ -28,7 +28,7 @@ select is((cancel_consultation_request('00000000-0000-0000-0000-0000000000b3', '
           'false', 'a retry finds it already cancelled');
 select is((select notes from consultation_requests where id = '00000000-0000-0000-0000-0000000000e4'),
           '[Cancelled by the customer: changed my mind.]', 'and notes it once');
-select is((create_consultation_request('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000f1', 'Teeth whitening', '2026-10-14 22:00+00'))->>'created',
+select is((create_consultation_request('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000f1', array['Teeth whitening'], '2026-10-14 22:00+00'))->>'created',
           'true', 'the time is free again for a new request');
 select throws_ok($$ select cancel_consultation_request('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000f1', '2026-10-15 22:00+00', '') $$,
                  'P0001', 'request_not_pending', 'a confirmed request is the team''s: not cancelled');

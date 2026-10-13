@@ -65,27 +65,27 @@ select is((select phone from leads where email = 'carol@x.com'), null,
 -- Consultation requests --------------------------------------------------------
 update conversations set lead_id = null, customer_facts = '{}' where id = '00000000-0000-0000-0000-0000000000c3';
 select throws_ok($$ select create_consultation_request('00000000-0000-0000-0000-0000000000b1',
-                     '00000000-0000-0000-0000-0000000000c3', 'Whitening', '2026-10-20 22:00+00') $$,
+                     '00000000-0000-0000-0000-0000000000c3', array['Whitening'], '2026-10-20 22:00+00') $$,
                  'P0001', 'lead_required', 'no saved contact -> lead_required');
 
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
-                                       'Teeth Whitening', '2026-10-20 22:00+00', 'mornings better'))->>'status',
+                                       array['Teeth Whitening'], '2026-10-20 22:00+00', 'mornings better'))->>'status',
           'pending', 'a request is created as pending');
 select is((select contact_name || '|' || coalesce(contact_phone, '') from consultation_requests
             where conversation_id = '00000000-0000-0000-0000-0000000000c2'),
           'Someone Else|5035550000',
           'the contact snapshot is the requester (from facts), not the shared lead');
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
-                                       'teeth whitening', '2026-10-20 22:00+00'))->>'created',
+                                       array['teeth whitening'], '2026-10-20 22:00+00'))->>'created',
           'false', 'the same request again (different case) returns the existing one');
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
-                                       'whitening consultation', '2026-10-20 22:00+00'))->>'service',
+                                       array['whitening consultation'], '2026-10-20 22:00+00'))->>'service',
           'Teeth Whitening', 'the same slot with different service wording is the same request, reported as first named');
 
 -- Staff cancel it; asking for the same slot again creates a NEW request.
 update consultation_requests set status = 'cancelled' where conversation_id = '00000000-0000-0000-0000-0000000000c2';
 select is((create_consultation_request('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000c2',
-                                       'Teeth Whitening', '2026-10-20 22:00+00'))->>'created',
+                                       array['Teeth Whitening'], '2026-10-20 22:00+00'))->>'created',
           'true', 'a cancelled request does not block re-requesting the same slot');
 select is((select count(*)::int from consultation_requests
             where conversation_id = '00000000-0000-0000-0000-0000000000c2' and status = 'pending'), 1,
@@ -130,7 +130,7 @@ delete from messages where reply_to_message_id = 900001;
 select is(claim_reply_attempt(900001, 60), false, 'a re-run is refused while another turn in the conversation runs');
 
 select ok(not has_function_privilege('anon', 'public.save_lead(uuid, uuid, text, text, text, text, text)', 'execute')
-      and not has_function_privilege('anon', 'public.create_consultation_request(uuid, uuid, text, timestamptz, text)', 'execute'),
+      and not has_function_privilege('anon', 'public.create_consultation_request(uuid, uuid, text[], timestamptz, text)', 'execute'),
           'anon cannot execute the tool functions');
 
 select * from finish();

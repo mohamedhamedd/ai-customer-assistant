@@ -12,7 +12,7 @@ import { loadTables } from "@/lib/agent/tables";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
 import { ENGLISH_ONLY_REPLY, isClearlyNotEnglish } from "@/lib/chat/language";
-import { toolDefinitions } from "@/lib/agent/tools";
+import { servicesLabel, toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 import { checkAnswer } from "@/lib/guard/answer-check";
 import { canary } from "@/lib/guard/canary";
@@ -407,24 +407,29 @@ function agreedRequest(
   requests: { preferred_at: string; status: string }[],
   timeZone: string,
 ): ConversationState["agreed"] {
-  const result = (call?.result ?? {}) as { error?: string; details?: { service?: string } };
-  const args = (call?.arguments ?? {}) as { service?: unknown; preferred_datetime?: unknown };
+  const result = (call?.result ?? {}) as { error?: string; details?: { services?: unknown } };
+  const args = (call?.arguments ?? {}) as { services?: unknown; service?: unknown; preferred_datetime?: unknown };
   if (!call || (result.error !== "confirm_first" && result.error !== "lead_required")) return null;
-  if (typeof args.preferred_datetime !== "string" || typeof args.service !== "string") return null;
+  // The read-back's exact names, or what the model sent (a list, or one service before lists).
+  const services = names(result.details?.services) ?? names(args.services) ?? names(args.service);
+  if (typeof args.preferred_datetime !== "string" || !services) return null;
   const at = zonedLocalToUtc(args.preferred_datetime, timeZone);
   if (!at.ok) return null;
   if (requests.some((r) => r.status !== "cancelled" && new Date(r.preferred_at).getTime() === at.at.getTime())) return null;
   return {
-    service: result.details?.service ?? args.service,
+    service: servicesLabel(services),
     preferredTime: formatHuman(at.at, timeZone),
     preferredLocal: formatLocal(at.at, timeZone),
     waitingFor: result.error === "lead_required" ? "contact" : "yes",
   };
 }
 
+const names = (v: unknown): string[] | null =>
+  typeof v === "string" ? [v] : Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string") ? v : null;
+
 export async function conversationState(conversation: { id: string; lead_id: string | null }, timeZone: string): Promise<ConversationState> {
   const [{ data, error }, followUp, proposal] = await Promise.all([
-    db().from("consultation_requests").select("service, preferred_at, status").eq("conversation_id", conversation.id).order("created_at"),
+    db().from("consultation_requests").select("services, preferred_at, status").eq("conversation_id", conversation.id).order("created_at"),
     db().from("follow_ups").select("reason").eq("conversation_id", conversation.id).eq("status", "open").maybeSingle(),
     // The latest attempt to request a consultation: one agreed but not saved
     // yet must survive however long the conversation gets.
@@ -436,7 +441,7 @@ export async function conversationState(conversation: { id: string; lead_id: str
     followUp: followUp.data?.reason ?? null,
     agreed: agreedRequest(proposal.data, data ?? [], timeZone),
     requests: (data ?? []).map((r) => ({
-      service: r.service,
+      service: servicesLabel(r.services),
       preferredTime: formatHuman(new Date(r.preferred_at), timeZone),
       preferredLocal: formatLocal(new Date(r.preferred_at), timeZone),
       status: r.status,

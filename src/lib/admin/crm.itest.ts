@@ -41,7 +41,7 @@ async function lead(businessId: string, name: string, email: string, createdAt: 
 async function request(businessId: string, leadId: string, preferredAt: string, status = "pending", conversationId: string | null = null) {
   const { data, error } = await db()
     .from("consultation_requests")
-    .insert({ business_id: businessId, lead_id: leadId, conversation_id: conversationId, contact_name: "Snapshot Name", contact_email: "snap@example.com", service: "cleaning", preferred_at: preferredAt, status })
+    .insert({ business_id: businessId, lead_id: leadId, conversation_id: conversationId, contact_name: "Snapshot Name", contact_email: "snap@example.com", services: ["cleaning"], preferred_at: preferredAt, status })
     .select("id")
     .single();
   assert.ifError(error);

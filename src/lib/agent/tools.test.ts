@@ -73,7 +73,9 @@ test("preferred time: future, within 6 months, valid local format", () => {
 
 test("tool definitions match the validation schemas (no drift)", () => {
   for (const def of toolDefinitions()) {
-    const schema = TOOLS[def.name].schema as z.ZodObject;
+    // A pipe when the arguments are normalised first (a lone service is a list of one).
+    const tool = TOOLS[def.name].schema as unknown as z.ZodObject | z.ZodPipe<z.ZodType, z.ZodObject>;
+    const schema = "shape" in tool ? tool : tool.out;
     const props = Object.keys((def.parameters as { properties: object }).properties).sort();
     assert.deepEqual(props, Object.keys(schema.shape).sort(), def.name);
   }
@@ -262,7 +264,7 @@ test("every call leaves one structured log line, without the arguments", async (
 // the same clock. proposals() reads them like execute.ts reads the tables.
 // With services, the business has a services table (service-choice.ts), and
 // the evidence is read from the same messages and audits.
-function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["services"]; week?: Week; requests?: StoredRequest[] } = {}) {
+function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["services"]; week?: Week; requests?: StoredRequest[]; slotTaken?: string[] } = {}) {
   let clock = 0;
   const tick = (ms = 1) => t((clock += ms));
   const audits: (AuditRow & { at: Date })[] = [];
@@ -275,12 +277,25 @@ function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["
       written.push(params);
       const data =
         fn === "change_consultation_request"
-          ? { request_id: "R1", status: "pending", service: params.p_service, previous_service: opts.requests?.[0]?.service, changed: true }
+          ? {
+              request_id: "R1",
+              status: "pending",
+              services: params.p_services,
+              service: (params.p_services as string[]).join(", "),
+              previous_services: opts.requests?.[0]?.services,
+              previous_service: opts.requests?.[0]?.service,
+              changed: true,
+            }
           : fn === "cancel_consultation_request"
             ? { request_id: "R1", status: "cancelled", service: opts.requests?.[0]?.service, cancelled: true }
             : fn === "request_follow_up"
               ? { follow_up_id: "F1", created: true }
-              : { request_id: "R1", status: "pending", created: true };
+              : fn !== "create_consultation_request"
+                ? { request_id: "R1", status: "pending", created: true }
+                : // A request already at that time (opts.slotTaken), or a new one.
+                  opts.slotTaken
+                ? { request_id: "R0", status: "pending", services: opts.slotTaken, service: opts.slotTaken.join(", "), created: false }
+                : { request_id: "R1", status: "pending", services: params.p_services, service: (params.p_services as string[]).join(", "), created: true };
       return { data, error: null };
     },
   } as unknown as NonNullable<ToolContext["client"]>;
@@ -426,12 +441,12 @@ test("with a services table: the customer chooses the service, and its exact nam
   c.assistantSays(); // "In-office whitening, or the take-home kit?"
   c.customerSays(1, "the second one");
   const proposal = await c.call("create_consultation_request", { service: kit, ...slot });
-  assert.ok(!proposal.ok && proposal.error === "confirm_first" && proposal.details?.service === kit);
+  assert.ok(!proposal.ok && proposal.error === "confirm_first" && JSON.stringify(proposal.details?.services) === JSON.stringify([kit]));
   c.assistantSays();
   c.customerSays(1, "yes");
   assert.equal((await c.call("create_consultation_request", { service: kit, ...slot })).ok, true);
   assert.deepEqual(c.rpcs, ["create_consultation_request"]);
-  assert.equal(c.written[0].p_service, kit);
+  assert.deepEqual(c.written[0].p_services, [kit]);
 });
 
 test("with a services table: another service in answer to the read-back is a new proposal, read back before it's saved", async () => {
@@ -451,7 +466,7 @@ test("with a services table: another service in answer to the read-back is a new
   d.assistantSays();
   d.customerSays(1, "actually make it a crown");
   const crown = await d.call("create_consultation_request", { service: "crown", ...slot });
-  assert.ok(!crown.ok && crown.error === "confirm_first" && crown.details?.service === "Porcelain crown");
+  assert.ok(!crown.ok && crown.error === "confirm_first" && JSON.stringify(crown.details?.services) === JSON.stringify(["Porcelain crown"]));
   assert.deepEqual(d.rpcs, []);
 });
 
@@ -513,7 +528,7 @@ test("with opening hours: a closed date is refused in code, with the coming clos
 // ---------------------------------------------------------------------------
 
 // A pending request for a crown on Tuesday Oct 20 at 3 PM (LA), made in this conversation.
-const CROWN: StoredRequest = { service: "Porcelain crown", preferredAt: new Date("2026-10-20T22:00:00Z"), status: "pending" };
+const CROWN: StoredRequest = { services: ["Porcelain crown"], service: "Porcelain crown", preferredAt: new Date("2026-10-20T22:00:00Z"), status: "pending" };
 const DENTAL = [
   { name: "Porcelain crown", requestable: true },
   { name: "Porcelain veneer (per tooth)", requestable: true },
@@ -531,7 +546,7 @@ test("change: a pending request gets a new time; read back with what it replaces
     error: "confirm_first",
     message: CONFIRM_FIRST_MESSAGE,
     details: {
-      service: "Porcelain crown",
+      services: ["Porcelain crown"],
       preferred_datetime: "2026-10-22T10:00",
       preferred_time: "Thursday, October 22, 2026 at 10:00 AM PDT",
       instead_of: "Tuesday, October 20, 2026 at 3:00 PM PDT",
@@ -542,13 +557,13 @@ test("change: a pending request gets a new time; read back with what it replaces
   // The model sends only what changes again: the stored proposal says the rest.
   const done = await c.call("change_consultation_request", change);
   assert.ok(done.ok && done.service === "Porcelain crown" && done.preferred_time === "Thursday, October 22, 2026 at 10:00 AM PDT");
-  assert.deepEqual(done.changed_from, { service: "Porcelain crown", preferred_time: "Tuesday, October 20, 2026 at 3:00 PM PDT" });
+  assert.deepEqual(done.changed_from, { services: ["Porcelain crown"], service: "Porcelain crown", preferred_time: "Tuesday, October 20, 2026 at 3:00 PM PDT" });
   assert.deepEqual(c.rpcs, ["change_consultation_request"]);
   assert.deepEqual(c.written[0], {
     p_business_id: "b",
     p_conversation_id: "c",
     p_current_at: "2026-10-20T22:00:00.000Z",
-    p_service: "Porcelain crown",
+    p_services: ["Porcelain crown"],
     p_preferred_at: "2026-10-22T17:00:00.000Z",
     p_current_time: "Tuesday, October 20, 2026 at 3:00 PM PDT",
   });
@@ -559,11 +574,71 @@ test("change: another service goes through the same choice as a new request", as
   // Seen live: naming the current service too made it "crown or veneer?".
   c.customerSays(1, "make it a veneer instead of the crown");
   const veneer = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", service: "veneer" });
-  assert.ok(!veneer.ok && veneer.error === "confirm_first" && veneer.details?.service === "Porcelain veneer (per tooth)" && veneer.details?.preferred_datetime === "2026-10-20T15:00");
+  assert.ok(!veneer.ok && veneer.error === "confirm_first" && JSON.stringify(veneer.details?.services) === JSON.stringify(["Porcelain veneer (per tooth)"]) && veneer.details?.preferred_datetime === "2026-10-20T15:00");
   c.customerSays(1, "or a root canal");
   const which = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", service: "root canal" });
   assert.ok(!which.ok && which.error === "choose_service");
   assert.deepEqual(c.rpcs, []);
+});
+
+test("one visit, several services: each is checked, unclear ones asked about together, all saved in one request", async () => {
+  const SALON = ["Women's cut and style", "Men's cut", "Full colour", "Root touch-up", "Toner and gloss"].map((name) => ({ name, requestable: true }));
+  const c = conversation({ services: SALON });
+  const slot = { preferred_datetime: "2026-10-24T10:00" };
+  c.customerSays(1, "a cut and colour on Saturday at 10");
+  const ask = await c.call("create_consultation_request", { services: ["cut", "colour"], ...slot });
+  // Both at once, each with only its own options: answering one can't undo the other.
+  assert.ok(!ask.ok && ask.error === "choose_service");
+  assert.deepEqual(ask.choices, [
+    { for: "cut", options: ["Women's cut and style", "Men's cut"] },
+    { for: "colour", options: ["Full colour"] },
+  ]);
+  c.assistantSays();
+  c.customerSays(1, "women's cut, and yes the full colour");
+  const both = ["Women's cut and style", "Full colour"];
+  const proposal = await c.call("create_consultation_request", { services: both, ...slot });
+  assert.ok(!proposal.ok && proposal.error === "confirm_first");
+  assert.deepEqual(proposal.details?.services, both);
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  const done = await c.call("create_consultation_request", { services: [...both].reverse(), ...slot });
+  // The same visit in another order: it commits on the yes.
+  assert.ok(done.ok && done.already_requested === false);
+  assert.deepEqual([...(c.written[0].p_services as string[])].sort(), [...both].sort());
+});
+
+test("one visit per time: another request already there is refused, not reported as this one", async () => {
+  const c = conversation({ slotTaken: ["Porcelain crown"] });
+  const slot = { preferred_datetime: "2026-10-20T15:00" };
+  await c.call("create_consultation_request", { services: ["fluoride treatment"], ...slot });
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  const out = await c.call("create_consultation_request", { services: ["fluoride treatment"], ...slot });
+  assert.ok(!out.ok && out.error === "slot_taken" && /already has a request at that time, for Porcelain crown/.test(out.message));
+  // A retry of the same visit is just that.
+  const same = conversation({ slotTaken: ["Porcelain crown"] });
+  await same.call("create_consultation_request", { services: ["porcelain crown"], ...slot });
+  same.assistantSays();
+  same.customerSays(1, "yes");
+  const again = await same.call("create_consultation_request", { services: ["porcelain crown"], ...slot });
+  assert.ok(again.ok && again.already_requested === true);
+});
+
+test("change: services added to a visit keep the ones it has", async () => {
+  const c = conversation({ requests: [CROWN], services: DENTAL });
+  c.customerSays(1, "can you add a veneer to that visit?");
+  const add = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", services: ["Porcelain crown", "veneer"] });
+  assert.ok(!add.ok && add.error === "confirm_first");
+  assert.deepEqual(add.details?.services, ["Porcelain crown", "Porcelain veneer (per tooth)"]);
+  const same = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", services: ["porcelain crown"] });
+  assert.equal(same.error, "no_change");
+});
+
+test("services: one to five, and a lone service is a list of one", () => {
+  const at = { preferred_datetime: "2026-10-20T15:00" };
+  assert.deepEqual(consultationSchema.parse({ service: "whitening", ...at }).services, ["whitening"]);
+  assert.equal(consultationSchema.safeParse({ services: [], ...at }).success, false);
+  assert.equal(consultationSchema.safeParse({ services: ["a cut", "b cut", "c cut", "d cut", "e cut", "f cut"], ...at }).success, false);
 });
 
 test("change: only a pending request in this conversation, and only into an open time", async () => {

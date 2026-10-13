@@ -67,14 +67,14 @@ isOneToOne: false
                   ]
                 },"consultation_requests": {
                   Row: {
-                    "business_id": string,"contact_email": string | null,"contact_name": string,"contact_phone": string | null,"conversation_id": string | null,"created_at": string,"id": string,"lead_id": string,"notes": string | null,"preferred_at": string,"service": string,"status": string,"updated_at": string
+                    "business_id": string,"contact_email": string | null,"contact_name": string,"contact_phone": string | null,"conversation_id": string | null,"created_at": string,"id": string,"lead_id": string,"notes": string | null,"preferred_at": string,"service": string | null,"services": (string)[],"status": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "business_id": string,"contact_email"?: string | null,"contact_name": string,"contact_phone"?: string | null,"conversation_id"?: string | null,"created_at"?: string,"id"?: string,"lead_id": string,"notes"?: string | null,"preferred_at": string,"service": string,"status"?: string,"updated_at"?: string
+                    "business_id": string,"contact_email"?: string | null,"contact_name": string,"contact_phone"?: string | null,"conversation_id"?: string | null,"created_at"?: string,"id"?: string,"lead_id": string,"notes"?: string | null,"preferred_at": string,"service"?: never,"services": (string)[],"status"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "business_id"?: string,"contact_email"?: string | null,"contact_name"?: string,"contact_phone"?: string | null,"conversation_id"?: string | null,"created_at"?: string,"id"?: string,"lead_id"?: string,"notes"?: string | null,"preferred_at"?: string,"service"?: string,"status"?: string,"updated_at"?: string
+                    "business_id"?: string,"contact_email"?: string | null,"contact_name"?: string,"contact_phone"?: string | null,"conversation_id"?: string | null,"created_at"?: string,"id"?: string,"lead_id"?: string,"notes"?: string | null,"preferred_at"?: string,"service"?: never,"services"?: (string)[],"status"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -353,7 +353,7 @@ isOneToOne: false
 { Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_reason": string }; Returns: Json
                            },
 "change_consultation_request":
-{ Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_current_time": string,"p_preferred_at": string,"p_service": string }; Returns: Json
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_current_time": string,"p_preferred_at": string,"p_services": (string)[] }; Returns: Json
                            },
 "claim_reply_attempt":
 { Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
@@ -365,7 +365,7 @@ isOneToOne: false
 { Args: { "p_business_id": string }; Returns: Json
                            },
 "create_consultation_request":
-{ Args: { "p_business_id": string,"p_conversation_id": string,"p_notes"?: string,"p_preferred_at": string,"p_service": string }; Returns: Json
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_notes"?: string,"p_preferred_at": string,"p_services": (string)[] }; Returns: Json
                            },
 "hybrid_search":
 { Args: { "p_business_id": string,"p_candidates"?: number,"p_match_count"?: number,"p_query_embedding": string,"p_query_text": string }; Returns: {
@@ -394,6 +394,12 @@ isOneToOne: false
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
+                           },
+"services_label":
+{ Args: { "p_services": (string)[] }; Returns: string
+                           },
+"services_valid":
+{ Args: { "p_services": (string)[] }; Returns: boolean
                            },
 "take_rate_limit":
 { Args: { "p_key": string,"p_max": number,"p_window_seconds": number }; Returns: boolean

@@ -33,9 +33,17 @@ async function conversation(services: string[]) {
     const { error: e } = await db().from("messages").insert({ conversation_id: convo!.id, role, content });
     assert.ifError(e);
   };
-  const request = async (service: string) =>
-    (await executeTool("create_consultation_request", JSON.stringify({ service, preferred_datetime: slot }), ctx, { log: () => {}, trace: () => {} })).output;
-  return { says, request };
+  const request = async (service: string | string[]) =>
+    (await executeTool("create_consultation_request", JSON.stringify({ [typeof service === "string" ? "service" : "services"]: service, preferred_datetime: slot }), ctx, { log: () => {}, trace: () => {} })).output;
+  // The customer's contact, saved as save_lead would (a request needs it).
+  const contact = async () => {
+    const { data: lead, error: e } = await db().from("leads").insert({ business_id: business!.id, name: "Itest Ana", phone: "5550606001", source_channel: "text" }).select("id").single();
+    assert.ifError(e);
+    const { error: e2 } = await db().from("conversations").update({ lead_id: lead!.id, customer_facts: { name: "Itest Ana", phone: "5550606001" } }).eq("id", convo!.id);
+    assert.ifError(e2);
+  };
+  const stored = async () => (await db().from("consultation_requests").select("services, service").eq("conversation_id", convo!.id)).data ?? [];
+  return { says, request, contact, stored };
 }
 
 const slot = `${formatLocal(new Date(Date.now() + 7 * 86_400_000), TZ).slice(0, 10)}T15:00`;
@@ -52,7 +60,7 @@ test("several fit: the agent must ask, and only the customer's answer to the opt
   await c.says("user", "the second one");
   const proposal = await c.request(KIT);
   assert.ok(!proposal.ok && proposal.error === "confirm_first");
-  assert.equal(proposal.details?.service, KIT, "read back under its exact name");
+  assert.deepEqual(proposal.details?.services, [KIT], "read back under its exact name");
   assert.equal((await c.request("Porcelain crown")).error, "choose_service", "not an option they were offered");
 });
 
@@ -78,7 +86,7 @@ test("the customer names one: its exact name; not offered: what can be requested
   const c = await conversation([IN_OFFICE, KIT, "Porcelain crown"]);
   await c.says("user", "I'd like a crown please");
   const crown = await c.request("crown");
-  assert.ok(!crown.ok && crown.error === "confirm_first" && crown.details?.service === "Porcelain crown");
+  assert.ok(!crown.ok && crown.error === "confirm_first" && JSON.stringify(crown.details?.services) === JSON.stringify(["Porcelain crown"]));
 
   await c.says("user", "and gum surgery too");
   const gum = await c.request("gum surgery");
@@ -86,9 +94,31 @@ test("the customer names one: its exact name; not offered: what can be requested
   assert.deepEqual(gum.options, [IN_OFFICE, KIT, "Porcelain crown"]);
 });
 
+test("one visit, two services: read back together, saved as one request", async () => {
+  const c = await conversation([IN_OFFICE, KIT, "Porcelain crown"]);
+  await c.contact();
+  await c.says("user", "I'd like a porcelain crown and the take-home whitening kit next week at 3");
+  const proposal = await c.request(["crown", "take-home kit"]);
+  assert.ok(!proposal.ok && proposal.error === "confirm_first");
+  assert.deepEqual(proposal.details?.services, ["Porcelain crown", KIT], "each by its exact name");
+  await c.says("assistant", `Porcelain crown and ${KIT}, next week at 3:00 PM. Is that right?`);
+  await c.says("user", "yes");
+  const done = await c.request(["Porcelain crown", KIT]);
+  assert.ok(done.ok && done.already_requested === false);
+  assert.deepEqual(await c.stored(), [{ services: ["Porcelain crown", KIT], service: `Porcelain crown, ${KIT}` }]);
+  // Another visit at that time isn't this one: refused, never "already requested".
+  await c.says("user", "and in-office teeth whitening at the same time");
+  assert.equal((await c.request([IN_OFFICE])).error, "confirm_first");
+  await c.says("assistant", `${IN_OFFICE}, next week at 3:00 PM. Is that right?`);
+  await c.says("user", "yes");
+  const other = await c.request([IN_OFFICE]);
+  assert.ok(!other.ok && other.error === "slot_taken" && other.message.includes(`for Porcelain crown, ${KIT}`));
+  assert.equal((await c.stored()).length, 1);
+});
+
 test("no services table: the service stays as the model wrote it", async () => {
   const c = await conversation([]);
   await c.says("user", "whitening please");
   const out = await c.request("teeth whitening");
-  assert.ok(!out.ok && out.error === "confirm_first" && out.details?.service === "teeth whitening");
+  assert.ok(!out.ok && out.error === "confirm_first" && JSON.stringify(out.details?.services) === JSON.stringify(["teeth whitening"]));
 });
