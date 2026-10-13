@@ -136,7 +136,20 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 - **Saved at once:** the whole table is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its row and field, and nothing changes.
 - Price and duration are text ("$4,000 to $6,000", "Free"): businesses write ranges and words.
 - **Consultation requests take the service from this table** (see Agent: the service of a consultation request).
-- **Next steps:** the opening hours will get a table too; answers about services and prices will come from it.
+- **Next step:** answers about services and prices will come from this table.
+
+## Admin: opening hours
+
+`/admin/[slug]/hours` holds the business's week: one or more time ranges a day (a lunch break is two), or closed, in the business's timezone; when the last appointment starts ("1 hour before closing"); **closed dates** (holidays, with an optional label); and **notes** for what the ranges can't say ("Saturdays: first and third of the month only", up to 500 characters). Code: `src/components/admin/hours.tsx`, `src/lib/admin/hours.ts`, `src/lib/admin/hours-rows.ts`.
+
+- **Editing:** "Open this day", "Add hours" (up to 4 ranges a day), remove a range, "Copy Monday to Tuesday–Friday", and "Add closed date" (up to 100). A range ending at 12:00 AM closes at midnight. Saved at once: overlaps, a closing time before the opening one, and a missing or repeated closed date show on their row, and nothing changes.
+- **The consultation tool checks the time in code** (`startCheck()`), for text and voice. A request for a time no appointment can start returns `outside_opening_hours`, nothing is proposed, and the assistant suggests another time:
+  - closed then (Sunday, a lunch break, after closing): the week's hours, one line a day, and the coming closed dates;
+  - a closed date: "closed on that date (Thanksgiving)";
+  - too close to closing: the last start that day too ("the last appointment then starts at 4:00 PM"). The last start itself is allowed: "one hour before closing" at 5 PM allows 4:00 PM.
+
+  Each range counts on its own, so an appointment before a lunch break must start by the break minus the setting. A business without hours keeps today's behaviour: the prompt still asks the model to check the hours in the documents.
+- **The notes are the one part not checked in code** (free text): they come back with a refusal ("suggest a time ..., keeping to the notes"). Kept simple on purpose: each day is opening and closing times, so a day like "first and third Saturday only" is entered as every Saturday plus a note, and a request for another Saturday is caught by staff when they confirm it. Holidays belong in the closed dates, which are checked.
 
 ## Admin: overview, leads and consultations
 

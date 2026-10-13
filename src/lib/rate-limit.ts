@@ -44,6 +44,7 @@ export const LIMITS = {
   createBusinessIp: (ip: string): Limit => ({ key: `business:create:ip:${ip}`, windowSeconds: 3600, max: 5 }),
   saveProfile: (businessId: string): Limit => ({ key: `profile:business:${businessId}`, windowSeconds: 600, max: 30 }),
   saveServices: (businessId: string): Limit => ({ key: `services:save:business:${businessId}`, windowSeconds: 600, max: 30 }),
+  saveHours: (businessId: string): Limit => ({ key: `hours:save:business:${businessId}`, windowSeconds: 600, max: 30 }),
 };
 
 export const TOO_MANY = "You're sending messages quickly. Please wait a moment and try again.";
