@@ -85,6 +85,11 @@ export interface ToolSummary {
 
 const record = (value: Json): Record<string, Json | undefined> => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 const text = (value: Json | undefined) => (typeof value === "string" && value.trim() ? value : null);
+// A request's services: the list the model sent ("a, b"), or one service (before lists).
+const services = (args: Record<string, Json | undefined>) => {
+  const list = Array.isArray(args.services) ? args.services.filter((s): s is string => typeof s === "string" && s.trim() !== "") : [];
+  return list.length ? list.join(", ") : text(args.service);
+};
 
 // One line per tool call, e.g. `"whitening price" · 3 matches`. The full
 // arguments and result are one click away; this line is for scanning.
@@ -101,10 +106,10 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
     const fields = Object.keys(args).filter((k) => text(args[k]));
     detail = fields.length ? `{${fields.join(", ")}}` : null;
   } else if (call.name === "create_consultation_request") {
-    detail = [text(result.service) ?? text(args.service), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
+    detail = [text(result.service) ?? services(args), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
   } else if (call.name === "change_consultation_request") {
     // What it becomes, and from when.
-    const now = [text(result.service) ?? text(args.service), text(result.preferred_time) ?? text(args.preferred_datetime)].filter(Boolean).join(" · ");
+    const now = [text(result.service) ?? services(args), text(result.preferred_time) ?? text(args.preferred_datetime)].filter(Boolean).join(" · ");
     const was = text(record(result.changed_from ?? null).preferred_time) ?? text(args.current_datetime);
     detail = [now, was && `was ${was}`].filter(Boolean).join(", ") || null;
   } else if (call.name === "cancel_consultation_request") {
@@ -126,6 +131,7 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   // A change to a request the team already handled, or to none, or to the same.
   if (!call.ok && result.error === "request_not_pending") return { detail, outcome: "already handled by the team", tone: "warning", failed: false };
   if (!call.ok && result.error === "request_not_found") return { detail, outcome: "no such request", tone: "warning", failed: false };
+  if (!call.ok && result.error === "slot_taken") return { detail, outcome: "another request at that time", tone: "warning", failed: false };
   if (!call.ok && result.error === "no_change") return { detail, outcome: "nothing to change", tone: "neutral", failed: false };
   if (!call.ok && result.error === "lead_required") return { detail, outcome: "contact not saved yet", tone: "warning", failed: false };
   if (!call.ok) {

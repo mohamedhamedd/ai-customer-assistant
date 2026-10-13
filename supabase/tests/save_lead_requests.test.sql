@@ -14,14 +14,14 @@ insert into conversations (id, business_id, session_id) values
 
 -- The customer saves their details and makes three requests.
 select save_lead('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', 'text', 'Khaled Raof', null, '01013514995');
-select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', 'Root canal', '2026-10-20 22:00+00');
-select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', 'Crown', '2026-10-21 22:00+00');
-select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', 'Retainers', '2026-10-22 22:00+00');
+select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', array['Root canal'], '2026-10-20 22:00+00');
+select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', array['Crown'], '2026-10-21 22:00+00');
+select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', array['Retainers'], '2026-10-22 22:00+00');
 update consultation_requests set status = 'confirmed' where service = 'Crown' and conversation_id = '00000000-0000-0000-0000-0000000000c5';
 update consultation_requests set status = 'cancelled' where service = 'Retainers' and conversation_id = '00000000-0000-0000-0000-0000000000c5';
 -- Another conversation's request with the same phone stays as it is.
 select save_lead('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c6', 'text', 'Someone', null, '01013514995');
-select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c6', 'Cleaning', '2026-10-20 22:00+00');
+select create_consultation_request('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c6', array['Cleaning'], '2026-10-20 22:00+00');
 
 -- Seen live: the customer corrects their phone number.
 select is((save_lead('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000c5', 'text', 'Khaled Raof', null, '01013514998'))

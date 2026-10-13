@@ -8,7 +8,7 @@ import { describeHours, formatClosedDate, formatTime, startCheck, upcomingClosed
 import { retrieve, type Source } from "@/lib/rag/retrieve";
 import { isPlainYes } from "@/lib/chat/affirm";
 import { loadServices, loadWeek } from "./tables";
-import { chooseService, MAX_LISTED, words, type ServiceChoice, type ServiceEvidence } from "./service-choice";
+import { chooseService, MAX_LISTED, namedIn, words, type ServiceChoice, type ServiceEvidence } from "./service-choice";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
@@ -48,7 +48,18 @@ export type ToolOutput =
   // options: choose_service and service_not_found, service names to offer.
   // hours, closed_dates, notes: outside_opening_hours, the week's hours (one
   // line a day), the coming closed dates, and the business's notes.
-  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[]; closed_dates?: string[]; notes?: string };
+  | {
+      ok: false;
+      error: string;
+      message: string;
+      details?: Record<string, unknown>;
+      options?: string[];
+      // choose_service for several services: the options for each.
+      choices?: { for: string; options: string[] }[];
+      hours?: string[];
+      closed_dates?: string[];
+      notes?: string;
+    };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -254,11 +265,35 @@ const saveLead = defineTool({
 
 const MAX_DAYS_AHEAD = 183;
 
-export const consultationSchema = z.object({
-  service: z.string().trim().min(2, "service is required").max(120, "service is too long"),
-  preferred_datetime: z.string().trim(),
-  notes: optional(z.string().trim().max(500, "notes are too long")),
-});
+// One request is one visit: one time, one to five services. A lone service
+// (the model sometimes sends one) is a list of one.
+export const MAX_SERVICES = 5;
+const servicesList = z
+  .array(z.string().trim().min(2, "each service needs a name").max(120, "a service name is too long"))
+  .min(1, "name at least one service")
+  .max(MAX_SERVICES, `at most ${MAX_SERVICES} services in one request: make another request for the rest`);
+const asList = (v: unknown) => {
+  if (!v || typeof v !== "object" || "services" in v) return v;
+  const { service, ...rest } = v as { service?: unknown };
+  return typeof service === "string" ? { ...rest, services: [service] } : v;
+};
+
+export const consultationSchema = z.preprocess(
+  asList,
+  z.object({
+    services: servicesList,
+    preferred_datetime: z.string().trim(),
+    notes: optional(z.string().trim().max(500, "notes are too long")),
+  }),
+);
+
+// A list's identity, whatever the order or wording ("teeth whitening",
+// "teeth whitening consultation"); with a services table, the exact names.
+const servicesKey = (services: string[]) => [...new Set(services.map((s) => words(s).sort().join(" ") || s.trim().toLowerCase()))].sort();
+const sameServices = (a: string[], b: string[]) => JSON.stringify(servicesKey(a)) === JSON.stringify(servicesKey(b));
+const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+// "Women's cut and style, Full colour": the database's label (services_label).
+export const servicesLabel = (services: string[]) => services.join(", ");
 
 export type PreferredTime = { ok: true; at: Date } | { ok: false; message: string };
 
@@ -336,17 +371,7 @@ const weekOf = (ctx: ToolContext) => (ctx.openingHours ?? ((c) => loadWeek(c.bus
 // The service isn't settled (service-choice.ts): the customer must choose,
 // or it isn't one they can request. Nothing is saved.
 function serviceRefusal(choice: Exclude<ServiceChoice, { kind: "ok" }>, requested: string): ToolRunResult {
-  if (choice.kind === "choose") {
-    return {
-      output: {
-        ok: false,
-        error: "choose_service",
-        message:
-          "Nothing is saved: the customer must choose the service. Ask them which of these options they want (or, for one option, whether it is what they mean), naming each exactly as written, and wait for their answer. Don't choose for them. Then call this tool again with the option they chose.",
-        options: choice.options,
-      },
-    };
-  }
+  if (choice.kind === "choose") return chooseRefusal([{ requested, options: choice.options }]);
   const offer = choice.options.length
     ? `Tell the customer, and offer the services they can request${choice.options.length === MAX_LISTED ? " (some of them)" : ""}: the options.`
     : "This business takes no consultation requests here: offer to have the team contact the customer instead.";
@@ -358,6 +383,53 @@ function serviceRefusal(choice: Exclude<ServiceChoice, { kind: "ok" }>, requeste
       options: choice.options,
     },
   };
+}
+
+// The customer must choose: for one service, or for each of several at once
+// (a cut and a colour), so answering one doesn't undo another. options holds
+// them all: the next call may name any of them (serviceEvidenceFromDb).
+function chooseRefusal(choices: { requested: string; options: string[] }[]): ToolRunResult {
+  const options = [...new Set(choices.flatMap((c) => c.options))];
+  if (choices.length === 1) {
+    return {
+      output: {
+        ok: false,
+        error: "choose_service",
+        message:
+          "Nothing is saved: the customer must choose the service. Ask them which of these options they want (or, for one option, whether it is what they mean), naming each exactly as written, and wait for their answer. Don't choose for them. Then call this tool again with the option they chose.",
+        options,
+      },
+    };
+  }
+  return {
+    output: {
+      ok: false,
+      error: "choose_service",
+      message:
+        "Nothing is saved: the customer must choose for each of these services. Ask about each one in the same message (for each, which option they want, naming the options exactly as written), and wait for their answer. Don't choose for them. Then call this tool again with all the services they chose.",
+      choices: choices.map((c) => ({ for: c.requested, options: c.options })),
+      options,
+    },
+  };
+}
+
+// Each requested service through the services table (service-choice.ts):
+// their exact names, in order, or the refusal. Something not offered stops
+// it; every service the customer must choose is asked about at once.
+function chooseServices(requested: string[], evidence: ServiceEvidence): { ok: true; services: string[] } | { ok: false; result: ToolRunResult } {
+  const chosen: string[] = [];
+  const toChoose: { requested: string; options: string[] }[] = [];
+  for (const r of requested) {
+    const choice = chooseService(r, evidence);
+    if (choice.kind === "not_found") return { ok: false, result: serviceRefusal(choice, r) };
+    if (choice.kind === "choose") {
+      // With several services, a choice's options are the ones its words fit:
+      // "cut" in "a cut and colour" isn't offered the colours.
+      const fit = requested.length > 1 ? namedIn(r, choice.options).matched : [];
+      toChoose.push({ requested: r, options: fit.length ? fit : choice.options });
+    } else if (!chosen.some((c) => sameName(c, choice.service))) chosen.push(choice.service);
+  }
+  return toChoose.length ? { ok: false, result: chooseRefusal(toChoose) } : { ok: true, services: chosen };
 }
 
 // No appointment can start at that local time (opening hours, closed dates,
@@ -392,13 +464,17 @@ const createConsultationRequest = defineTool({
   name: "create_consultation_request",
   writes: true,
   description:
-    "Create a consultation REQUEST for the team to confirm (not a booking). The customer's contact details must already be saved with save_lead. The first call for a time saves nothing: it returns the details to read back to the customer. Call again with the same details after they confirm.",
+    "Create a consultation REQUEST for the team to confirm (not a booking): one visit, at one time, for one or more services. The customer's contact details must already be saved with save_lead. The first call for a time saves nothing: it returns the details to read back to the customer. Call again with the same details after they confirm.",
   parameters: {
     type: "object",
     properties: {
-      service: {
-        type: "string",
-        description: "The service the consultation is for: its exact name if you know it, otherwise the customer's words. The tool checks it against the business's services.",
+      services: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 5,
+        description:
+          "The services for this visit, one or more (\"a cut and colour\": both): each by its exact name if you know it, otherwise the customer's words. The tool checks each against the business's services.",
       },
       preferred_datetime: {
         type: "string",
@@ -406,31 +482,31 @@ const createConsultationRequest = defineTool({
       },
       notes: { type: "string", description: "Anything else the customer wants the team to know. Optional." },
     },
-    required: ["service", "preferred_datetime"],
+    required: ["services", "preferred_datetime"],
     additionalProperties: false,
   },
   schema: consultationSchema,
-  // The service, from the business's services table (service-choice.ts);
+  // Each service, from the business's services table (service-choice.ts);
   // then the time, against its opening hours. Neither table: as before.
   async prepare(args, ctx) {
     const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), weekOf(ctx)]);
-    const choice = chooseService(args.service, evidence);
-    if (choice.kind !== "ok") return { result: serviceRefusal(choice, args.service) };
+    const chosen = chooseServices(args.services, evidence);
+    if (!chosen.ok) return { result: chosen.result };
     const closed = hoursRefusal(week, args.preferred_datetime, ctx);
     if (closed) return { result: closed };
-    return { args: { ...args, service: choice.service } };
+    return { args: { ...args, services: chosen.services } };
   },
   confirm: {
-    // The time slot and the service. The service by its words, so wording
-    // may differ ("teeth whitening", "teeth whitening consultation"); with a
-    // services table it is the exact name, so another service is a new
-    // proposal, read back before it's saved.
+    // The time slot and the services. By their words, so wording may differ
+    // ("teeth whitening", "teeth whitening consultation"); with a services
+    // table they are the exact names, so another list is a new proposal,
+    // read back before it's saved.
     propose: (args, ctx) => {
       const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
       if (!when.ok) return null;
       return {
-        key: JSON.stringify([when.at.toISOString(), words(args.service).sort()]),
-        details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes },
+        key: JSON.stringify([when.at.toISOString(), servicesKey(args.services)]),
+        details: { services: args.services, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes },
       };
     },
   },
@@ -441,7 +517,7 @@ const createConsultationRequest = defineTool({
     const { data, error } = await (ctx.client ?? db()).rpc("create_consultation_request", {
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
-      p_service: args.service,
+      p_services: args.services,
       p_preferred_at: when.at.toISOString(),
       p_notes: args.notes,
     });
@@ -456,15 +532,28 @@ const createConsultationRequest = defineTool({
     }
     if (error) throw new Error(`create_consultation_request failed: ${error.message}`);
 
-    const row = data as { request_id: string; status: string; service: string; created: boolean };
+    const row = data as { request_id: string; status: string; services: string[]; service: string; created: boolean };
+    // The time is taken by another visit of theirs: a slot is one request
+    // (consultation_dedupe_by_slot). Before, a second service at the same
+    // time came back as the first one, "already requested".
+    if (!row.created && !sameServices(row.services, args.services)) {
+      return {
+        output: {
+          ok: false,
+          error: "slot_taken",
+          message: `Nothing is saved: the customer already has a request at that time, for ${row.service}. To add to that visit, use change_consultation_request with its time and the full list of services; otherwise ask for another time.`,
+        },
+      };
+    }
     return {
       output: {
         ok: true,
         request_id: row.request_id,
         status: row.status,
         already_requested: !row.created,
-        // On a repeat, the service as first requested (the wording may differ).
-        service: row.service ?? args.service,
+        // On a repeat, the services as first requested (the wording may differ).
+        services: row.services,
+        service: row.service,
         // The action card shows this string as is.
         preferred_time: formatHuman(when.at, ctx.timeZone),
         preferred_datetime: formatLocal(when.at, ctx.timeZone),
@@ -480,6 +569,8 @@ const createConsultationRequest = defineTool({
 
 // A request made in this conversation, as change_consultation_request finds it.
 export interface StoredRequest {
+  services: string[];
+  // Their label: "Women's cut and style, Full colour".
   service: string;
   preferredAt: Date;
   status: string;
@@ -488,23 +579,26 @@ export interface StoredRequest {
 async function requestsFromDb(ctx: ToolContext): Promise<StoredRequest[]> {
   const { data, error } = await (ctx.client ?? db())
     .from("consultation_requests")
-    .select("service, preferred_at, status")
+    .select("services, preferred_at, status")
     .eq("business_id", ctx.businessId)
     .eq("conversation_id", ctx.conversationId)
     .order("created_at");
   if (error) throw new Error(`Loading the requests failed: ${error.message}`);
-  return (data ?? []).map((r) => ({ service: r.service, preferredAt: new Date(r.preferred_at), status: r.status }));
+  return (data ?? []).map((r) => ({ services: r.services, service: servicesLabel(r.services), preferredAt: new Date(r.preferred_at), status: r.status }));
 }
 
-export const changeConsultationSchema = z
-  .object({
-    current_datetime: z.string().trim(),
-    service: optional(z.string().trim().min(2, "service is too short").max(120, "service is too long")),
-    preferred_datetime: optional(z.string().trim()),
-  })
-  .superRefine((v, ctx) => {
-    if (!v.service && !v.preferred_datetime) ctx.addIssue({ code: "custom", message: "say what changes: a new service, a new preferred_datetime, or both", path: ["preferred_datetime"] });
-  });
+export const changeConsultationSchema = z.preprocess(
+  asList,
+  z
+    .object({
+      current_datetime: z.string().trim(),
+      services: servicesList.optional(),
+      preferred_datetime: optional(z.string().trim()),
+    })
+    .superRefine((v, ctx) => {
+      if (!v.services && !v.preferred_datetime) ctx.addIssue({ code: "custom", message: "say what changes: new services, a new preferred_datetime, or both", path: ["preferred_datetime"] });
+    }),
+);
 
 // The request's current time, from the arguments (local, as in "Already
 // done"). Null when it isn't such a time.
@@ -557,7 +651,7 @@ const changeConsultationRequest = defineTool({
   name: "change_consultation_request",
   writes: true,
   description:
-    "Change a consultation request the customer already made in this conversation: another time, another service, or both. Only pending requests can be changed. The first call saves nothing: it returns the new details to read back. Call again with the same details after the customer confirms.",
+    "Change a consultation request the customer already made in this conversation: another time, other services (add, remove or swap), or both. Only pending requests can be changed. The first call saves nothing: it returns the new details to read back. Call again with the same details after the customer confirms.",
   parameters: {
     type: "object",
     properties: {
@@ -565,7 +659,14 @@ const changeConsultationRequest = defineTool({
         type: "string",
         description: "The request's current date and time, as listed under 'Already done in this conversation', format YYYY-MM-DDTHH:mm.",
       },
-      service: { type: "string", description: "The new service, if it changes: its exact name, or the customer's words. Leave out to keep it." },
+      services: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 5,
+        description:
+          "The full new list of services, if it changes: to add one, the current ones and the new one; to swap one, the list without it and with the new one. Exact names, or the customer's words. Leave out to keep them.",
+      },
       preferred_datetime: { type: "string", description: "The new date and time, if it changes: LOCAL time, format YYYY-MM-DDTHH:mm. Leave out to keep it." },
     },
     required: ["current_datetime"],
@@ -581,15 +682,22 @@ const changeConsultationRequest = defineTool({
     const { request } = found;
     if (request.status !== "pending") return { result: notPending(request, ctx, "changed") };
 
-    let service = request.service;
-    const [evidence, week] = await Promise.all([args.service ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null, args.preferred_datetime ? weekOf(ctx) : null]);
-    const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-    if (args.service && evidence && !same(args.service, request.service)) {
-      // The current service isn't one of the choices: "a veneer instead of
-      // the crown" names both, and only the veneer is being chosen.
-      const choice = chooseService(args.service, { ...evidence, services: evidence.services.filter((s) => !same(s.name, request.service)) });
-      if (choice.kind !== "ok") return { result: serviceRefusal(choice, args.service) };
-      service = choice.service;
+    // The ones it has stay as they are; new ones are checked like a new
+    // request's, without the current ones among the choices ("a veneer
+    // instead of the crown" names both, and only the veneer is being chosen).
+    const kept = (args.services ?? []).flatMap((s) => request.services.filter((c) => sameName(c, s)));
+    const added = (args.services ?? []).filter((s) => !request.services.some((c) => sameName(c, s)));
+    const [evidence, week] = await Promise.all([added.length ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null, args.preferred_datetime ? weekOf(ctx) : null]);
+    let services = request.services;
+    if (args.services) {
+      let fresh: string[] = [];
+      if (added.length && evidence) {
+        const chosen = chooseServices(added, { ...evidence, services: evidence.services.filter((s) => !request.services.some((c) => sameName(c, s.name))) });
+        if (!chosen.ok) return { result: chosen.result };
+        fresh = chosen.services;
+      }
+      services = [...new Set([...kept, ...fresh])];
+      if (services.length > MAX_SERVICES) return { result: invalid(`at most ${MAX_SERVICES} services in one request: make another request for the rest`) };
     }
     const preferred = args.preferred_datetime ?? formatLocal(request.preferredAt, ctx.timeZone);
     if (args.preferred_datetime && week) {
@@ -597,37 +705,37 @@ const changeConsultationRequest = defineTool({
       if (closed) return { result: closed };
     }
     const sameTime = currentAt(preferred, ctx)?.getTime() === request.preferredAt.getTime();
-    if (sameTime && service === request.service) {
+    if (sameTime && sameServices(services, request.services)) {
       return {
         result: {
           output: {
             ok: false,
             error: "no_change",
-            message: `Nothing is changed: the request is already ${service} on ${formatHuman(request.preferredAt, ctx.timeZone)}.`,
+            message: `Nothing is changed: the request is already ${servicesLabel(services)} on ${formatHuman(request.preferredAt, ctx.timeZone)}.`,
           },
         },
       };
     }
-    return { args: { current_datetime: formatLocal(request.preferredAt, ctx.timeZone), service, preferred_datetime: preferred } };
+    return { args: { current_datetime: formatLocal(request.preferredAt, ctx.timeZone), services, preferred_datetime: preferred } };
   },
   confirm: {
     // Which request, and what it becomes.
     propose: (args, ctx) => {
       const from = currentAt(args.current_datetime, ctx);
       const when = args.preferred_datetime ? resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now()) : null;
-      if (!from || !when?.ok || !args.service) return null;
+      if (!from || !when?.ok || !args.services) return null;
       return {
-        key: JSON.stringify([from.toISOString(), when.at.toISOString(), words(args.service).sort()]),
+        key: JSON.stringify([from.toISOString(), when.at.toISOString(), servicesKey(args.services)]),
         // Complete, so the stored proposal says what it becomes even when the
         // model sent only what changed (execute.ts reads it back from here).
-        details: { service: args.service, preferred_datetime: args.preferred_datetime, preferred_time: formatHuman(when.at, ctx.timeZone), instead_of: formatHuman(from, ctx.timeZone) },
+        details: { services: args.services, preferred_datetime: args.preferred_datetime, preferred_time: formatHuman(when.at, ctx.timeZone), instead_of: formatHuman(from, ctx.timeZone) },
       };
     },
   },
   async run(args, ctx) {
     const from = currentAt(args.current_datetime, ctx);
     if (!from) return invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm");
-    if (!args.service || !args.preferred_datetime) return invalid("say what changes: a new service, a new preferred_datetime, or both");
+    if (!args.services || !args.preferred_datetime) return invalid("say what changes: new services, a new preferred_datetime, or both");
     const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);
 
@@ -635,7 +743,7 @@ const changeConsultationRequest = defineTool({
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
       p_current_at: from.toISOString(),
-      p_service: args.service,
+      p_services: args.services,
       p_preferred_at: when.at.toISOString(),
       p_current_time: formatHuman(from, ctx.timeZone),
     });
@@ -648,17 +756,18 @@ const changeConsultationRequest = defineTool({
     if (error && refused[error.message]) return { output: { ok: false, error: error.message, message: refused[error.message] } };
     if (error) throw new Error(`change_consultation_request failed: ${error.message}`);
 
-    const row = data as { request_id: string; status: string; service: string; previous_service?: string; changed: boolean };
+    const row = data as { request_id: string; status: string; services: string[]; service: string; previous_services?: string[]; previous_service?: string; changed: boolean };
     return {
       output: {
         ok: true,
         request_id: row.request_id,
         status: row.status,
+        services: row.services,
         service: row.service,
         // The action card shows these strings as they are.
         preferred_time: formatHuman(when.at, ctx.timeZone),
         preferred_datetime: formatLocal(when.at, ctx.timeZone),
-        changed_from: { service: row.previous_service ?? row.service, preferred_time: formatHuman(from, ctx.timeZone) },
+        changed_from: { services: row.previous_services ?? row.services, service: row.previous_service ?? row.service, preferred_time: formatHuman(from, ctx.timeZone) },
         already_changed: !row.changed,
         note: "This is still a request. The team will contact the customer to confirm.",
       },
@@ -702,7 +811,7 @@ const cancelConsultationRequest = defineTool({
     if (request.status === "cancelled") {
       return {
         result: {
-          output: { ok: true, status: "cancelled", already_cancelled: true, service: request.service, preferred_time: formatHuman(request.preferredAt, ctx.timeZone) },
+          output: { ok: true, status: "cancelled", already_cancelled: true, services: request.services, service: request.service, preferred_time: formatHuman(request.preferredAt, ctx.timeZone) },
         },
       };
     }

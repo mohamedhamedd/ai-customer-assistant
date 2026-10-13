@@ -81,7 +81,8 @@ type RequestRecord = {
   contact_name: string;
   contact_email: string | null;
   contact_phone: string | null;
-  service: string;
+  // The services' label, computed by the database (services_label): never null.
+  service: string | null;
   preferred_at: string;
   status: string;
   created_at: string;
@@ -96,7 +97,7 @@ const toRequestRow = (r: RequestRecord): RequestRow => ({
   customer: r.contact_name,
   email: r.contact_email,
   phone: r.contact_phone,
-  service: r.service,
+  service: r.service ?? "",
   preferredAt: r.preferred_at,
   status: r.status as ConsultationStatus,
   requestedAt: r.created_at,

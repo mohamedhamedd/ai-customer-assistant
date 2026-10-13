@@ -9,7 +9,7 @@ An AI assistant that any small business can put in front of its customers. It an
 **For customers** (`/b/<business>`)
 - Answers questions about the business, with the source shown under each answer.
 - Saves their contact details.
-- Sends a consultation request for a service at a preferred time, and lets them change or cancel it while it's still pending.
+- Sends a consultation request for a visit (one or more services at a preferred time), and lets them change it (time, add or swap services) or cancel it while it's still pending.
 - Asks the team to contact them about anything it can't do itself.
 - Same assistant by voice, with the same tools and the same rules.
 

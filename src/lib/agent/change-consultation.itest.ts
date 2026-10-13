@@ -36,7 +36,7 @@ async function withRequest(status = "pending") {
     conversation_id: convo!.id,
     contact_name: "Itest Sara",
     contact_email: lead!.email,
-    service: "Porcelain crown",
+    services: ["Porcelain crown"],
     preferred_at: at.at.toISOString(),
     status,
   });
