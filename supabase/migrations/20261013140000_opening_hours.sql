@@ -3,10 +3,9 @@
 -- closed day has none. Times are the business's local time (its timezone).
 -- A consultation request for a time the business is closed is refused in
 -- code (src/lib/agent/tools.ts), instead of trusting the model to check.
--- A range can apply to some weeks of the month only ("1st and 3rd
--- Saturday"), and dates can be closed (closed_dates: holidays); both are
--- checked in code too. Anything else ("seasonal hours in summer") goes in
--- the business's hours notes, which the assistant reads with the hours.
+-- Dates can be closed (closed_dates: holidays), also checked in code.
+-- Anything else ("first and third Saturday only") goes in the business's
+-- hours notes, which the assistant reads with the hours.
 create table public.opening_hours (
   id          uuid primary key default gen_random_uuid(),
   business_id uuid not null references public.businesses(id) on delete cascade,
@@ -15,12 +14,9 @@ create table public.opening_hours (
   opens       time not null,
   -- 00:00 closes at midnight.
   closes      time not null,
-  -- Which of its weekday in the month: 1 to 5, -1 for the last. Empty:
-  -- every week.
-  weeks       smallint[] not null default '{}' check (weeks <@ '{1,2,3,4,5,-1}'::smallint[]),
   created_at  timestamptz not null default now(),
   check (closes > opens or closes = '00:00'),
-  unique (business_id, day, opens, weeks)
+  unique (business_id, day, opens)
 );
 
 -- Days the business is closed whatever the weekday's hours (holidays), in
@@ -65,9 +61,8 @@ begin
   end if;
   update public.businesses set last_start_before_close = p_last_start_before_close, hours_notes = btrim(p_notes) where id = p_business_id;
   delete from public.opening_hours where business_id = p_business_id;
-  insert into public.opening_hours (business_id, day, opens, closes, weeks)
-  select p_business_id, (e ->> 'day')::smallint, (e ->> 'opens')::time, (e ->> 'closes')::time,
-         coalesce(array(select w::smallint from jsonb_array_elements_text(e -> 'weeks') as w), '{}')
+  insert into public.opening_hours (business_id, day, opens, closes)
+  select p_business_id, (e ->> 'day')::smallint, (e ->> 'opens')::time, (e ->> 'closes')::time
     from jsonb_array_elements(p_hours) as e;
   delete from public.closed_dates where business_id = p_business_id;
   insert into public.closed_dates (business_id, date, label)

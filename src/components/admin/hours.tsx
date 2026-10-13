@@ -1,18 +1,16 @@
 "use client";
 
-import { ChevronDown, Copy, Loader2, Plus, X } from "lucide-react";
+import { Copy, Loader2, Plus, X } from "lucide-react";
 import { useRef, useState } from "react";
 import {
   CLOSED_LABEL_MAX,
   DAYS,
   formatMinutes,
-  formatWeeks,
   LAST_START_CHOICES,
   MAX_CLOSED,
   MAX_RANGES_PER_DAY,
   minutes,
   NOTES_MAX,
-  WEEK_CHOICES,
   type ClosedDate,
   type HoursRow,
   type HoursRowError,
@@ -22,9 +20,8 @@ import { AdminHeader } from "./header";
 import { useToast } from "./ui";
 
 // Opening hours: the business's week, one or more time ranges a day (a lunch
-// break is two; a range can be for some weeks of the month only), or
-// closed; when the last appointment starts; notes; and closed dates
-// (holidays). Saved at once. Consultation requests for a time no
+// break is two), or closed; when the last appointment starts; notes; and
+// closed dates (holidays). Saved at once. Consultation requests for a time no
 // appointment can start are refused in code.
 
 const timeInput =
@@ -36,20 +33,13 @@ const timeInput =
 // reported a hydration mismatch); later ones count on per page.
 type Keyed = HoursRow & { key: number };
 const numbered = (rows: HoursRow[], first: number): Keyed[] => rows.map((r, i) => ({ ...r, key: first + i }));
-const plain = (rows: Keyed[]): HoursRow[] => rows.map(({ day, opens, closes, weeks }) => ({ day, opens, closes, weeks }));
+const plain = (rows: Keyed[]): HoursRow[] => rows.map(({ day, opens, closes }) => ({ day, opens, closes }));
 const sorted = (rows: HoursRow[]) => [...rows].sort((a, b) => a.day - b.day || minutes(a.opens) - minutes(b.opens));
 
 // Closed dates, keyed the same way (their own numbers: their ids say "closed").
 type KeyedDate = ClosedDate & { key: number };
 const numberedDates = (dates: ClosedDate[], first: number): KeyedDate[] => dates.map((d, i) => ({ ...d, key: first + i }));
 const plainDates = (dates: KeyedDate[]): ClosedDate[] => dates.map(({ date, label }) => ({ date, label }));
-
-// The weeks control's label: "Every week", "1st and 3rd only".
-const weeksLabel = (weeks: number[]) => {
-  if (!weeks.length) return "Every week";
-  const text = `${formatWeeks(weeks)} only`;
-  return text[0].toUpperCase() + text.slice(1);
-};
 
 // "HH:mm" plus some hours, at most midnight ("00:00").
 const later = (hhmm: string, hours: number) => {
@@ -83,8 +73,6 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
   // By key: errors stay on their range (or date) while others are added or removed.
   const [errors, setErrors] = useState<Record<number, string>>({});
   const [dateErrors, setDateErrors] = useState<Record<number, string>>({});
-  // Ranges whose weeks control is open.
-  const [weeksOpen, setWeeksOpen] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
 
   const sortedDates = (ds: ClosedDate[]) => [...ds].sort((a, b) => a.date.localeCompare(b.date));
@@ -105,18 +93,8 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
   const add = (day: number) => {
     const last = rows.filter((r) => r.day === day).sort((a, b) => minutes(a.opens) - minutes(b.opens)).at(-1);
     const range = last ? { opens: last.closes === "00:00" ? "23:00" : last.closes, closes: later(last.closes, 2) } : { opens: "09:00", closes: "17:00" };
-    setRows((rs) => [...rs, ...keyed([{ day, ...range, weeks: [] }])]);
+    setRows((rs) => [...rs, ...keyed([{ day, ...range }])]);
   };
-  const toggleWeek = (key: number, week: number) => {
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, weeks: r.weeks.includes(week) ? r.weeks.filter((w) => w !== week) : [...r.weeks, week].sort((a, b) => (a === -1 ? 9 : a) - (b === -1 ? 9 : b)) } : r)));
-    setErrors((es) => without(es, key));
-  };
-  const toggleWeeksOpen = (key: number) =>
-    setWeeksOpen((open) => {
-      const next = new Set(open);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
 
   const updateDate = (key: number, field: "date" | "label", value: string) => {
     setDates((ds) => ds.map((d) => (d.key === key ? { ...d, [field]: value } : d)));
@@ -134,7 +112,7 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
   // Monday's hours on every weekday (Tuesday to Friday), replacing theirs.
   const copyMonday = () => {
     const monday = rows.filter((r) => r.day === 1);
-    setRows((rs) => [...rs.filter((r) => r.day < 2 || r.day > 5), ...[2, 3, 4, 5].flatMap((day) => keyed(monday.map((r) => ({ day, opens: r.opens, closes: r.closes, weeks: r.weeks }))))]);
+    setRows((rs) => [...rs.filter((r) => r.day < 2 || r.day > 5), ...[2, 3, 4, 5].flatMap((day) => keyed(monday.map((r) => ({ day, opens: r.opens, closes: r.closes }))))]);
     setErrors({});
   };
 
@@ -239,16 +217,6 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
                             />
                             <button
                               type="button"
-                              onClick={() => toggleWeeksOpen(r.key)}
-                              aria-expanded={weeksOpen.has(r.key)}
-                              aria-controls={`${id}-weeks`}
-                              className={`inline-flex h-9 items-center gap-1 rounded-lg px-2 text-[13px] hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-accent ${r.weeks.length ? "font-medium text-accent" : "text-text-muted"}`}
-                            >
-                              {weeksLabel(r.weeks)}
-                              <ChevronDown aria-hidden className={`size-3.5 transition-transform ${weeksOpen.has(r.key) ? "rotate-180" : ""}`} />
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => remove(r.key)}
                               aria-label={`Remove ${name}'s hours from ${r.opens} to ${r.closes}`}
                               className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-muted hover:bg-surface-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-accent"
@@ -256,25 +224,6 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
                               <X aria-hidden className="size-4" />
                             </button>
                           </div>
-                          {weeksOpen.has(r.key) && (
-                            <div id={`${id}-weeks`} role="group" aria-label={`Which ${name}s of the month`} className="mt-2 flex flex-wrap items-center gap-1.5">
-                              <span className="mr-1 text-[12px] text-text-muted">Which {name}s:</span>
-                              {WEEK_CHOICES.map((w) => (
-                                <button
-                                  key={w}
-                                  type="button"
-                                  aria-pressed={r.weeks.includes(w)}
-                                  onClick={() => toggleWeek(r.key, w)}
-                                  className={`h-8 min-w-11 rounded-full border px-2.5 text-[13px] focus-visible:outline-2 focus-visible:outline-accent ${
-                                    r.weeks.includes(w) ? "border-accent bg-accent text-accent-contrast" : "border-border hover:bg-surface-muted"
-                                  }`}
-                                >
-                                  {w === -1 ? "Last" : formatWeeks([w])}
-                                </button>
-                              ))}
-                              <span className="text-[12px] text-text-muted">{r.weeks.length ? "" : "None chosen: every week"}</span>
-                            </div>
-                          )}
                           {error && (
                             <p id={`${id}-error`} className="mt-1 text-[12px] text-danger">
                               {error}
@@ -323,7 +272,7 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
               Notes
             </label>
             <p id="hours-notes-help" className="text-[13px] text-text-muted">
-              Anything else about the hours, like seasonal hours. The assistant gives these with the hours. (For some weeks only, use the weeks choice on a day&apos;s hours; for holidays, Closed dates below: those are checked.)
+              What the hours above can&apos;t say: days that differ by week, seasonal hours. The assistant gives these with the hours. (Holidays go in Closed dates below: those are checked.)
             </p>
             <textarea
               id="hours-notes"
@@ -332,7 +281,7 @@ export function OpeningHours({ slug, timeZone, today, initial }: { slug: string;
               rows={3}
               onChange={(e) => setNotes(e.target.value)}
               aria-describedby="hours-notes-help"
-              placeholder="e.g. Shorter hours in August: the team will confirm."
+              placeholder="e.g. Saturdays: first and third of the month only."
               className="w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-[14px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
             <span className="self-end text-[12px] text-text-muted">

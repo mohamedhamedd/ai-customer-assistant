@@ -19,14 +19,14 @@ export class OpeningHoursError extends ChatHttpError {
 
 export async function listHours(businessId: string): Promise<Week> {
   const [hours, business, closed] = await Promise.all([
-    db().from("opening_hours").select("day, opens, closes, weeks").eq("business_id", businessId).order("day").order("opens"),
+    db().from("opening_hours").select("day, opens, closes").eq("business_id", businessId).order("day").order("opens"),
     db().from("businesses").select("last_start_before_close, hours_notes").eq("id", businessId).single(),
     db().from("closed_dates").select("date, label").eq("business_id", businessId).order("date"),
   ]);
   if (hours.error || business.error || closed.error) throw new Error(`Loading opening hours failed: ${(hours.error ?? business.error ?? closed.error)!.message}`);
   return {
     // Postgres returns "09:00:00".
-    hours: hours.data.map((r) => ({ day: r.day, opens: r.opens.slice(0, 5), closes: r.closes.slice(0, 5), weeks: r.weeks })),
+    hours: hours.data.map((r) => ({ day: r.day, opens: r.opens.slice(0, 5), closes: r.closes.slice(0, 5) })),
     lastStartBeforeClose: business.data.last_start_before_close,
     notes: business.data.hours_notes,
     closed: closed.data,

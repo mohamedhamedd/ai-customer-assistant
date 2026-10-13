@@ -275,10 +275,9 @@ A business's weekly opening hours, one row per time range: a day with a lunch br
 | `day` | smallint | no | | ISO weekday, 1 = Monday ... 7 = Sunday (`CHECK`) |
 | `opens` | time | no | | |
 | `closes` | time | no | | After `opens`, or `00:00` for midnight (`CHECK`) |
-| `weeks` | smallint[] | no | `'{}'` | Which of its weekday in the month: 1 to 5, -1 for the last (`CHECK`). Empty: every week |
 | `created_at` | timestamptz | no | `now()` | |
 
-Unique `(business_id, day, opens, weeks)`: ranges on different weeks may share a time. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `businesses.hours_notes` (text, at most 500, default `''`) holds what the ranges can't say: days that differ by week, holidays. `replace_opening_hours(business, rows jsonb, last_start int, notes text, closed jsonb)` replaces the week, the setting, the notes and the closed dates in one transaction (at most 28 ranges, 100 dates). RLS on, no anon/authenticated privileges.
+Unique `(business_id, day, opens)`. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `businesses.hours_notes` (text, at most 500, default `''`) holds what the ranges can't say: days that differ by week ("first and third Saturday only"), seasonal hours. Not checked in code. `replace_opening_hours(business, rows jsonb, last_start int, notes text, closed jsonb)` replaces the week, the setting, the notes and the closed dates in one transaction (at most 28 ranges, 100 dates). RLS on, no anon/authenticated privileges.
 
 ### 3.6.4 `closed_dates`
 

@@ -447,7 +447,7 @@ test("with a services table: a service that isn't offered is refused with what c
 
 test("with opening hours: a time the business is closed is refused with the week's hours, and nothing is proposed or written", async () => {
   // Weekdays 9 to 5, the last appointment an hour before closing. 2026-10-20 is a Tuesday, 2026-10-24 a Saturday.
-  const c = conversation({ week: { hours: [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00", weeks: [] })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays.", closed: [] } });
+  const c = conversation({ week: { hours: [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays.", closed: [] } });
   c.customerSays(1, "whitening on Saturday at 10?");
   const saturday = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-24T10:00" });
   assert.ok(!saturday.ok && saturday.error === "outside_opening_hours");
@@ -464,14 +464,11 @@ test("with opening hours: a time the business is closed is refused with the week
   assert.deepEqual(c.rpcs, []);
 });
 
-test("with opening hours: some weeks of the month only, and closed dates, are refused in code", async () => {
-  // Saturdays 9 to 1 on the 1st and 3rd only; Tuesdays 9 to 5; closed on 2026-10-27. NOW is Sun Oct 11.
+test("with opening hours: a closed date is refused in code, with the coming closed dates", async () => {
+  // Tuesdays 9 to 5; closed on Tuesday 2026-10-27. NOW is Sun Oct 11.
   const c = conversation({
     week: {
-      hours: [
-        { day: 2, opens: "09:00", closes: "17:00", weeks: [] },
-        { day: 6, opens: "09:00", closes: "13:00", weeks: [1, 3] },
-      ],
+      hours: [{ day: 2, opens: "09:00", closes: "17:00" }],
       lastStartBeforeClose: 0,
       notes: "",
       closed: [
@@ -481,16 +478,12 @@ test("with opening hours: some weeks of the month only, and closed dates, are re
     },
   });
   c.customerSays(1, "whitening");
-  const fourth = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-24T10:00" });
-  assert.ok(!fourth.ok && fourth.error === "outside_opening_hours" && /closed at that time \(Saturday, October 24/.test(fourth.message));
-  assert.equal(fourth.hours?.[5], "Saturday: 9:00 AM to 1:00 PM (1st and 3rd Saturday of the month only)");
-  assert.deepEqual(fourth.closed_dates, ["Tuesday, October 27, 2026 (Staff training)"], "the coming closed dates, not past ones");
-
   const training = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-27T10:00" });
   assert.ok(!training.ok && training.error === "outside_opening_hours");
   assert.match(training.message, /^Nothing is saved: the business is closed on that date \(Staff training\), Tuesday, October 27, 2026 at 10:00 AM PDT\./);
+  assert.deepEqual(training.closed_dates, ["Tuesday, October 27, 2026 (Staff training)"], "the coming closed dates, not past ones");
 
-  assert.equal((await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-17T10:00" })).error, "confirm_first", "the 3rd Saturday");
+  assert.equal((await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-20T10:00" })).error, "confirm_first", "the Tuesday before");
   assert.deepEqual(c.rpcs, []);
 });
 

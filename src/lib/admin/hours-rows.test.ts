@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeHours, formatClosedDate, formatMinutes, formatTime, startCheck, upcomingClosed, validateHours, validateWeek, weekOfMonth, type HoursRow } from "./hours-rows";
+import { describeHours, formatClosedDate, formatMinutes, formatTime, startCheck, upcomingClosed, validateHours, validateWeek, type HoursRow } from "./hours-rows";
 
 // Mon-Fri 8-12 and 1-5, Saturday 9-1, Friday night until midnight, Sunday closed.
 const week: HoursRow[] = [
   ...[1, 2, 3, 4, 5].flatMap((day) => [
-    { day, opens: "08:00", closes: "12:00", weeks: [] },
-    { day, opens: "13:00", closes: "17:00", weeks: [] },
+    { day, opens: "08:00", closes: "12:00" },
+    { day, opens: "13:00", closes: "17:00" },
   ]),
-  { day: 5, opens: "19:00", closes: "00:00", weeks: [] },
-  { day: 6, opens: "09:00", closes: "13:00", weeks: [] },
+  { day: 5, opens: "19:00", closes: "00:00" },
+  { day: 6, opens: "09:00", closes: "13:00" },
 ];
 
 test("a valid week passes, sorted by day and time", () => {
@@ -17,9 +17,9 @@ test("a valid week passes, sorted by day and time", () => {
   assert.deepEqual(result, {
     ok: true,
     rows: [
-      { day: 1, opens: "08:00", closes: "12:00", weeks: [] },
-      { day: 1, opens: "13:00", closes: "17:00", weeks: [] },
-      { day: 6, opens: "09:00", closes: "13:00", weeks: [] },
+      { day: 1, opens: "08:00", closes: "12:00" },
+      { day: 1, opens: "13:00", closes: "17:00" },
+      { day: 6, opens: "09:00", closes: "13:00" },
     ],
   });
   assert.ok(validateHours(week).ok);
@@ -98,36 +98,23 @@ test("the last appointment starts the set time before closing, for each range, a
   assert.deepEqual(startCheck(lastHour, "2026-10-23T23:00"), { ok: true }, "an hour before midnight");
   assert.deepEqual(startCheck(lastHour, "2026-10-23T23:30"), { ok: false, reason: "too_late", latest: "23:00" });
   assert.deepEqual(startCheck(lastHour, "2026-10-25T10:00"), { ok: false, reason: "closed" });
-  assert.deepEqual(startCheck({ hours: [{ day: 1, opens: "09:00", closes: "09:30", weeks: [] }], lastStartBeforeClose: 60, notes: "", closed: [] }, "2026-10-19T09:00"), { ok: true }, "a short range: from its opening");
+  assert.deepEqual(startCheck({ hours: [{ day: 1, opens: "09:00", closes: "09:30" }], lastStartBeforeClose: 60, notes: "", closed: [] }, "2026-10-19T09:00"), { ok: true }, "a short range: from its opening");
 });
 
 // ---------------------------------------------------------------------------
-// Some weeks of the month, and closed dates
+// Closed dates
 // ---------------------------------------------------------------------------
 
-// Lakeside: Saturdays 9 to 1, 1st and 3rd only; closed on Thanksgiving.
+// Lakeside: Thursdays 8 to 5, Saturdays 9 to 1; closed on Thanksgiving.
 const lakeside = {
   hours: [
-    { day: 4, opens: "08:00", closes: "17:00", weeks: [] },
-    { day: 6, opens: "09:00", closes: "13:00", weeks: [1, 3] },
+    { day: 4, opens: "08:00", closes: "17:00" },
+    { day: 6, opens: "09:00", closes: "13:00" },
   ],
   lastStartBeforeClose: 60,
   notes: "",
   closed: [{ date: "2026-11-26", label: "Thanksgiving" }],
 };
-
-test("which weeks: validated, sorted, all five is every week; ranges on different weeks may overlap", () => {
-  assert.deepEqual(validateHours([{ day: 6, opens: "09:00", closes: "13:00", weeks: [3, -1, 1, 3] }]), { ok: true, rows: [{ day: 6, opens: "09:00", closes: "13:00", weeks: [1, 3, -1] }] });
-  assert.deepEqual(validateHours([{ day: 6, opens: "09:00", closes: "13:00", weeks: [1, 2, 3, 4, 5] }]), { ok: true, rows: [{ day: 6, opens: "09:00", closes: "13:00", weeks: [] }] });
-  assert.equal(validateHours([{ day: 6, opens: "09:00", closes: "13:00", weeks: [6] }]).ok, false);
-  const alternate = [
-    { day: 6, opens: "09:00", closes: "13:00", weeks: [1, 3] },
-    { day: 6, opens: "10:00", closes: "14:00", weeks: [2, 4] },
-  ];
-  assert.ok(validateHours(alternate).ok, "1st and 3rd 9 to 1, 2nd and 4th 10 to 2");
-  assert.deepEqual(validateHours([alternate[0], { ...alternate[1], weeks: [3] }]), { ok: false, error: "Some hours need fixing.", errors: [{ row: 1, message: "Overlaps other hours that day." }] });
-  assert.deepEqual(validateHours([alternate[0], { ...alternate[1], weeks: [] }]).ok, false, "every week includes the 1st");
-});
 
 test("closed dates: real dates, once each, sorted; errors say which row", () => {
   assert.deepEqual(validateWeek({ hours: [], closed: [{ date: "2026-12-25", label: " Christmas Day " }, { date: "2026-11-26", label: "" }] }), {
@@ -147,23 +134,10 @@ test("closed dates: real dates, once each, sorted; errors say which row", () => 
   assert.deepEqual(upcomingClosed([{ date: "2026-10-01", label: "" }, ...lakeside.closed], "2026-10-13"), lakeside.closed, "past ones left out");
 });
 
-test("in words: the weeks a range applies to", () => {
-  assert.equal(describeHours(lakeside.hours)[5], "Saturday: 9:00 AM to 1:00 PM (1st and 3rd Saturday of the month only)");
-  assert.equal(describeHours([{ day: 5, opens: "08:00", closes: "12:00", weeks: [-1] }])[4], "Friday: 8:00 AM to 12:00 PM (last Friday of the month only)");
-});
-
-test("an appointment can start only on the weeks a range applies to, and never on a closed date", () => {
-  assert.deepEqual(weekOfMonth(2026, 10, 24), { nth: 4, last: false });
-  assert.deepEqual(weekOfMonth(2026, 10, 31), { nth: 5, last: true });
-  // Seen live: a request for the 4th Saturday was read back.
-  assert.deepEqual(startCheck(lakeside, "2026-10-24T10:00"), { ok: false, reason: "closed" }, "the 4th Saturday");
-  assert.deepEqual(startCheck(lakeside, "2026-10-17T10:00"), { ok: true }, "the 3rd Saturday");
-  assert.deepEqual(startCheck(lakeside, "2026-11-07T10:00"), { ok: true }, "the 1st Saturday of November");
+test("an appointment can never start on a closed date, whatever its weekday's hours", () => {
   assert.deepEqual(startCheck(lakeside, "2026-11-26T10:00"), { ok: false, reason: "closed_date", label: "Thanksgiving" }, "a Thursday, but closed");
   assert.deepEqual(startCheck(lakeside, "2026-11-19T10:00"), { ok: true }, "the Thursday before");
-  const lastFriday = { ...lakeside, hours: [{ day: 5, opens: "08:00", closes: "12:00", weeks: [-1] }], closed: [] };
-  assert.deepEqual(startCheck(lastFriday, "2026-10-30T09:00"), { ok: true }, "the last Friday of October");
-  assert.deepEqual(startCheck(lastFriday, "2026-10-23T09:00"), { ok: false, reason: "closed" });
+  assert.deepEqual(startCheck(lakeside, "2026-10-24T10:00"), { ok: true }, "any Saturday: the weekly hours only");
   assert.deepEqual(startCheck({ ...lakeside, hours: [] }, "2026-11-26T10:00"), { ok: false, reason: "closed_date", label: "Thanksgiving" }, "closed dates without weekly hours");
   assert.deepEqual(startCheck({ ...lakeside, hours: [] }, "2026-11-25T10:00"), { ok: true });
 });

@@ -191,14 +191,14 @@ isOneToOne: true
                   ]
                 },"opening_hours": {
                   Row: {
-                    "business_id": string,"closes": string,"created_at": string,"day": number,"id": string,"opens": string,"weeks": (number)[]
+                    "business_id": string,"closes": string,"created_at": string,"day": number,"id": string,"opens": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "business_id": string,"closes": string,"created_at"?: string,"day": number,"id"?: string,"opens": string,"weeks"?: (number)[]
+                    "business_id": string,"closes": string,"created_at"?: string,"day": number,"id"?: string,"opens": string
                   }
                   Update: {
-                    "business_id"?: string,"closes"?: string,"created_at"?: string,"day"?: number,"id"?: string,"opens"?: string,"weeks"?: (number)[]
+                    "business_id"?: string,"closes"?: string,"created_at"?: string,"day"?: number,"id"?: string,"opens"?: string
                   }
                   Relationships: [
                     {

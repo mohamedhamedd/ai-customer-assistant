@@ -23,7 +23,7 @@ async function business() {
   return data!.id;
 }
 
-const weekdays = [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00", weeks: [] as number[] }));
+const weekdays = [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" }));
 const week = (hours: typeof weekdays, lastStartBeforeClose = 0, notes = "", closed: { date: string; label: string }[] = []) => ({ hours, lastStartBeforeClose, notes, closed });
 
 test("the week is saved sorted, replaced as a whole, and kept per business", async () => {
@@ -31,18 +31,18 @@ test("the week is saved sorted, replaced as a whole, and kept per business", asy
   const theirs = await business();
   await saveHours(theirs, week(weekdays));
 
-  const saturday = { day: 6, opens: "10:00", closes: "00:00", weeks: [3, 1] };
+  const saturday = { day: 6, opens: "10:00", closes: "00:00" };
   const holidays = [
     { date: "2026-12-25", label: "Christmas Day" },
     { date: "2026-11-26", label: "Thanksgiving" },
   ];
   assert.deepEqual(
     await saveHours(mine, week([saturday, ...weekdays], 60, " Shorter hours in August. ", holidays)),
-    week([...weekdays, { ...saturday, weeks: [1, 3] }], 60, "Shorter hours in August.", [holidays[1], holidays[0]]),
-    "midnight closing kept as 00:00; weeks and closed dates sorted; the notes trimmed",
+    week([...weekdays, saturday], 60, "Shorter hours in August.", [holidays[1], holidays[0]]),
+    "midnight closing kept as 00:00; closed dates sorted; the notes trimmed",
   );
   assert.deepEqual((await saveHours(mine, week([saturday]))).closed, [], "closed dates replaced too");
-  assert.deepEqual(await saveHours(mine, week([saturday])), week([{ ...saturday, weeks: [1, 3] }]), "replaced, not added to");
+  assert.deepEqual(await saveHours(mine, week([saturday])), week([saturday]), "replaced, not added to");
   assert.deepEqual(await listHours(theirs), week(weekdays), "another business's hours are untouched");
 });
 
@@ -50,7 +50,7 @@ test("a week with problems is refused with each one on its range, and nothing ch
   const mine = await business();
   await saveHours(mine, week(weekdays));
   await assert.rejects(
-    saveHours(mine, week([{ day: 1, opens: "09:00", closes: "12:00", weeks: [] }, { day: 1, opens: "11:00", closes: "13:00", weeks: [] }], 30)),
+    saveHours(mine, week([{ day: 1, opens: "09:00", closes: "12:00" }, { day: 1, opens: "11:00", closes: "13:00" }], 30)),
     (err: unknown) => err instanceof OpeningHoursError && err.status === 400 && JSON.stringify(err.rows) === JSON.stringify([{ row: 1, message: "Overlaps other hours that day." }]),
   );
   assert.deepEqual(await listHours(mine), week(weekdays), "the setting too");
