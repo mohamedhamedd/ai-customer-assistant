@@ -197,7 +197,9 @@ test("with tables: services, prices and hours are answered from them; everything
   assert.match(p, /A service the section doesn't list: search for it/);
   // Seen live: "open Saturdays 9 to 1" without the documents' "first and third Saturday only".
   assert.match(p, /The notes on the hours are part of them: when they qualify a day you mention .*, say so in the same answer\./);
-  assert.match(p, /check the opening hours in the section below \(the tool checks them too\)/);
+  assert.match(p, /check the opening hours in the section below, with their notes/);
+  // Seen live: the 4th Saturday read back although the notes say first and third only.
+  assert.match(p, /The tool checks the weekly hours, not the notes\. For a day the notes qualify .* check the date yourself before calling the tool/);
   assert.doesNotMatch(p, /ONLY from search_knowledge results/);
 
   const hoursOnly = buildSystemPrompt({ business, tables: { services: [], week: tables.week }, now, channel: "text", customerFacts: {} });

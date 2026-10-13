@@ -87,17 +87,25 @@ export function zonedLocalToUtc(local: string, timeZone: string): LocalToUtcResu
 }
 
 // The next `days` dates, so the model maps "next Tuesday" to a date by lookup
-// rather than arithmetic, which is where models make date mistakes.
+// rather than arithmetic, which is where models make date mistakes. Each
+// says which of its weekday in the month it is ("4th and last Saturday of
+// October"), for hours like "first and third Saturday only": the calendar
+// starts today, so the model couldn't count the earlier ones.
 export function upcomingDays(now: Date, timeZone: string, days = 14): string[] {
   const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const NTH = ["1st", "2nd", "3rd", "4th", "5th"];
   const today = wallClock(now, timeZone);
   const out: string[] = [];
   for (let i = 0; i < days; i++) {
     // Calendar arithmetic on the date alone: adding 24 h to an instant can
     // land on the same date on the 25-hour day when clocks go back.
     const d = new Date(Date.UTC(today.year, today.month - 1, today.day + i));
-    const label = i === 0 ? " (today)" : i === 1 ? " (tomorrow)" : "";
-    out.push(`${WEEKDAYS[d.getUTCDay()]} ${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}${label}`);
+    const weekday = WEEKDAYS[d.getUTCDay()];
+    const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 7)).getUTCMonth() !== d.getUTCMonth();
+    const nth = `${NTH[Math.floor((d.getUTCDate() - 1) / 7)]}${last ? " and last" : ""} ${weekday} of ${MONTHS[d.getUTCMonth()]}`;
+    const label = i === 0 ? "today; " : i === 1 ? "tomorrow; " : "";
+    out.push(`${weekday} ${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} (${label}${nth})`);
   }
   return out;
 }

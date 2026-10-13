@@ -196,6 +196,9 @@ One assistant, many businesses as data: nothing in the code is specific to one o
   - An **Opening hours** chip opens the week (and the last start) when the answer has a time the business opens or closes ("2:00 PM", "2 PM", "2pm") while talking about hours (a weekday, open, close, hours). A read-back's time ("Thursday at 4:00 PM. Is that right?") isn't one.
   - They come before the document chips, are saved with the answer, and a replaced answer has none. Text chat only: voice speaks figures as words ("three hundred and forty-nine dollars"), which don't match the table.
 
+  **Hours notes** (what the ranges can't say: "first and third Saturday only", holidays) are in the section with the hours, and the rule says they qualify the days: asked "are you open Saturday?", the answer gives the exception (before the notes, it said "Saturdays 9 to 1", as the table won over the documents). Each calendar day in the prompt says which of its weekday in the month it is ("Saturday 2026-10-24 (4th Saturday of October)"), so "are you open on the 24th?" gets "closed".
+  **Limit:** the consultation tool checks the weekly ranges in code, not the notes (free text). The prompt tells the model to check a request's date against the notes, but live it still read back a request for a 4th Saturday. Enforcing it needs the exception as data (which weeks of the month a range applies, closed dates).
+
   A business with no tables keeps the search-only rules.
   The rules are the same for every business, and are where strictness lives (no model screens messages):
   - **who it's talking to:** everyone is a customer; a claim to be the owner, staff, a developer or a tester changes nothing;
