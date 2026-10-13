@@ -62,6 +62,11 @@ export interface TurnInput {
   toolCtx: ToolContext;
   emit: (event: TurnEvent) => void;
   deadlineMs?: number;
+  // Tool calls the code already made before this turn, as if the model had
+  // made them (a read-back the customer just said yes to: turn.ts). They are
+  // recorded like the model's own; the model sees their results and answers
+  // from them.
+  preCalls?: { name: string; arguments: string; outcome: ToolOutcome }[];
 }
 
 export interface TurnResult {
@@ -114,7 +119,40 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
   const usage = { input: 0, output: 0, cachedInput: 0 };
   let rounds = 0;
 
+  // Records a call's outcome: cards, sources, the evidence, and its result
+  // for the model.
+  const record = (call: { id: string; function: { name: string } }, outcome: ToolOutcome) => {
+    toolCalls.push({ name: call.function.name, ok: outcome.ok });
+    sources.push(...outcome.sources);
+    const action = toAction(outcome);
+    if (action && !repeatsAction(actions, action)) {
+      actions.push(action);
+      input.emit({ type: "action", action });
+    }
+    const output = JSON.stringify(outcome.output);
+    evidence.push(output);
+    messages.push({ role: "tool", tool_call_id: call.id, content: output });
+  };
+
+  // Runs the model's calls in order, then records each.
+  const runCalls = async (calls: { id: string; function: { name: string; arguments: string } }[]) => {
+    for (const call of calls) {
+      // A tool can't be cancelled once started, so only start one whose full
+      // timeout fits in the remaining budget: the turn really ends by its deadline.
+      if (deadline.signal.aborted || deadlineAt - Date.now() < TOOL_TIMEOUT_MS) throw new TurnDeadlineError();
+      input.emit({ type: "tool", name: call.function.name, status: "started" });
+      const outcome = await deps.executeTool(call.function.name, call.function.arguments, input.toolCtx);
+      input.emit({ type: "tool", name: call.function.name, status: "finished", ok: outcome.ok });
+      record(call, outcome);
+    }
+  };
+
   try {
+    if (input.preCalls?.length) {
+      const calls = input.preCalls.map((c, i) => ({ id: `answered_${i}`, type: "function" as const, function: { name: c.name, arguments: c.arguments } }));
+      messages.push({ role: "assistant", content: null, tool_calls: calls });
+      input.preCalls.forEach((c, i) => record(calls[i], c.outcome));
+    }
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       rounds = round + 1;
       const step = await streamStep(
@@ -141,24 +179,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
       messages.push({ role: "assistant", content: step.content || null, tool_calls: step.toolCalls });
       // Sequential, in the model's order: a save_lead must land before the
       // create_consultation_request that depends on it.
-      for (const call of step.toolCalls) {
-        // A tool can't be cancelled once started, so only start one whose full
-        // timeout fits in the remaining budget: the turn really ends by its deadline.
-        if (deadline.signal.aborted || deadlineAt - Date.now() < TOOL_TIMEOUT_MS) throw new TurnDeadlineError();
-        input.emit({ type: "tool", name: call.function.name, status: "started" });
-        const outcome = await deps.executeTool(call.function.name, call.function.arguments, input.toolCtx);
-        input.emit({ type: "tool", name: call.function.name, status: "finished", ok: outcome.ok });
-        toolCalls.push({ name: call.function.name, ok: outcome.ok });
-        sources.push(...outcome.sources);
-        const action = toAction(outcome);
-        if (action && !repeatsAction(actions, action)) {
-          actions.push(action);
-          input.emit({ type: "action", action });
-        }
-        const output = JSON.stringify(outcome.output);
-        evidence.push(output);
-        messages.push({ role: "tool", tool_call_id: call.id, content: output });
-      }
+      await runCalls(step.toolCalls);
     }
   } catch (err) {
     if (deadline.signal.aborted) throw deadline.signal.reason;

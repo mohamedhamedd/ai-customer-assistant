@@ -3,7 +3,8 @@ import { db } from "@/lib/db/supabase";
 import type { Json } from "@/lib/db/database.types";
 import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
-import { executeTool } from "@/lib/agent/execute";
+import { answeredProposals, executeTool } from "@/lib/agent/execute";
+import { isPlainYes } from "./affirm";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
 import { buildSystemPrompt, promptFacts, type BusinessTables, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { tableSources } from "@/lib/agent/table-sources";
@@ -301,6 +302,18 @@ export async function runChatTurn(
   let evidence: string;
   let tables: BusinessTables;
   try {
+    const toolCtx = { businessId: business.id, conversationId: conversation.id, channel: "text" as const, timeZone: business.timezone, now: () => new Date() };
+    // A plain yes to a read-back commits what was read back, here in code,
+    // before the model answers (affirm.ts): the model is told what happened
+    // and can't say it's saved without it being saved. First, so the state
+    // below already shows it.
+    const preCalls = [];
+    for (const call of isPlainYes(input.message) ? await answeredProposals(toolCtx) : []) {
+      emit({ type: "tool", name: call.name, status: "started" });
+      const outcome = await executeTool(call.name, call.arguments, toolCtx);
+      emit({ type: "tool", name: call.name, status: "finished", ok: outcome.ok });
+      preCalls.push({ ...call, outcome });
+    }
     // Independent reads, in parallel: all sit before the first model call.
     const [history, state, loaded] = await Promise.all([
       recentHistory(conversation.id, userMessageId),
@@ -316,8 +329,9 @@ export async function runChatTurn(
         history,
         userText: input.message,
         tools: toolDefinitions(),
-        toolCtx: { businessId: business.id, conversationId: conversation.id, channel: "text", timeZone: business.timezone, now: () => new Date() },
+        toolCtx,
         emit,
+        preCalls,
       },
       { complete: deps.complete, executeTool },
     );
