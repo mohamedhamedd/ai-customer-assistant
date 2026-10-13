@@ -64,6 +64,9 @@ export interface Source {
   heading: string;
   excerpt: string;
   similarity: number;
+  // A row-based source from the business's tables (table-sources.ts), not a
+  // document section: the chip shows its own icon and footer.
+  table?: "services" | "hours";
 }
 
 // When nothing relevant was found there are no chunks to hand the model: the

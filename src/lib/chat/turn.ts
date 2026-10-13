@@ -5,7 +5,8 @@ import { env } from "@/lib/env";
 import { openai } from "@/lib/openai";
 import { executeTool } from "@/lib/agent/execute";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
-import { buildSystemPrompt, promptFacts, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
+import { buildSystemPrompt, promptFacts, type BusinessTables, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
+import { tableSources } from "@/lib/agent/table-sources";
 import { loadTables } from "@/lib/agent/tables";
 import { formatHuman } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
@@ -280,13 +281,15 @@ export async function runChatTurn(
   // a retry re-runs at once instead of waiting out the in-progress window.
   let result: TurnResult;
   let evidence: string;
+  let tables: BusinessTables;
   try {
     // Independent reads, in parallel: all sit before the first model call.
-    const [history, state, tables] = await Promise.all([
+    const [history, state, loaded] = await Promise.all([
       recentHistory(conversation.id, userMessageId),
       conversationState(conversation, business.timezone),
       loadTables(business.id),
     ]);
+    tables = loaded;
     const promptInput = { business, tables, now: new Date(), customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state };
     result = await runAgentTurn(
       {
@@ -320,6 +323,9 @@ export async function runChatTurn(
     replaced = { original: result.text, reason: check.reason };
     result = { ...result, text: check.safeReply, sources: [] };
     emit({ type: "replace", text: check.safeReply });
+  } else {
+    // An answer from the tables cites the rows it quotes, before the documents.
+    result = { ...result, sources: [...tableSources(result.text, tables), ...result.sources] };
   }
 
   // The customer has now read the whole answer. Saving it gets one retry; if

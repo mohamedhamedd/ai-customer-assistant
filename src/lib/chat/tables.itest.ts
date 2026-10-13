@@ -49,7 +49,7 @@ async function turn(slug: string, message: string, deps: ChatTurnDeps) {
   if (prepared.kind !== "run") throw new Error("not run");
   const events: ChatEvent[] = [];
   await runChatTurn(prepared, input, (e) => void events.push(e), deps);
-  const { data } = await db().from("messages").select("content, replaced_reason").eq("reply_to_message_id", prepared.userMessageId).single();
+  const { data } = await db().from("messages").select("content, replaced_reason, sources").eq("reply_to_message_id", prepared.userMessageId).single();
   return { events, saved: data! };
 }
 
@@ -62,10 +62,32 @@ test("the turn's prompt has the business's tables, and a price quoted from them 
   assert.ok(model.prompts[0].includes("The last appointment starts 1 hour before closing."));
   assert.equal(saved.replaced_reason, null);
   assert.ok(!events.some((e) => e.type === "replace"));
+
+  // Chips for the rows it quoted, live and in what's saved.
+  const live = events.flatMap((e) => (e.type === "sources" ? e.sources : []));
+  assert.deepEqual(
+    live.map((s) => [s.title, s.table]),
+    [
+      ["Services", "services"],
+      ["Opening hours", "hours"],
+    ],
+  );
+  assert.ok(live[0].excerpt.includes("| Traditional braces (full treatment) | $4,000 to $6,000 | – |"));
+  assert.deepEqual(saved.sources, live);
+});
+
+test("an answer from the documents only gets no table chip", async () => {
+  const slug = await business();
+  const { events } = await turn(slug, "Do you have parking?", answers("I don't have information about parking. Would you like someone from the team to get back to you?").deps);
+  assert.deepEqual(
+    events.flatMap((e) => (e.type === "sources" ? e.sources : [])),
+    [],
+  );
 });
 
 test("a price that isn't in the tables (or anywhere else it could know) is still replaced", async () => {
   const slug = await business();
-  const { saved } = await turn(slug, "How much are braces?", answers("Braces are $3,200.").deps);
+  const { saved } = await turn(slug, "How much are braces?", answers("Traditional braces (full treatment) are $3,200.").deps);
   assert.notEqual(saved.replaced_reason, null);
+  assert.deepEqual(saved.sources, [], "a replaced answer cites nothing");
 });
