@@ -1,6 +1,7 @@
--- The demo business, Lakeside Dental Clinic, as staff would set it up in the
--- admin: its profile and rules, its services table and its opening hours.
--- No customers, conversations or requests: the admin starts empty.
+-- The demo businesses, as staff would set them up in the admin: profile and
+-- rules, services table and opening hours. Lakeside Dental Clinic first, then
+-- Maple Street Hair Studio. No customers, conversations or requests: the
+-- admin starts empty.
 --
 -- Its documents (services explained, insurance, location, policies, FAQ) need
 -- embeddings, so they're loaded after the reset by the ingestion script:
@@ -66,6 +67,65 @@ select public.replace_opening_hours(
   'Saturdays: first and third Saturday of the month only. Holiday closures are posted on our front door and voicemail two weeks in advance.',
   $json$[
   {"date": "2026-11-26", "label": "Thanksgiving"},
+  {"date": "2026-12-25", "label": "Christmas Day"},
+  {"date": "2027-01-01", "label": "New Year's Day"}
+]$json$::jsonb
+);
+
+-- ---------------------------------------------------------------------------
+-- A second business, Maple Street Hair Studio: a very different industry,
+-- timezone and set of rules, to test the same assistant on. Its documents:
+--   npm run ingest -- ./data/sample-salon --business maple-street-hair
+
+insert into public.businesses (slug, name, description, timezone, assistant_guidelines)
+values (
+  'maple-street-hair',
+  'Maple Street Hair Studio',
+  'An independent hair salon for cuts, colour, treatments and special-occasion styling, with specialists in curly and textured hair.',
+  'America/New_York',
+  E'Don''t say whether a colour, cut or treatment will suit someone, or is safe for their hair or scalp: suggest the free colour consultation instead. Never promise an exact shade or result.\n'
+  'When someone asks for a colour service, mention that a patch test is needed at least 48 hours before if it''s their first colour with us or they have reacted to hair dye before.'
+);
+
+select public.replace_services(
+  (select id from public.businesses where slug = 'maple-street-hair'),
+  $json$[
+  {"name": "Women's cut and style",              "category": "Cuts and styling",   "price": "$65",           "duration": "60 minutes",       "description": "", "requestable": true},
+  {"name": "Men's cut",                          "category": "Cuts and styling",   "price": "$40",           "duration": "30 minutes",       "description": "", "requestable": true},
+  {"name": "Children's cut (under 12)",          "category": "Cuts and styling",   "price": "$28",           "duration": "30 minutes",       "description": "", "requestable": true},
+  {"name": "Blow-dry and style",                 "category": "Cuts and styling",   "price": "$45",           "duration": "45 minutes",       "description": "", "requestable": true},
+  {"name": "Fringe trim (walk-in only)",         "category": "Cuts and styling",   "price": "$10",           "duration": "15 minutes",       "description": "", "requestable": false},
+  {"name": "Root touch-up",                      "category": "Colour",             "price": "$85",           "duration": "90 minutes",       "description": "", "requestable": true},
+  {"name": "Full colour",                        "category": "Colour",             "price": "$120",          "duration": "2 hours",          "description": "", "requestable": true},
+  {"name": "Partial highlights",                 "category": "Colour",             "price": "$140",          "duration": "2 hours",          "description": "", "requestable": true},
+  {"name": "Full highlights",                    "category": "Colour",             "price": "$190",          "duration": "3 hours",          "description": "", "requestable": true},
+  {"name": "Balayage",                           "category": "Colour",             "price": "$220 to $280",  "duration": "3 to 4 hours",     "description": "", "requestable": true},
+  {"name": "Toner and gloss",                    "category": "Colour",             "price": "$45",           "duration": "30 minutes",       "description": "", "requestable": true},
+  {"name": "Colour consultation (15 minutes)",   "category": "Colour",             "price": "Free",          "duration": "15 minutes",       "description": "", "requestable": true},
+  {"name": "Deep conditioning treatment",        "category": "Treatments",         "price": "$35",           "duration": "20 minutes",       "description": "", "requestable": true},
+  {"name": "Keratin smoothing treatment",        "category": "Treatments",         "price": "$250 to $350",  "duration": "About 3 hours",    "description": "", "requestable": true},
+  {"name": "Updo",                               "category": "Special occasions",  "price": "$75",           "duration": "60 minutes",       "description": "", "requestable": true},
+  {"name": "Bridal hair trial",                  "category": "Special occasions",  "price": "$95",           "duration": "90 minutes",       "description": "", "requestable": true},
+  {"name": "Wedding day styling",                "category": "Special occasions",  "price": "Quoted per wedding", "duration": "",           "description": "", "requestable": true}
+]$json$::jsonb
+);
+
+-- Tue, Wed, Fri 9–7, Thu 9–8, Sat 8–4; closed Sunday and Monday. The last
+-- appointment starts 30 minutes before closing.
+select public.replace_opening_hours(
+  (select id from public.businesses where slug = 'maple-street-hair'),
+  $json$[
+  {"day": 2, "opens": "09:00", "closes": "19:00"},
+  {"day": 3, "opens": "09:00", "closes": "19:00"},
+  {"day": 4, "opens": "09:00", "closes": "20:00"},
+  {"day": 5, "opens": "09:00", "closes": "19:00"},
+  {"day": 6, "opens": "08:00", "closes": "16:00"}
+]$json$::jsonb,
+  30,
+  'Walk-ins are welcome for men''s cuts and fringe trims when a stylist is free.',
+  $json$[
+  {"date": "2026-11-26", "label": "Thanksgiving"},
+  {"date": "2026-12-24", "label": "Christmas Eve"},
   {"date": "2026-12-25", "label": "Christmas Day"},
   {"date": "2027-01-01", "label": "New Year's Day"}
 ]$json$::jsonb

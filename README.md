@@ -41,11 +41,12 @@ npm run db:start
 npx supabase status
 ```
 
-Copy the **API URL** and the **secret (service_role) key** into `.env.local`, and add your `OPENAI_API_KEY`. Then load the demo business and its documents:
+Copy the **API URL** and the **secret (service_role) key** into `.env.local`, and add your `OPENAI_API_KEY`. Then load the demo businesses and their documents:
 
 ```bash
 npm run db:reset
 npm run ingest -- ./data/sample-clinic
+npm run ingest -- ./data/sample-salon --business maple-street-hair
 npm run dev
 ```
 
@@ -55,9 +56,19 @@ Open:
 
 ## Demo data
 
-`npm run db:reset` wipes the local database and loads `supabase/seed.sql`: **Lakeside Dental Clinic** with its rules, 21 services and opening hours. Customers, conversations and requests start empty. Its documents are in `data/sample-clinic/` (see its README for questions to try).
+`npm run db:reset` wipes the local database and loads `supabase/seed.sql`: two businesses with their rules, services and opening hours. Customers, conversations and requests start empty. Load their documents after the reset:
 
-A second business, a gym, is in `data/sample-gym/`. You create it in the admin (`/admin/new`) to show the same assistant serving a different business.
+```bash
+npm run ingest -- ./data/sample-clinic
+npm run ingest -- ./data/sample-salon --business maple-street-hair
+```
+
+| Business | Chat | Questions to try |
+|---|---|---|
+| Lakeside Dental Clinic | `/b/lakeside-dental` | `data/sample-clinic/README.md` |
+| Maple Street Hair Studio | `/b/maple-street-hair` | `data/sample-salon/README.md` |
+
+A third business, a gym, is in `data/sample-gym/`. It isn't seeded: create it in the admin (`/admin/new`) to show adding a business live.
 
 ## Scripts
 
