@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ChatCompletionChunk, ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions";
-import { EMPTY_REPLY, MAX_TOOL_ROUNDS, runAgentTurn, TurnDeadlineError, type AgentDeps, type TurnEvent, type TurnInput } from "./loop";
+import { EMPTY_REPLY, MAX_TOOL_ROUNDS, runAgentTurn, toAction, TurnDeadlineError, type AgentDeps, type TurnEvent, type TurnInput } from "./loop";
 import type { ToolOutcome } from "./execute";
 
 // ---------------------------------------------------------------------------
@@ -236,4 +236,28 @@ test("a tool is not started when its timeout no longer fits in the turn budget",
     (err: unknown) => err instanceof TurnDeadlineError,
   );
   assert.equal(tools.ran.length, 0);
+});
+
+test("a changed request is a consultation card that says what it was; an outage while changing gets a failure card", () => {
+  const output = {
+    ok: true as const,
+    request_id: "R1",
+    status: "pending",
+    service: "Porcelain veneer (per tooth)",
+    preferred_time: "Thursday, October 22, 2026 at 10:00 AM PDT",
+    changed_from: { service: "Porcelain crown", preferred_time: "Tuesday, October 20, 2026 at 3:00 PM PDT" },
+    already_changed: false,
+  };
+  assert.deepEqual(toAction({ name: "change_consultation_request", output }), {
+    kind: "consultation_requested",
+    requestId: "R1",
+    service: "Porcelain veneer (per tooth)",
+    preferredTime: "Thursday, October 22, 2026 at 10:00 AM PDT",
+    status: "pending",
+    alreadyRequested: false,
+    changedFrom: { service: "Porcelain crown", preferredTime: "Tuesday, October 20, 2026 at 3:00 PM PDT" },
+  });
+  const outage = { ok: false as const, error: "temporarily_unavailable", message: "…" };
+  assert.equal(toAction({ name: "change_consultation_request", output: outage })?.kind, "action_failed");
+  assert.equal(toAction({ name: "change_consultation_request", output: { ok: false as const, error: "request_not_pending", message: "…" } }), null, "handled in conversation");
 });

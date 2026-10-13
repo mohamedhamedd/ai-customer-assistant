@@ -94,9 +94,21 @@ test("already-done section lists saved contact and requests, and only when there
     now,
     channel: "text",
     customerFacts: {},
-    state: { contactSaved: true, requests: [{ service: "teeth whitening", preferredTime: "Tuesday, October 13, 2026 at 3:00 PM", status: "pending" }] },
+    state: { contactSaved: true, requests: [{ service: "teeth whitening", preferredTime: "Tuesday, October 13, 2026 at 3:00 PM", preferredLocal: "2026-10-13T15:00", status: "pending" }] },
   });
-  assert.match(p, /# Already done in this conversation\n- The customer's contact details are saved\.\n- Consultation request: teeth whitening, Tuesday, October 13, 2026 at 3:00 PM, status pending\./);
+  assert.match(p, /# Already done in this conversation\n- The customer's contact details are saved\.\n- Consultation request: teeth whitening, Tuesday, October 13, 2026 at 3:00 PM \(2026-10-13T15:00\), status pending\./);
+  // A change names the request by this local time (change_consultation_request).
+  assert.match(p, /To change a request already made .* call change_consultation_request with its current_datetime from "Already done in this conversation" and only what changes; never create a second request instead\./);
+  assert.match(p, /Only pending requests can be changed\. A request listed as confirmed or cancelled can't be/);
+  assert.match(p, /Only ever read back a change that change_consultation_request returned in that same reply: call it first\./);
+  const handled = buildSystemPrompt({
+    business,
+    now,
+    channel: "text",
+    customerFacts: {},
+    state: { contactSaved: true, requests: [{ service: "Porcelain crown", preferredTime: "Thursday, October 22, 2026 at 10:00 AM", preferredLocal: "2026-10-22T10:00", status: "confirmed" }] },
+  });
+  assert.ok(handled.includes("- Consultation request: Porcelain crown, Thursday, October 22, 2026 at 10:00 AM (2026-10-22T10:00), status confirmed. The team has handled it: it can't be changed here."));
   assert.ok(p.indexOf("# Already done") > p.indexOf("# Date and time"), "dynamic: after the cacheable prefix");
 });
 

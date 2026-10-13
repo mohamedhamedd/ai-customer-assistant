@@ -98,6 +98,18 @@ test("asking which service, or a service that isn't offered, is the conversation
   assert.deepEqual(call("outside_opening_hours"), { detail: "whitening", outcome: "outside opening hours", tone: "warning", failed: false });
 });
 
+test("a changed request shows what it became and from when; a request the team handled is not a failure", () => {
+  const changed = summarizeToolCall({
+    name: "change_consultation_request",
+    arguments: { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-22T10:00" },
+    result: { ok: true, service: "Porcelain crown", preferred_time: "Thu, Oct 22 · 10:00 AM", changed_from: { service: "Porcelain crown", preferred_time: "Tue, Oct 20 · 3:00 PM" } },
+    ok: true,
+  });
+  assert.deepEqual(changed, { detail: "Porcelain crown · Thu, Oct 22 · 10:00 AM, was Tue, Oct 20 · 3:00 PM", outcome: "changed", tone: "success", failed: false });
+  const handled = summarizeToolCall({ name: "change_consultation_request", arguments: { current_datetime: "2026-10-20T15:00" }, result: { ok: false, error: "request_not_pending", message: "…" }, ok: false });
+  assert.deepEqual(handled, { detail: "was 2026-10-20T15:00", outcome: "already handled by the team", tone: "warning", failed: false });
+});
+
 test("a consultation request shows the service and time, and a repeat says so", () => {
   const s = summarizeToolCall({
     name: "create_consultation_request",

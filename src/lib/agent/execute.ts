@@ -246,7 +246,8 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
 
 // The latest proposal's key comes from its stored arguments, parsed and
 // keyed like the new call's, as read back: the details it returned (the
-// service by its exact name, from prepare) over what the model sent.
+// service by its exact name, from prepare; for a change, the whole new
+// state) over what the model sent.
 async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
   const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
   const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
@@ -254,7 +255,7 @@ async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDe
   if (parsed?.success) {
     const args = parsed.data as Record<string, unknown>;
     const details = latest?.details && typeof latest.details === "object" ? (latest.details as Record<string, unknown>) : {};
-    proposed = tool.confirm?.propose({ ...args, ...Object.fromEntries(Object.entries(details).filter(([k]) => k in args)) }, ctx);
+    proposed = tool.confirm?.propose({ ...args, ...details }, ctx);
   }
   return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt });
 }

@@ -293,6 +293,10 @@ Days the business is closed whatever the weekday's hours (holidays), as local da
 
 RLS on, no anon/authenticated privileges.
 
+### 3.6.5 `change_consultation_request()`
+
+`change_consultation_request(business, conversation, current_at, service, preferred_at, current_time text)` changes a request the customer made in that conversation: the one at `current_at` (the slot is a request's identity within a conversation). Under a row lock: only while `pending` (`request_not_pending` otherwise), not onto the time of another of its requests (`slot_taken`), and `request_not_found` for any other conversation or time. A retry after it went through finds it at the new time and answers `changed: false`. The previous service and `current_time` (as the customer saw it) are appended to `notes`. Only the server can call it.
+
 ### 3.7 `leads`
 
 A person who shared contact details with the agent.

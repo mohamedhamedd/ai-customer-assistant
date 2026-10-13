@@ -27,7 +27,16 @@ export const TURN_DEADLINE_MS = 45_000;
 
 export type Action =
   | { kind: "lead_saved"; details: Record<string, unknown> }
-  | { kind: "consultation_requested"; requestId: string; service: string; preferredTime: string; status: string; alreadyRequested: boolean }
+  | {
+      kind: "consultation_requested";
+      requestId: string;
+      service: string;
+      preferredTime: string;
+      status: string;
+      alreadyRequested: boolean;
+      // A change to a request already made: what it was.
+      changedFrom?: { service: string; preferredTime: string };
+    }
   | { kind: "action_failed"; tool: string; message: string };
 
 export type TurnEvent =
@@ -230,9 +239,21 @@ export function toAction(outcome: Pick<ToolOutcome, "name" | "output">): Action 
       alreadyRequested: Boolean(o.already_requested),
     };
   }
+  if (outcome.name === "change_consultation_request" && o.ok) {
+    const from = o.changed_from as { service?: unknown; preferred_time?: unknown } | undefined;
+    return {
+      kind: "consultation_requested",
+      requestId: String(o.request_id),
+      service: String(o.service),
+      preferredTime: String(o.preferred_time),
+      status: String(o.status),
+      alreadyRequested: Boolean(o.already_changed),
+      changedFrom: { service: String(from?.service ?? o.service), preferredTime: String(from?.preferred_time ?? "") },
+    };
+  }
   // An outage gets a visible card. Invalid input and an unknown outcome are
   // handled in conversation (the model asks again or retries once).
-  if ((outcome.name === "save_lead" || outcome.name === "create_consultation_request") && o.error === "temporarily_unavailable") {
+  if (["save_lead", "create_consultation_request", "change_consultation_request"].includes(outcome.name) && o.error === "temporarily_unavailable") {
     return { kind: "action_failed", tool: outcome.name, message: "This couldn't be saved just now." };
   }
   return null;

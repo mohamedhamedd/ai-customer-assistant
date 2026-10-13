@@ -95,6 +95,7 @@ export function LeadDrawer({ slug, leadId, timeZone, onClose }: { slug: string; 
                         <div className="min-w-0">
                           <p className="font-medium break-words">{r.service}</p>
                           <p className="text-[13px] text-text-muted">{formatInZone(r.preferredAt, timeZone)}</p>
+                          {r.notes && <p className="mt-1 text-[12px] text-text-muted">{r.notes}</p>}
                         </div>
                         <StatusBadge status={r.status} />
                       </li>

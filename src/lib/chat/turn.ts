@@ -377,7 +377,12 @@ export async function conversationState(conversation: { id: string; lead_id: str
   if (error) throw new Error(`Loading requests failed: ${error.message}`);
   return {
     contactSaved: conversation.lead_id !== null,
-    requests: (data ?? []).map((r) => ({ service: r.service, preferredTime: formatHuman(new Date(r.preferred_at), timeZone), status: r.status })),
+    requests: (data ?? []).map((r) => ({
+      service: r.service,
+      preferredTime: formatHuman(new Date(r.preferred_at), timeZone),
+      preferredLocal: formatLocal(new Date(r.preferred_at), timeZone),
+      status: r.status,
+    })),
   };
 }
 

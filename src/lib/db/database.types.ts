@@ -312,6 +312,9 @@ isOneToOne: false
 "begin_user_message":
 { Args: { "p_channel"?: string,"p_client_message_id": string,"p_content": string,"p_conversation_id": string,"p_window_seconds": number }; Returns: Json
                            },
+"change_consultation_request":
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_current_time": string,"p_preferred_at": string,"p_service": string }; Returns: Json
+                           },
 "claim_reply_attempt":
 { Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
                            },

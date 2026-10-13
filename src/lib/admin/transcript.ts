@@ -102,6 +102,11 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
     detail = fields.length ? `{${fields.join(", ")}}` : null;
   } else if (call.name === "create_consultation_request") {
     detail = [text(result.service) ?? text(args.service), text(result.preferred_time)].filter(Boolean).join(" · ") || null;
+  } else if (call.name === "change_consultation_request") {
+    // What it becomes, and from when.
+    const now = [text(result.service) ?? text(args.service), text(result.preferred_time) ?? text(args.preferred_datetime)].filter(Boolean).join(" · ");
+    const was = text(record(result.changed_from ?? null).preferred_time) ?? text(args.current_datetime);
+    detail = [now, was && `was ${was}`].filter(Boolean).join(", ") || null;
   }
 
   // Confirm before write (src/lib/agent/confirm.ts): a first call only
@@ -113,6 +118,10 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   if (!call.ok && result.error === "service_not_found") return { detail, outcome: "not on the services list", tone: "warning", failed: false };
   // A time the business is closed (Admin > Opening hours): another time is suggested.
   if (!call.ok && result.error === "outside_opening_hours") return { detail, outcome: "outside opening hours", tone: "warning", failed: false };
+  // A change to a request the team already handled, or to none, or to the same.
+  if (!call.ok && result.error === "request_not_pending") return { detail, outcome: "already handled by the team", tone: "warning", failed: false };
+  if (!call.ok && result.error === "request_not_found") return { detail, outcome: "no such request", tone: "warning", failed: false };
+  if (!call.ok && result.error === "no_change") return { detail, outcome: "nothing to change", tone: "neutral", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are
@@ -128,6 +137,9 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   if (call.name === "save_lead") return { detail, outcome: "saved", tone: "success", failed: false };
   if (call.name === "create_consultation_request") {
     return { detail, outcome: result.already_requested === true ? "already requested" : "requested", tone: "success", failed: false };
+  }
+  if (call.name === "change_consultation_request") {
+    return { detail, outcome: result.already_changed === true ? "already changed" : "changed", tone: "success", failed: false };
   }
   return { detail, outcome: "done", tone: "success", failed: false };
 }

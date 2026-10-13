@@ -66,9 +66,12 @@ export interface RequestRow {
   preferredAt: string;
   status: ConsultationStatus;
   requestedAt: string;
+  // Notes on the request, e.g. what the customer changed:
+  // "[Changed by the customer: was Porcelain crown, Thursday, October 15, 2026 at 11:00 AM PDT.]"
+  notes: string | null;
 }
 
-const REQUEST_COLUMNS = "id, lead_id, contact_name, contact_email, contact_phone, service, preferred_at, status, created_at";
+const REQUEST_COLUMNS = "id, lead_id, contact_name, contact_email, contact_phone, service, preferred_at, status, created_at, notes";
 
 type RequestRecord = {
   id: string;
@@ -80,6 +83,7 @@ type RequestRecord = {
   preferred_at: string;
   status: string;
   created_at: string;
+  notes: string | null;
 };
 
 // The contact shown is the snapshot taken with the request (design §3.8),
@@ -94,6 +98,7 @@ const toRequestRow = (r: RequestRecord): RequestRow => ({
   preferredAt: r.preferred_at,
   status: r.status as ConsultationStatus,
   requestedAt: r.created_at,
+  notes: r.notes,
 });
 
 // Upcoming requests first (soonest first), then past ones (latest first):
