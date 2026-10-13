@@ -194,7 +194,13 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
             }
             const proposal = tool.confirm?.propose(args, ctx);
             // Null: invalid arguments, which run() rejects without writing.
-            if (proposal && !(await confirmed(tool, proposal.key, ctx, d))) return { output: confirmFirst(proposal.details) };
+            if (proposal) {
+              const check = await confirmed(tool, proposal.key, ctx, d);
+              if (!check.ok) return { output: confirmFirst(proposal.details) };
+              // What was read back and confirmed is what's saved: a field the
+              // confirming call left out (a cancel's reason) comes from the read-back.
+              args = { ...readBackArguments(tool, check.details), ...withoutUndefined(args as Record<string, unknown>) };
+            }
             // A check that finished after the timeout answered must not write.
             if (expired) return { output: UNAVAILABLE };
             writing = tool.writes;
@@ -248,17 +254,23 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
 // keyed like the new call's, as read back: the details it returned (the
 // service by its exact name, from prepare; for a change, the whole new
 // state) over what the model sent.
-async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<boolean> {
+async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<{ ok: boolean; details: Record<string, unknown> }> {
   const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
   const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
+  const details = latest?.details && typeof latest.details === "object" ? (latest.details as Record<string, unknown>) : {};
   let proposed = null;
-  if (parsed?.success) {
-    const args = parsed.data as Record<string, unknown>;
-    const details = latest?.details && typeof latest.details === "object" ? (latest.details as Record<string, unknown>) : {};
-    proposed = tool.confirm?.propose({ ...args, ...details }, ctx);
-  }
-  return isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt });
+  if (parsed?.success) proposed = tool.confirm?.propose({ ...(parsed.data as Record<string, unknown>), ...details }, ctx);
+  return { ok: isConfirmed(key, { proposal: proposed && latest ? { key: proposed.key, at: latest.at } : null, readBack, answerAt }), details };
 }
+
+// The read-back's values for the tool's own arguments (its details also hold
+// display-only fields, like the time spelled out).
+function readBackArguments(tool: Tool, details: Record<string, unknown>): Record<string, unknown> {
+  const names = Object.keys((tool.parameters as { properties?: object }).properties ?? {});
+  return Object.fromEntries(Object.entries(details).filter(([k, v]) => names.includes(k) && v !== undefined));
+}
+
+const withoutUndefined = (args: Record<string, unknown>) => Object.fromEntries(Object.entries(args).filter(([, v]) => v !== undefined));
 
 // "email: this email address doesn't look valid; ...; phone: ..." in words
 // the model can relay to the customer.

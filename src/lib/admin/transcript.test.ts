@@ -110,6 +110,21 @@ test("a changed request shows what it became and from when; a request the team h
   assert.deepEqual(handled, { detail: "was 2026-10-20T15:00", outcome: "already handled by the team", tone: "warning", failed: false });
 });
 
+test("a cancel and a follow-up show what they were about", () => {
+  const cancelled = summarizeToolCall({
+    name: "cancel_consultation_request",
+    arguments: { current_datetime: "2026-10-14T15:00" },
+    result: { ok: true, service: "Invisalign or orthodontic consultation (20 minutes)", preferred_time: "Wed, Oct 14 · 3:00 PM", already_cancelled: false },
+    ok: true,
+  });
+  assert.deepEqual(cancelled, { detail: "Invisalign or orthodontic consultation (20 minutes) · Wed, Oct 14 · 3:00 PM", outcome: "cancelled", tone: "success", failed: false });
+  const followUp = summarizeToolCall({ name: "request_follow_up", arguments: { reason: "Call about the confirmed request" }, result: { ok: true, updated: false }, ok: true });
+  assert.deepEqual(followUp, { detail: '"Call about the confirmed request"', outcome: "follow-up requested", tone: "success", failed: false });
+  const noContact = summarizeToolCall({ name: "request_follow_up", arguments: { reason: "Call me" }, result: { ok: false, error: "lead_required", message: "…" }, ok: false });
+  assert.equal(noContact.outcome, "contact not saved yet");
+  assert.equal(noContact.failed, false);
+});
+
 test("a consultation request shows the service and time, and a repeat says so", () => {
   const s = summarizeToolCall({
     name: "create_consultation_request",

@@ -99,7 +99,11 @@ test("already-done section lists saved contact and requests, and only when there
   assert.match(p, /# Already done in this conversation\n- The customer's contact details are saved\.\n- Consultation request: teeth whitening, Tuesday, October 13, 2026 at 3:00 PM \(2026-10-13T15:00\), status pending\./);
   // A change names the request by this local time (change_consultation_request).
   assert.match(p, /To change a request already made .* call change_consultation_request with its current_datetime from "Already done in this conversation" and only what changes; never create a second request instead\./);
-  assert.match(p, /Only pending requests can be changed\. A request listed as confirmed or cancelled can't be/);
+  assert.match(p, /Only pending requests can be changed or cancelled\. A request listed as confirmed can't be: say the team has already confirmed it and offer a follow-up \(request_follow_up\)/);
+  assert.match(p, /To cancel a request, call cancel_consultation_request with its current_datetime/);
+  // Seen live: "your request to be contacted about canceling is saved" when only the contact was matched.
+  assert.match(p, /Never say the team has been told, or that something is noted or saved, unless request_follow_up \(or the tool that did it\) returned ok: true\./);
+  assert.match(p, /You cannot book or confirm appointments, change or cancel what the team has confirmed/);
   assert.match(p, /Only ever read back a change that change_consultation_request returned in that same reply: call it first\./);
   const handled = buildSystemPrompt({
     business,
@@ -108,7 +112,9 @@ test("already-done section lists saved contact and requests, and only when there
     customerFacts: {},
     state: { contactSaved: true, requests: [{ service: "Porcelain crown", preferredTime: "Thursday, October 22, 2026 at 10:00 AM", preferredLocal: "2026-10-22T10:00", status: "confirmed" }] },
   });
-  assert.ok(handled.includes("- Consultation request: Porcelain crown, Thursday, October 22, 2026 at 10:00 AM (2026-10-22T10:00), status confirmed. The team has handled it: it can't be changed here."));
+  assert.ok(handled.includes("- Consultation request: Porcelain crown, Thursday, October 22, 2026 at 10:00 AM (2026-10-22T10:00), status confirmed. The team has confirmed it: it can't be changed or cancelled here (offer request_follow_up)."));
+  const followUp = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, state: { contactSaved: true, requests: [], followUp: "Call back about insurance" } });
+  assert.ok(followUp.includes('- The team has been asked to contact the customer about: "Call back about insurance". A new request_follow_up replaces it.'));
   assert.ok(p.indexOf("# Already done") > p.indexOf("# Date and time"), "dynamic: after the cacheable prefix");
 });
 

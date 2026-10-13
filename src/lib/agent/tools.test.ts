@@ -77,7 +77,14 @@ test("tool definitions match the validation schemas (no drift)", () => {
     const props = Object.keys((def.parameters as { properties: object }).properties).sort();
     assert.deepEqual(props, Object.keys(schema.shape).sort(), def.name);
   }
-  assert.deepEqual(toolDefinitions().map((d) => d.name).sort(), ["change_consultation_request", "create_consultation_request", "save_lead", "search_knowledge"]);
+  assert.deepEqual(toolDefinitions().map((d) => d.name).sort(), [
+    "cancel_consultation_request",
+    "change_consultation_request",
+    "create_consultation_request",
+    "request_follow_up",
+    "save_lead",
+    "search_knowledge",
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -269,7 +276,11 @@ function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["
       const data =
         fn === "change_consultation_request"
           ? { request_id: "R1", status: "pending", service: params.p_service, previous_service: opts.requests?.[0]?.service, changed: true }
-          : { request_id: "R1", status: "pending", created: true };
+          : fn === "cancel_consultation_request"
+            ? { request_id: "R1", status: "cancelled", service: opts.requests?.[0]?.service, cancelled: true }
+            : fn === "request_follow_up"
+              ? { follow_up_id: "F1", created: true }
+              : { request_id: "R1", status: "pending", created: true };
       return { data, error: null };
     },
   } as unknown as NonNullable<ToolContext["client"]>;
@@ -570,6 +581,52 @@ test("change: only a pending request in this conversation, and only into an open
   assert.equal((await closed.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-24T10:00" })).error, "outside_opening_hours", "a Saturday");
   assert.equal((await closed.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-20T15:00" })).error, "no_change");
   for (const c of [confirmed, other, closed]) assert.deepEqual(c.rpcs, []);
+});
+
+test("cancel: a pending request is read back first, then cancelled on the yes", async () => {
+  const c = conversation({ requests: [CROWN] });
+  c.customerSays(1, "can you undo this request?");
+  const cancel = { current_datetime: "2026-10-20T15:00", reason: "changed my mind" };
+  const proposal = await c.call("cancel_consultation_request", cancel);
+  assert.deepEqual(proposal, {
+    ok: false,
+    error: "confirm_first",
+    message: CONFIRM_FIRST_MESSAGE,
+    details: { cancel_request_at: "Tuesday, October 20, 2026 at 3:00 PM PDT", reason: "changed my mind" },
+  });
+  assert.deepEqual(c.rpcs, []);
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  const done = await c.call("cancel_consultation_request", { current_datetime: "2026-10-20T15:00" });
+  assert.ok(done.ok && done.status === "cancelled" && done.service === "Porcelain crown" && done.already_cancelled === false);
+  // The confirming call left the reason out: the one read back and confirmed is saved.
+  assert.deepEqual(c.written[0], { p_business_id: "b", p_conversation_id: "c", p_current_at: "2026-10-20T22:00:00.000Z", p_reason: "changed my mind" });
+});
+
+test("cancel: a confirmed request is the team's (offer a follow-up); a cancelled one is reported, nothing written", async () => {
+  const confirmed = conversation({ requests: [{ ...CROWN, status: "confirmed" }] });
+  const out = await confirmed.call("cancel_consultation_request", { current_datetime: "2026-10-20T15:00" });
+  assert.ok(!out.ok && out.error === "request_not_pending" && /already confirmed this request .* can't be cancelled here.*request_follow_up/.test(out.message));
+  const cancelled = conversation({ requests: [{ ...CROWN, status: "cancelled" }] });
+  const again = await cancelled.call("cancel_consultation_request", { current_datetime: "2026-10-20T15:00" });
+  assert.ok(again.ok && again.already_cancelled === true);
+  assert.deepEqual([...confirmed.rpcs, ...cancelled.rpcs], []);
+});
+
+test("follow-up: what the team should contact them about is read back, then saved on the yes", async () => {
+  const c = conversation();
+  c.customerSays(1, "yeah, have someone call me");
+  const reason = { reason: "Cancel the confirmed Invisalign consultation on Wednesday, October 14 at 3:00 PM. Prefers a phone call." };
+  const proposal = await c.call("request_follow_up", reason);
+  assert.deepEqual(proposal, { ok: false, error: "confirm_first", message: CONFIRM_FIRST_MESSAGE, details: reason });
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  const done = await c.call("request_follow_up", reason);
+  assert.deepEqual(done, { ok: true, follow_up_id: "F1", reason: reason.reason, updated: false, note: "The team will contact the customer about this." });
+  assert.deepEqual(c.rpcs, ["request_follow_up"]);
+
+  const other = await c.call("request_follow_up", { reason: "A question about insurance for braces" });
+  assert.equal(other.error, "confirm_first", "another topic is read back first");
 });
 
 test("change: say what changes", () => {

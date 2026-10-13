@@ -111,22 +111,25 @@ function upcomingFirst(rows: RequestRow[], now = Date.now()): RequestRow[] {
 }
 
 export async function leadDetail(businessId: string, leadId: string) {
-  const [lead, requests, conversations] = await Promise.all([
+  const [lead, requests, conversations, followUps] = await Promise.all([
     db().from("leads").select("id, name, email, phone, interest, source_channel, created_at").eq("business_id", businessId).eq("id", leadId).maybeSingle(),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).eq("lead_id", leadId).order("preferred_at"),
     // Where the lead came from: usually one conversation, more if the same
     // person came back in a new session.
     db().from("conversations").select("id, last_message_at").eq("business_id", businessId).eq("lead_id", leadId).order("last_message_at", { ascending: false }).limit(5),
+    db().from("follow_ups").select(FOLLOW_UP_COLUMNS).eq("business_id", businessId).eq("lead_id", leadId).order("created_at", { ascending: false }).limit(10),
   ]);
   if (lead.error) throw new Error(`Loading lead failed: ${lead.error.message}`);
   if (requests.error) throw new Error(`Loading requests failed: ${requests.error.message}`);
   if (conversations.error) throw new Error(`Loading conversations failed: ${conversations.error.message}`);
+  if (followUps.error) throw new Error(`Loading follow-ups failed: ${followUps.error.message}`);
   if (!lead.data) throw new ChatHttpError(404, "That lead doesn't exist.");
   const l = lead.data;
   return {
     lead: { id: l.id, name: l.name, email: l.email, phone: l.phone, interest: l.interest, channel: l.source_channel as Channel, capturedAt: l.created_at },
     requests: upcomingFirst((requests.data ?? []).map(toRequestRow)),
     conversations: (conversations.data ?? []).map((c) => ({ id: c.id, lastActivity: c.last_message_at })),
+    followUps: ((followUps.data ?? []) as unknown as FollowUpRecord[]).map(toFollowUpRow),
   };
 }
 
@@ -195,15 +198,93 @@ export async function setConsultationStatus(businessId: string, requestId: strin
   return toRequestRow(data);
 }
 
+// ---------------------------------------------------------------------------
+// Follow-ups: what customers asked the team to contact them about
+// ---------------------------------------------------------------------------
+
+export type FollowUpStatus = "open" | "done";
+
+export interface FollowUpRow {
+  id: string;
+  leadId: string;
+  customer: string;
+  email: string | null;
+  phone: string | null;
+  // In the customer's terms, as read back to them.
+  reason: string;
+  status: FollowUpStatus;
+  conversationId: string | null;
+  requestedAt: string;
+  doneAt: string | null;
+}
+
+const FOLLOW_UP_COLUMNS = "id, lead_id, conversation_id, reason, status, created_at, done_at, leads!inner(name, email, phone)";
+
+type FollowUpRecord = {
+  id: string;
+  lead_id: string;
+  conversation_id: string | null;
+  reason: string;
+  status: string;
+  created_at: string;
+  done_at: string | null;
+  leads: { name: string; email: string | null; phone: string | null };
+};
+
+const toFollowUpRow = (f: FollowUpRecord): FollowUpRow => ({
+  id: f.id,
+  leadId: f.lead_id,
+  customer: f.leads.name,
+  email: f.leads.email,
+  phone: f.leads.phone,
+  reason: f.reason,
+  status: f.status as FollowUpStatus,
+  conversationId: f.conversation_id,
+  requestedAt: f.created_at,
+  doneAt: f.done_at,
+});
+
+// The open follow-ups, oldest first (waiting longest), and how many there are.
+export async function openFollowUps(businessId: string, limit = 10): Promise<{ followUps: FollowUpRow[]; count: number }> {
+  const { data, error, count } = await db()
+    .from("follow_ups")
+    .select(FOLLOW_UP_COLUMNS, { count: "exact" })
+    .eq("business_id", businessId)
+    .eq("status", "open")
+    .order("created_at")
+    .limit(limit);
+  if (error) throw new Error(`Loading follow-ups failed: ${error.message}`);
+  return { followUps: ((data ?? []) as unknown as FollowUpRecord[]).map(toFollowUpRow), count: count ?? 0 };
+}
+
+// Done (or open again, to undo). Open again only while the conversation has
+// no other open one (one open per conversation).
+export async function setFollowUpStatus(businessId: string, id: string, status: FollowUpStatus): Promise<FollowUpRow> {
+  const { data, error } = await db()
+    .from("follow_ups")
+    .update({ status, done_at: status === "done" ? new Date().toISOString() : null })
+    .eq("business_id", businessId)
+    .eq("id", id)
+    .select(FOLLOW_UP_COLUMNS)
+    .maybeSingle();
+  if (error?.message.includes("follow_ups_open_per_conversation_idx")) {
+    throw new ChatHttpError(409, "This conversation already has an open follow-up, so this one can't be reopened.");
+  }
+  if (error) throw new Error(`Updating follow-up failed: ${error.message}`);
+  if (!data) throw new ChatHttpError(404, "That follow-up doesn't exist.");
+  return toFollowUpRow(data as unknown as FollowUpRecord);
+}
+
 export async function overview(businessId: string) {
   const since = new Date(Date.now() - WEEK_MS).toISOString();
-  const [counts, recentRequests, recentLeads, gaps, issues] = await Promise.all([
+  const [counts, recentRequests, recentLeads, gaps, issues, followUps] = await Promise.all([
     adminCounts(businessId),
     db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId).order("created_at", { ascending: false }).limit(5),
     listLeads(businessId, "", 5),
     knowledgeGaps(businessId, 5),
     // Answers the check replaced and tool calls that failed: the latest, and how many this week.
     recentIssues(businessId, since, 5),
+    openFollowUps(businessId, 10),
   ]);
   if (recentRequests.error) throw new Error(`Loading requests failed: ${recentRequests.error.message}`);
   return {
@@ -219,5 +300,8 @@ export async function overview(businessId: string) {
     knowledgeGaps: gaps,
     issues7d: issues.count,
     recentIssues: issues.issues,
+    // What customers asked the team to contact them about, still open.
+    followUps: followUps.followUps,
+    openFollowUps: followUps.count,
   };
 }

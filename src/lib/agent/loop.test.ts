@@ -261,3 +261,25 @@ test("a changed request is a consultation card that says what it was; an outage 
   assert.equal(toAction({ name: "change_consultation_request", output: outage })?.kind, "action_failed");
   assert.equal(toAction({ name: "change_consultation_request", output: { ok: false as const, error: "request_not_pending", message: "…" } }), null, "handled in conversation");
 });
+
+test("a cancelled request and a follow-up get their cards", () => {
+  const cancelled = toAction({
+    name: "cancel_consultation_request",
+    output: { ok: true as const, request_id: "R1", status: "cancelled", service: "Porcelain crown", preferred_time: "Tuesday, October 20, 2026 at 3:00 PM PDT", already_cancelled: false },
+  });
+  assert.deepEqual(cancelled, {
+    kind: "consultation_requested",
+    requestId: "R1",
+    service: "Porcelain crown",
+    preferredTime: "Tuesday, October 20, 2026 at 3:00 PM PDT",
+    status: "cancelled",
+    alreadyRequested: false,
+    cancelled: true,
+  });
+  assert.deepEqual(toAction({ name: "request_follow_up", output: { ok: true as const, follow_up_id: "F1", reason: "Call about insurance", updated: false } }), {
+    kind: "follow_up_requested",
+    reason: "Call about insurance",
+    updated: false,
+  });
+  assert.equal(toAction({ name: "request_follow_up", output: { ok: false as const, error: "temporarily_unavailable", message: "…" } })?.kind, "action_failed");
+});

@@ -1,10 +1,10 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Check, Loader2, PhoneCall } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { Issue, KnowledgeGap } from "@/lib/admin/conversations";
-import type { LeadRow, RequestRow } from "@/lib/admin/crm";
+import type { FollowUpRow, LeadRow, RequestRow } from "@/lib/admin/crm";
 import { maskEmail, maskPhone } from "@/components/chat/thread";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -21,6 +21,8 @@ interface OverviewData {
   knowledgeGaps: KnowledgeGap[];
   issues7d: number;
   recentIssues: Issue[];
+  followUps: FollowUpRow[];
+  openFollowUps: number;
 }
 
 
@@ -29,6 +31,19 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
   const api = `/api/admin/${encodeURIComponent(slug)}`;
   const [data, setData] = useState<OverviewData | null>(null);
   const [failed, setFailed] = useState(false);
+  const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Done: off the list (the lead keeps it, marked done).
+  const markDone = async (id: string) => {
+    setBusy(id);
+    try {
+      const res = await fetch(`${api}/follow-ups/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "done" }) });
+      if (res.ok) setDoneIds((ids) => new Set(ids).add(id));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   useEffect(() => {
     let live = true;
@@ -61,6 +76,50 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
                 <Kpi label="Pending consultations" value={data.pendingRequests} href={`${base}/consultations`} />
                 <Kpi label="Documents ready" value={data.documentsReady} suffix={`of ${data.documentsTotal}`} href={`${base}/knowledge-base`} />
               </section>
+              <Panel
+                title="Needs follow-up"
+                subtitle={`Customers who asked the team to contact them. Open: ${Math.max(0, data.openFollowUps - doneIds.size)}.`}
+                href={`${base}/leads`}
+                linkLabel="Leads"
+                empty="Nothing waiting: no customer has asked to be contacted."
+              >
+                {data.followUps
+                  .filter((f) => !doneIds.has(f.id))
+                  .map((f) => (
+                    <li key={f.id} className="flex flex-col gap-2 px-5 py-3 text-[14px] sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                      <div className="flex min-w-0 items-start gap-2.5">
+                        <PhoneCall aria-hidden className="mt-0.5 size-4 shrink-0 text-info" />
+                        <div className="min-w-0">
+                          <p className="break-words">
+                            <span className="font-medium">{f.customer}</span>
+                            <span className="text-text-muted"> · {f.reason}</span>
+                          </p>
+                          <p className="mt-0.5 text-[12px] text-text-muted">
+                            <time title={new Date(f.requestedAt).toLocaleString()}>{relativeTime(f.requestedAt)}</time>
+                            {f.conversationId && (
+                              <>
+                                {" · "}
+                                <Link href={`${base}/conversations?c=${f.conversationId}`} className="hover:text-text hover:underline">
+                                  View conversation
+                                </Link>
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => markDone(f.id)}
+                        disabled={busy === f.id}
+                        aria-label={`Mark ${f.customer}'s follow-up done`}
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 self-start rounded-lg border border-border px-2.5 text-[13px] font-medium hover:bg-surface-muted disabled:opacity-50 sm:self-auto"
+                      >
+                        {busy === f.id ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : <Check aria-hidden className="size-3.5" />}
+                        Done
+                      </button>
+                    </li>
+                  ))}
+              </Panel>
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <Panel title="Recent consultation requests" href={`${base}/consultations`} empty="No requests yet.">
                   {data.recentRequests.map((r) => (

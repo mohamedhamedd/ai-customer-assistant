@@ -107,6 +107,11 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
     const now = [text(result.service) ?? text(args.service), text(result.preferred_time) ?? text(args.preferred_datetime)].filter(Boolean).join(" · ");
     const was = text(record(result.changed_from ?? null).preferred_time) ?? text(args.current_datetime);
     detail = [now, was && `was ${was}`].filter(Boolean).join(", ") || null;
+  } else if (call.name === "cancel_consultation_request") {
+    detail = [text(result.service), text(result.preferred_time) ?? text(args.current_datetime)].filter(Boolean).join(" · ") || null;
+  } else if (call.name === "request_follow_up") {
+    const reason = text(args.reason);
+    detail = reason && `"${reason}"`;
   }
 
   // Confirm before write (src/lib/agent/confirm.ts): a first call only
@@ -122,6 +127,7 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   if (!call.ok && result.error === "request_not_pending") return { detail, outcome: "already handled by the team", tone: "warning", failed: false };
   if (!call.ok && result.error === "request_not_found") return { detail, outcome: "no such request", tone: "warning", failed: false };
   if (!call.ok && result.error === "no_change") return { detail, outcome: "nothing to change", tone: "neutral", failed: false };
+  if (!call.ok && result.error === "lead_required") return { detail, outcome: "contact not saved yet", tone: "warning", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are
@@ -141,5 +147,9 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   if (call.name === "change_consultation_request") {
     return { detail, outcome: result.already_changed === true ? "already changed" : "changed", tone: "success", failed: false };
   }
+  if (call.name === "cancel_consultation_request") {
+    return { detail, outcome: result.already_cancelled === true ? "already cancelled" : "cancelled", tone: "success", failed: false };
+  }
+  if (call.name === "request_follow_up") return { detail, outcome: result.updated === true ? "follow-up updated" : "follow-up requested", tone: "success", failed: false };
   return { detail, outcome: "done", tone: "success", failed: false };
 }

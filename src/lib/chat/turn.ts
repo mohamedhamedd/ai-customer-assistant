@@ -369,14 +369,14 @@ export async function recentHistory(conversationId: string, beforeMessageId?: nu
 // Live from the database, so a request staff confirmed or cancelled shows its
 // current status.
 export async function conversationState(conversation: { id: string; lead_id: string | null }, timeZone: string): Promise<ConversationState> {
-  const { data, error } = await db()
-    .from("consultation_requests")
-    .select("service, preferred_at, status")
-    .eq("conversation_id", conversation.id)
-    .order("created_at");
-  if (error) throw new Error(`Loading requests failed: ${error.message}`);
+  const [{ data, error }, followUp] = await Promise.all([
+    db().from("consultation_requests").select("service, preferred_at, status").eq("conversation_id", conversation.id).order("created_at"),
+    db().from("follow_ups").select("reason").eq("conversation_id", conversation.id).eq("status", "open").maybeSingle(),
+  ]);
+  if (error || followUp.error) throw new Error(`Loading requests failed: ${(error ?? followUp.error)!.message}`);
   return {
     contactSaved: conversation.lead_id !== null,
+    followUp: followUp.data?.reason ?? null,
     requests: (data ?? []).map((r) => ({
       service: r.service,
       preferredTime: formatHuman(new Date(r.preferred_at), timeZone),

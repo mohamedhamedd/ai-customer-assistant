@@ -1,11 +1,14 @@
-// Integration tests: change_consultation_request against the local database:
-// the request found in this conversation, confirm before write, the change
-// and its note, and a request the team has confirmed refused. Run with
-// `npm run test:integration`.
+// Integration tests: change_consultation_request, cancel_consultation_request
+// and request_follow_up against the local database: the request found in
+// this conversation, confirm before write, what's written and noted, a
+// request the team has confirmed refused, and a follow-up in the admin. Run
+// with `npm run test:integration`.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
+import { openFollowUps, setFollowUpStatus } from "@/lib/admin/crm";
+import { conversationState } from "@/lib/chat/turn";
 import { executeTool } from "./execute";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 import type { ToolContext } from "./tools";
@@ -44,8 +47,10 @@ async function withRequest(status = "pending") {
     assert.ifError(e);
   };
   const change = async (args: object) => (await executeTool("change_consultation_request", JSON.stringify(args), ctx, { log: () => {}, trace: () => {} })).output;
-  return { convo: convo!.id, current, at: at.at, says, change };
+  return { convo: convo!.id, current, at: at.at, says, change, ctx };
 }
+
+const executeToolFor = async (ctx: ToolContext, name: string, args: object) => (await executeTool(name, JSON.stringify(args), ctx, { log: () => {}, trace: () => {} })).output;
 
 test("a pending request is changed after the customer's yes, with the change noted for staff", async () => {
   const r = await withRequest();
@@ -75,4 +80,37 @@ test("a request the team has confirmed can't be changed", async () => {
   assert.ok(!out.ok && out.error === "request_not_pending");
   const { data } = await db().from("consultation_requests").select("preferred_at").eq("conversation_id", r.convo).single();
   assert.equal(new Date(data!.preferred_at).getTime(), r.at.getTime());
+});
+
+test("a pending request is cancelled after the customer's yes; the time is free again", async () => {
+  const r = await withRequest();
+  await r.says("user", "can you undo this request?");
+  const cancel = await executeToolFor(r.ctx, "cancel_consultation_request", { current_datetime: r.current, reason: "changed my mind" });
+  assert.ok(!cancel.ok && cancel.error === "confirm_first");
+  await r.says("assistant", "Cancel your crown consultation? Is that right?");
+  await r.says("user", "yes");
+  const done = await executeToolFor(r.ctx, "cancel_consultation_request", { current_datetime: r.current });
+  assert.ok(done.ok, JSON.stringify(done));
+  const { data } = await db().from("consultation_requests").select("status, notes").eq("conversation_id", r.convo).single();
+  assert.deepEqual(data, { status: "cancelled", notes: "[Cancelled by the customer: changed my mind.]" });
+});
+
+test("a follow-up is saved after the customer's yes, shows in the admin, and can be marked done", async () => {
+  const r = await withRequest("confirmed");
+  await r.says("user", "I need to cancel it, can someone call me?");
+  const args = { reason: "Cancel the confirmed crown consultation. Prefers a phone call." };
+  assert.equal((await executeToolFor(r.ctx, "request_follow_up", args)).error, "confirm_first");
+  await r.says("assistant", "The team will call you about cancelling your confirmed crown consultation. Is that right?");
+  await r.says("user", "yes");
+  const done = await executeToolFor(r.ctx, "request_follow_up", args);
+  assert.ok(done.ok, JSON.stringify(done));
+
+  const { followUps, count } = await openFollowUps(r.ctx.businessId);
+  assert.equal(count, 1);
+  assert.deepEqual([followUps[0].customer, followUps[0].reason, followUps[0].conversationId], ["Itest Sara", args.reason, r.convo]);
+  const state = await conversationState({ id: r.convo, lead_id: "x" }, TZ);
+  assert.equal(state.followUp, args.reason, "the assistant sees it under Already done");
+
+  await setFollowUpStatus(r.ctx.businessId, followUps[0].id, "done");
+  assert.equal((await openFollowUps(r.ctx.businessId)).count, 0);
 });
