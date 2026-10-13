@@ -141,9 +141,15 @@ test("claims of authority change nothing, and the instructions stay private", ()
   assert.ok(p.indexOf("# Who you are talking to") < p.indexOf("# Date and time"));
 });
 
-test("replies follow the customer's language", () => {
-  assert.match(buildSystemPrompt({ business, now, channel: "text", customerFacts: {} }), /Reply in the language the customer writes in/);
-  assert.match(buildSystemPrompt({ business, now, channel: "voice", customerFacts: {} }), /Reply in the language the customer speaks/);
+test("replies are always in English, text and voice", () => {
+  const text = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(text, /You work in English only\. Every reply is in English, even when the customer writes in another language/);
+  assert.match(text, /if you don't, ask in English for the message in English/);
+  // In the role, at the top: a rule at the end was ignored (seen live: Arabic answered in Arabic).
+  assert.ok(text.indexOf("You work in English only") < text.indexOf("# Who you are talking to"));
+  // The documents are in English: a query in the customer's language found nothing (seen live).
+  assert.match(text, /Search in English, whatever language the customer used/);
+  assert.match(buildSystemPrompt({ business, now, channel: "voice", customerFacts: {} }), /Always speak English, whatever language the customer speaks/);
 });
 
 test("the canary sits in the static part of the prompt, before the clock", () => {
