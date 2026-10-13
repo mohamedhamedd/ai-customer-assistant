@@ -17,19 +17,9 @@ export interface TranscriptMessage {
   createdAt: string;
   // A customer message the assistant never answered (the turn failed).
   replyFailed: boolean;
-  // What the guards blocked or replaced here (PR-16).
-  flags: MessageFlag[];
-}
-
-export interface MessageFlag {
-  id: number;
-  layer: "input" | "caught" | "canary" | "scope" | "numbers";
-  // Blocks of customer messages: whether staff confirmed or dismissed them.
-  status: "new" | "confirmed" | "dismissed";
-  category: string;
-  reason: string;
-  // The customer's message, or the answer before it was replaced.
-  original: string;
+  // An answer the answer check replaced: what the model wrote, and why.
+  // Staff only; the customer saw the safe reply in content.
+  replaced: { original: string; reason: string } | null;
 }
 
 export interface TranscriptToolCall {

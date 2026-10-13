@@ -18,9 +18,6 @@ const schema = z.object({
   VOICE_MAX_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
   // Transcribes the customer's speech for captions and the stored transcript.
   OPENAI_TRANSCRIBE_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
-  // The guards' model (PR-16): screens each message and checks each answer.
-  // Small and fast on purpose: it runs on every turn.
-  OPENAI_GUARD_MODEL: z.string().min(1).default("gpt-4.1-nano"),
 
   // The header your own proxy puts the client's address in, lowercase:
   // "x-forwarded-for" (the last entry is used: the one the proxy appended),

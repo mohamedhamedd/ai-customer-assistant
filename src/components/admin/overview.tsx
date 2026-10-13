@@ -3,9 +3,8 @@
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { KnowledgeGap } from "@/lib/admin/conversations";
+import type { Issue, KnowledgeGap } from "@/lib/admin/conversations";
 import type { LeadRow, RequestRow } from "@/lib/admin/crm";
-import { guardLabel } from "@/lib/guard/labels";
 import { maskEmail, maskPhone } from "@/components/chat/thread";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -20,9 +19,8 @@ interface OverviewData {
   recentRequests: RequestRow[];
   recentLeads: LeadRow[];
   knowledgeGaps: KnowledgeGap[];
-  flags7d: number;
-  flagsToReview: number;
-  recentFlags: { id: number; layer: string; category: string; conversationId: string; at: string }[];
+  issues7d: number;
+  recentIssues: Issue[];
 }
 
 
@@ -120,26 +118,24 @@ export function Overview({ slug, timeZone }: { slug: string; timeZone: string })
                 ))}
               </Panel>
               <Panel
-                title="Blocked by the guards"
-                subtitle={`Attacks and off-business answers stopped before a customer kept them. Last 7 days: ${data.flags7d}.${
-                  data.flagsToReview ? ` ${data.flagsToReview} to review in the conversations.` : ""
-                }`}
-                href={`${base}/conversations`}
-                linkLabel="Conversations"
-                empty="Nothing blocked yet."
+                title="Issues"
+                subtitle={`Answers the answer check replaced, and saves that failed. Last 7 days: ${data.issues7d}.`}
+                href={`${base}/conversations?issues=1`}
+                linkLabel="All issues"
+                empty="No issues yet."
               >
-                {data.recentFlags.map((f) => (
-                  <li key={f.id}>
+                {data.recentIssues.map((issue) => (
+                  <li key={`${issue.kind}:${issue.conversationId}:${issue.at}`}>
                     <Link
-                      href={`${base}/conversations?c=${f.conversationId}`}
+                      href={`${base}/conversations?c=${issue.conversationId}`}
                       className="flex min-h-12 items-center justify-between gap-3 px-5 py-2 text-[14px] hover:bg-surface-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
                     >
                       <span className="min-w-0 truncate">
-                        <span className="font-medium">{guardLabel(f)}</span>
+                        <span className="font-medium">{issue.label}</span>
                         <span className="text-text-muted"> · View conversation</span>
                       </span>
-                      <time className="shrink-0 text-[12px] text-text-muted" title={new Date(f.at).toLocaleString()}>
-                        {relativeTime(f.at)}
+                      <time className="shrink-0 text-[12px] text-text-muted" title={new Date(issue.at).toLocaleString()}>
+                        {relativeTime(issue.at)}
                       </time>
                     </Link>
                   </li>

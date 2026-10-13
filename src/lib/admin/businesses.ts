@@ -1,7 +1,7 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
 import { ChatHttpError, forgetBusiness } from "@/lib/chat/turn";
-import { EVAL_SLUG_PREFIX, profileSchema, fieldErrors, type FieldErrors, type Profile } from "./profile";
+import { profileSchema, fieldErrors, type FieldErrors, type Profile } from "./profile";
 
 // Businesses (US-10.1, 10.2): the home page cards, the admin switcher, and
 // creating or editing a profile. One assistant per business, many
@@ -40,8 +40,6 @@ export async function listBusinesses(): Promise<BusinessCard[]> {
     .from("businesses")
     .select("slug, name, description, documents(count)")
     .eq("documents.status", "ready")
-    // The guard eval's throwaway copies never show.
-    .not("slug", "like", `${EVAL_SLUG_PREFIX}%`)
     .order("created_at")
     .limit(200);
   if (error) throw new Error(`Loading businesses failed: ${error.message}`);
@@ -50,7 +48,7 @@ export async function listBusinesses(): Promise<BusinessCard[]> {
 
 // Just the names, for the admin's switcher and /admin: no document counts.
 export async function listBusinessLinks(): Promise<{ slug: string; name: string }[]> {
-  const { data, error } = await db().from("businesses").select("slug, name").not("slug", "like", `${EVAL_SLUG_PREFIX}%`).order("created_at").limit(200);
+  const { data, error } = await db().from("businesses").select("slug, name").order("created_at").limit(200);
   if (error) throw new Error(`Loading businesses failed: ${error.message}`);
   return data ?? [];
 }

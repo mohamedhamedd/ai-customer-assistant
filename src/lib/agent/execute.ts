@@ -99,9 +99,6 @@ async function auditToDb(row: AuditRow): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-// The answer checks that replace a text answer before the customer sees it
-// (PR-16). A voice answer is flagged after it was heard, so it still counts.
-const REPLACED = ["canary", "scope", "numbers"];
 // Messages after a proposal to look through: the read-back and the answer
 // come right after it.
 const FOLLOWING = 20;
@@ -124,7 +121,7 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
 
   const { data: after, error: afterError } = await client
     .from("messages")
-    .select("role, channel, content, created_at, flags(layer)")
+    .select("role, content, created_at, replaced_reason")
     .eq("conversation_id", ctx.conversationId)
     // The database's own timestamp string: a Date would drop the microseconds.
     .gt("created_at", proposal.created_at)
@@ -137,7 +134,8 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
   return {
     latest: { arguments: proposal.arguments, at: new Date(proposal.created_at) },
     readBack: readBack
-      ? { at: new Date(readBack.created_at), delivered: !(readBack.channel === "text" && readBack.flags.some((f) => REPLACED.includes(f.layer))) }
+      ? // An answer the answer check replaced never reached the customer.
+        { at: new Date(readBack.created_at), delivered: readBack.replaced_reason === null }
       : null,
     answerAt: answer ? new Date(answer.created_at) : null,
   };

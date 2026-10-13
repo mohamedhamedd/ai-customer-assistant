@@ -1,4 +1,4 @@
-// The number check (PR-16): every price, percentage and phone number in an
+// The number check (answer-check.ts): every price, percentage and phone number in an
 // answer must come from something the assistant was allowed to know: this
 // turn's tool results, the customer's own words, earlier answers, and the
 // facts in its instructions. Plain code, no model: a wrong price is the
@@ -16,7 +16,7 @@ export type FigureKind = "money" | "percent" | "phone";
 
 export interface Figure {
   kind: FigureKind;
-  // As written in the answer, for the flag's reason.
+  // As written in the answer, for the reason it was replaced.
   text: string;
 }
 

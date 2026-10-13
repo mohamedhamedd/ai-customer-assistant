@@ -50,11 +50,6 @@ export interface TurnInput {
   toolCtx: ToolContext;
   emit: (event: TurnEvent) => void;
   deadlineMs?: number;
-  // Stops the turn from outside (the input guard blocked the message).
-  signal?: AbortSignal;
-  // Awaited before any tool runs: nothing is executed until the input guard
-  // has cleared the message. Throws to stop the turn.
-  beforeTool?: () => Promise<void>;
 }
 
 export interface TurnResult {
@@ -63,7 +58,7 @@ export interface TurnResult {
   actions: Action[];
   toolCalls: { name: string; ok: boolean }[];
   // What the tools returned, as the model saw it: the evidence the answer's
-  // figures are checked against.
+  // figures are checked against (answer-check.ts).
   evidence: string[];
   rounds: number;
   usage: { input: number; output: number; cachedInput: number };
@@ -88,7 +83,6 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
   const deadlineAt = Date.now() + budget;
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(new TurnDeadlineError()), budget);
-  const signal = input.signal ? AbortSignal.any([deadline.signal, input.signal]) : deadline.signal;
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: input.system },
@@ -123,7 +117,7 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
           stream: true,
           stream_options: { include_usage: true },
         },
-        signal,
+        deadline.signal,
         // A new round's text starts as a new paragraph.
         (text, first) => input.emit({ type: "delta", text: first && texts.length > 0 ? `\n\n${text}` : text }),
         usage,
@@ -139,7 +133,6 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
         // A tool can't be cancelled once started, so only start one whose full
         // timeout fits in the remaining budget: the turn really ends by its deadline.
         if (deadline.signal.aborted || deadlineAt - Date.now() < TOOL_TIMEOUT_MS) throw new TurnDeadlineError();
-        await input.beforeTool?.();
         input.emit({ type: "tool", name: call.function.name, status: "started" });
         const outcome = await deps.executeTool(call.function.name, call.function.arguments, input.toolCtx);
         input.emit({ type: "tool", name: call.function.name, status: "finished", ok: outcome.ok });
@@ -157,7 +150,6 @@ export async function runAgentTurn(input: TurnInput, deps: AgentDeps): Promise<T
     }
   } catch (err) {
     if (deadline.signal.aborted) throw deadline.signal.reason;
-    if (input.signal?.aborted) throw input.signal.reason;
     throw err;
   } finally {
     clearTimeout(timer);
