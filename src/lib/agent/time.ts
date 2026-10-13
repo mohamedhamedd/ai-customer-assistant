@@ -96,6 +96,10 @@ export function upcomingDays(now: Date, timeZone: string, days = 14): string[] {
   const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const NTH = ["1st", "2nd", "3rd", "4th", "5th"];
   const today = wallClock(now, timeZone);
+  // Weeks run Monday to Sunday: "this Thursday" is in this week, "next
+  // Thursday" in the one after. Seen live: "next Thursday" on a Tuesday was
+  // read as two days away, "next Wednesday" as eight.
+  const daysLeftInWeek = 6 - ((new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay() + 6) % 7);
   const out: string[] = [];
   for (let i = 0; i < days; i++) {
     // Calendar arithmetic on the date alone: adding 24 h to an instant can
@@ -104,7 +108,8 @@ export function upcomingDays(now: Date, timeZone: string, days = 14): string[] {
     const weekday = WEEKDAYS[d.getUTCDay()];
     const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 7)).getUTCMonth() !== d.getUTCMonth();
     const nth = `${NTH[Math.floor((d.getUTCDate() - 1) / 7)]}${last ? " and last" : ""} ${weekday} of ${MONTHS[d.getUTCMonth()]}`;
-    const label = i === 0 ? "today; " : i === 1 ? "tomorrow; " : "";
+    const week = i === 0 ? "" : i <= daysLeftInWeek ? `this ${weekday}; ` : i <= daysLeftInWeek + 7 ? `next ${weekday}; ` : "";
+    const label = `${i === 0 ? "today; " : i === 1 ? "tomorrow; " : ""}${week}`;
     out.push(`${weekday} ${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} (${label}${nth})`);
   }
   return out;

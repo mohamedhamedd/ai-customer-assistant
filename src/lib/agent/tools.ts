@@ -6,6 +6,7 @@ import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { describeHours, formatClosedDate, formatTime, startCheck, upcomingClosed, type Week } from "@/lib/admin/hours-rows";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
+import { isPlainYes } from "@/lib/chat/affirm";
 import { loadServices, loadWeek } from "./tables";
 import { chooseService, MAX_LISTED, words, type ServiceChoice, type ServiceEvidence } from "./service-choice";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
@@ -301,20 +302,23 @@ async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence>
   for (const r of [said, offer]) if (r.error) throw new Error(`Loading the services failed: ${r.error.message}`);
 
   let offered: string[] = [];
-  if (offer.data) {
+  const options = offer.data && (offer.data.result as { options?: unknown }).options;
+  if (offer.data && Array.isArray(options)) {
     // Answered: a customer message after the offer (a voice item still being
-    // transcribed counts: the customer has spoken).
-    const { data: answer, error } = await client
+    // transcribed counts: the customer has spoken). A plain yes picks nothing
+    // from several options: seen live, "whitening" got both options and a
+    // read-back of the contact in one reply, the customer said yes to the
+    // contact, and the model took it as in-office.
+    const { data: answers, error } = await client
       .from("messages")
-      .select("id")
+      .select("content")
       .eq("conversation_id", ctx.conversationId)
       .eq("role", "user")
       .gt("created_at", offer.data.created_at)
-      .limit(1)
-      .maybeSingle();
+      .limit(SAID);
     if (error) throw new Error(`Loading the services failed: ${error.message}`);
-    const options = (offer.data.result as { options?: unknown }).options;
-    if (answer && Array.isArray(options)) offered = options.filter((o): o is string => typeof o === "string");
+    const answered = (answers ?? []).some((m) => m.content == null || options.length === 1 || !isPlainYes(m.content));
+    if (answered) offered = options.filter((o): o is string => typeof o === "string");
   }
   return {
     services,

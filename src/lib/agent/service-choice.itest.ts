@@ -56,6 +56,24 @@ test("several fit: the agent must ask, and only the customer's answer to the opt
   assert.equal((await c.request("Porcelain crown")).error, "choose_service", "not an option they were offered");
 });
 
+test("a plain yes picks nothing from several options; from one, it's the answer", async () => {
+  const c = await conversation([IN_OFFICE, KIT, "Porcelain crown"]);
+  await c.says("user", "I'm Omar, 5550303001. I want whitening tomorrow at 2pm");
+  assert.equal((await c.request("whitening")).error, "choose_service");
+  // Seen live: the options and the contact read-back in one reply; the yes was to the contact.
+  await c.says("assistant", "Just to confirm: Omar, 5550303001. Is that right? And in-office whitening, or the take-home kit?");
+  await c.says("user", "yes");
+  assert.equal((await c.request(IN_OFFICE)).error, "choose_service", "the model can't take the yes as in-office");
+  await c.says("user", "in office");
+  assert.equal((await c.request(IN_OFFICE)).error, "confirm_first");
+
+  const d = await conversation([IN_OFFICE, KIT, "Traditional braces (full treatment)"]);
+  await d.says("user", "Can you fix my overbite?");
+  assert.deepEqual((await d.request("Traditional braces (full treatment)")).options, ["Traditional braces (full treatment)"]);
+  await d.says("user", "yes");
+  assert.equal((await d.request("Traditional braces (full treatment)")).error, "confirm_first");
+});
+
 test("the customer names one: its exact name; not offered: what can be requested", async () => {
   const c = await conversation([IN_OFFICE, KIT, "Porcelain crown"]);
   await c.says("user", "I'd like a crown please");
