@@ -41,6 +41,9 @@ export interface ConversationState {
   requests: { service: string; preferredTime: string; preferredLocal: string; status: string }[];
   // What the team has been asked to contact the customer about, if open.
   followUp?: string | null;
+  // A consultation request read back (waiting for the customer's yes) or
+  // confirmed but waiting for their contact details: not saved yet.
+  agreed?: { service: string; preferredTime: string; preferredLocal: string; waitingFor: "yes" | "contact" } | null;
 }
 
 // The business's tables, as staff saved them. Empty tables are left out of
@@ -273,10 +276,10 @@ const TEXT_STYLE = `# Style
 Be warm, clear and brief: usually 2 to 5 sentences, or a short list for several items. Use plain language, always in English. If they ask for shorter answers or another format, keep to it.`;
 
 const VOICE_STYLE = `# Style (voice conversation)
-You are speaking out loud. Keep answers to one to three short sentences. No lists, markdown, symbols or URLs; say prices and times the way a person would ("three hundred and forty-nine dollars", "three p.m."). When confirming an email address, spell it back letter by letter. Speak English only: if the customer speaks another language, say in English that you can only help in English.`;
+You are speaking out loud. Keep answers to one to three short sentences. No lists, markdown, symbols or URLs; say prices and times the way a person would ("three hundred and forty-nine dollars", "three p.m."). When confirming an email address, spell it back letter by letter. Phone numbers: ask the customer to say them one digit at a time, keep the digits exactly in the order heard (don't regroup them into tens or hundreds), and read them back one digit at a time ("zero, one, zero, …"). If a number still isn't right after two tries, suggest typing it in the chat box instead. Speak English only: if the customer speaks another language, say in English that you can only help in English.`;
 
 function done(state: ConversationState | undefined): string {
-  if (!state || (!state.contactSaved && state.requests.length === 0 && !state.followUp)) return "";
+  if (!state || (!state.contactSaved && state.requests.length === 0 && !state.followUp && !state.agreed)) return "";
   const lines = [];
   if (state.contactSaved) lines.push("- The customer's contact details are saved.");
   for (const r of state.requests) {
@@ -284,6 +287,14 @@ function done(state: ConversationState | undefined): string {
     const handled =
       r.status === "confirmed" ? " The team has confirmed it: it can't be changed or cancelled here (offer request_follow_up)." : r.status === "cancelled" ? " It is cancelled." : "";
     lines.push(`- Consultation request: ${r.service}, ${r.preferredTime} (${r.preferredLocal}), status ${r.status}.${handled}`);
+  }
+  if (state.agreed) {
+    const a = state.agreed;
+    lines.push(
+      a.waitingFor === "contact"
+        ? `- Not saved yet: a consultation request for ${a.service}, ${a.preferredTime} (${a.preferredLocal}). The customer already said yes to it; it needs their contact details first (save_lead), then call create_consultation_request again with these details.`
+        : `- Not saved yet: a consultation request for ${a.service}, ${a.preferredTime} (${a.preferredLocal}) was read back; it is waiting for the customer's yes.`,
+    );
   }
   if (state.followUp) lines.push(`- The team has been asked to contact the customer about: ${JSON.stringify(state.followUp)}. A new request_follow_up replaces it.`);
   return `# Already done in this conversation\n${lines.join("\n")}`;

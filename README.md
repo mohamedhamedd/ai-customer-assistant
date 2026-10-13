@@ -96,6 +96,9 @@ This gate filters noise. The system prompt remains the main defence: the model a
 - **Retries:** each message carries a `clientMessageId`. Resending it replays a stored reply (no model call), returns 409 while the original is still running, or re-runs it if the original failed or died.
 - **Failures:** if the model call fails, the customer gets a friendly message, the message stays saved and is marked failed, and one structured log line records the reason.
 
+- **What the model remembers:** the most recent messages that fit about 8,000 characters (at most 60), not a fixed count. Seen live: a voice call spelling a phone number made ~35 short fragments, and a 20-message window pushed out the request the customer had just agreed. Facts that must survive any length are in the prompt's "Already done in this conversation": contact saved, each request (with its time), an open follow-up, and **a request agreed but not saved yet** ("Not saved yet: … The customer already said yes; it needs their contact details first").
+- **Phone numbers by voice:** the assistant asks for them one digit at a time and reads them back the same way, keeping the digits in the order heard; after two failed tries it suggests typing the number in the chat. The voice transcription is told to expect numbers digit by digit.
+
 ## Customer chat
 
 `/b/[slug]` is the chat for one business (`/` lists them all, see Multiple businesses). The name comes from the database, so the same page serves any business. Code: `src/components/chat/`.

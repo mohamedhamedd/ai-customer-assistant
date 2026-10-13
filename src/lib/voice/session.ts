@@ -9,6 +9,9 @@ import type { ToolDefinition } from "@/lib/agent/tools";
 // Same prompt and same three tools as text chat (one tool layer for both
 // channels); only the style section differs (short, spoken answers).
 
+export const TRANSCRIPTION_HINT =
+  "A customer of a business, speaking English. They may say phone numbers digit by digit and email addresses: write numbers as digits, exactly in the order spoken.";
+
 export interface VoiceSessionInput extends Omit<PromptInput, "channel"> {
   history: HistoryMessage[];
   tools: ToolDefinition[];
@@ -41,7 +44,10 @@ export function realtimeSession(input: VoiceSessionInput): RealtimeSessionCreate
     audio: {
       input: {
         // Captions and the stored transcript of what the customer said.
-        transcription: { model: input.transcribeModel },
+        // A hint for the record of what the customer said (history, the
+        // service check): seen live, "zero one zero, one three" became
+        // "0, 10, 5, 14, 99, 5".
+        transcription: { model: input.transcribeModel, prompt: TRANSCRIPTION_HINT },
         // The server detects when the customer stops talking (natural
         // turn-taking) and cuts the assistant off when they start (barge-in).
         turn_detection: { type: "server_vad", create_response: true, interrupt_response: true },

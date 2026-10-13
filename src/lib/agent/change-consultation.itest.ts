@@ -114,3 +114,29 @@ test("a follow-up is saved after the customer's yes, shows in the admin, and can
   await setFollowUpStatus(r.ctx.businessId, followUps[0].id, "done");
   assert.equal((await openFollowUps(r.ctx.businessId)).count, 0);
 });
+
+test("a request agreed but not saved yet is in the conversation's state until it's saved", async () => {
+  const r = await withRequest();
+  // A second conversation, with no contact saved yet.
+  const { data: convo } = await db().from("conversations").insert({ business_id: r.ctx.businessId, session_id: randomUUID() }).select("id").single();
+  const ctx: ToolContext = { ...r.ctx, conversationId: convo!.id };
+  const says = async (role: "user" | "assistant", content: string) => void (await db().from("messages").insert({ conversation_id: convo!.id, role, content }));
+  const args = { service: "Porcelain crown", preferred_datetime: `${day(9)}T15:00` };
+  const state = () => conversationState({ id: convo!.id, lead_id: null }, TZ);
+
+  await says("user", "A crown consultation at 3 that day please");
+  assert.equal((await executeToolFor(ctx, "create_consultation_request", args)).error, "confirm_first");
+  assert.equal((await state()).agreed?.waitingFor, "yes", "read back, waiting for the yes");
+
+  await says("assistant", "Porcelain crown at 3:00 PM. Is that right?");
+  await says("user", "yes");
+  assert.equal((await executeToolFor(ctx, "create_consultation_request", args)).error, "lead_required");
+  const agreed = (await state()).agreed;
+  assert.deepEqual([agreed?.service, agreed?.preferredLocal, agreed?.waitingFor], ["Porcelain crown", `${day(9)}T15:00`, "contact"]);
+
+  // Saved once the contact is there: no longer "not saved yet".
+  const { data: lead } = await db().from("leads").insert({ business_id: ctx.businessId, name: "Itest Mo", phone: "5550001111", source_channel: "text" }).select("id").single();
+  await db().from("conversations").update({ lead_id: lead!.id, customer_facts: { name: "Itest Mo", phone: "5550001111" } }).eq("id", convo!.id);
+  assert.ok((await executeToolFor(ctx, "create_consultation_request", args)).ok);
+  assert.equal((await state()).agreed, null);
+});

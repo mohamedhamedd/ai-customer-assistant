@@ -256,3 +256,25 @@ test("the tables are facts for the answer check; a long list leaves out descript
   const p = buildSystemPrompt({ business, tables: { services: many, week: tables.week }, now, channel: "text", customerFacts: {} });
   assert.ok(p.includes("- Service 199 (category: Orthodontics;") && !p.includes("x".repeat(200)));
 });
+
+test("a request agreed but not saved yet stays in Already done, however long the conversation", () => {
+  const state = (waitingFor: "yes" | "contact") => ({
+    contactSaved: false,
+    requests: [],
+    agreed: { service: "In-office teeth whitening (single session)", preferredTime: "Wednesday, October 14, 2026 at 3:00 PM PDT", preferredLocal: "2026-10-14T15:00", waitingFor },
+  });
+  const contact = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, state: state("contact") });
+  assert.ok(
+    contact.includes(
+      "- Not saved yet: a consultation request for In-office teeth whitening (single session), Wednesday, October 14, 2026 at 3:00 PM PDT (2026-10-14T15:00). The customer already said yes to it; it needs their contact details first (save_lead), then call create_consultation_request again with these details.",
+    ),
+  );
+  const yes = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, state: state("yes") });
+  assert.match(yes, /- Not saved yet: a consultation request for .* was read back; it is waiting for the customer's yes\./);
+});
+
+test("voice: phone numbers one digit at a time, in the order heard; typing them after two tries", () => {
+  const p = buildSystemPrompt({ business, now, channel: "voice", customerFacts: {} });
+  assert.match(p, /ask the customer to say them one digit at a time, keep the digits exactly in the order heard \(don't regroup them into tens or hundreds\)/);
+  assert.match(p, /If a number still isn't right after two tries, suggest typing it in the chat box instead\./);
+});
