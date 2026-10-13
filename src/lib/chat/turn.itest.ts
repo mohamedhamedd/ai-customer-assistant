@@ -8,7 +8,6 @@ import type { ChatCompletionChunk, ChatCompletionMessageParam } from "openai/res
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
-import type { Guards } from "@/lib/guard/guards";
 import {
   AI_UNAVAILABLE,
   BUSY_MESSAGE,
@@ -42,16 +41,7 @@ function session(): string {
   return id;
 }
 
-// The guards let everything through: these tests are about the turn itself.
-const allowAll: Guards = {
-  screen: async () => ({ allowed: true }),
-  scope: async () => ({ inScope: true, reason: "" }),
-  rewrite: async () => "",
-  record: async () => {},
-};
-
 const replies = (text: string): ChatTurnDeps => ({
-  guards: allowAll,
   complete: async () =>
     (async function* (): AsyncGenerator<ChatCompletionChunk> {
       yield { id: "c", object: "chat.completion.chunk", created: 0, model: "fake", choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }] };
@@ -59,7 +49,6 @@ const replies = (text: string): ChatTurnDeps => ({
 });
 
 const failing: ChatTurnDeps = {
-  guards: allowAll,
   complete: async () => {
     throw new Error("model unavailable");
   },
@@ -184,7 +173,6 @@ const chunk = (delta: ChatCompletionChunk["choices"][0]["delta"]): ChatCompletio
 function callsTools(calls: { name: string; args: object }[], answer: string) {
   const seen: ChatCompletionMessageParam[][] = [];
   const deps: ChatTurnDeps = {
-    guards: allowAll,
     complete: async (params) => {
       seen.push([...params.messages]);
       const answering = params.messages.at(-1)?.role === "tool";
@@ -302,7 +290,6 @@ test("confirm before write: a turn that failed after proposing delivered no read
   // The model proposes, then fails before answering: no reply is stored.
   let calls = 0;
   const proposesThenFails: ChatTurnDeps = {
-    guards: allowAll,
     complete: async () => {
       if (calls++ > 0) throw new Error("model unavailable");
       return (async function* (): AsyncGenerator<ChatCompletionChunk> {

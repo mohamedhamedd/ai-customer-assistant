@@ -3,7 +3,7 @@ import { db } from "@/lib/db/supabase";
 import type { Channel } from "@/lib/db/enums";
 import type { Source } from "@/lib/rag/retrieve";
 import { ChatHttpError } from "@/lib/chat/turn";
-import { interleave, type MessageFlag, type TranscriptItem, type TranscriptMessage, type TranscriptToolCall } from "./transcript";
+import { interleave, type TranscriptItem, type TranscriptMessage, type TranscriptToolCall } from "./transcript";
 
 // Conversation review (US-9.1 – 9.3). Every query is scoped to one business:
 // a conversation id from another business is a 404, like one that doesn't
@@ -22,9 +22,11 @@ export interface ConversationRow {
   channels: Channel[];
   // The last message with text, for the list.
   preview: string | null;
+  // An answer the check replaced, or a tool call that failed (the issues list).
+  hasIssue: boolean;
 }
 
-// admin_conversations in SQL; the generated types can't tell its nullable
+// admin_conversation_list in SQL; the generated types can't tell its nullable
 // columns (no lead, no text yet) from the others.
 interface ConversationRecord {
   id: string;
@@ -36,11 +38,13 @@ interface ConversationRecord {
   has_text: boolean;
   has_voice: boolean;
   preview: string | null;
+  has_issue: boolean;
 }
 
 // Newest activity first; conversations nobody wrote in are left out.
-export async function listConversations(businessId: string, limit = LIST_LIMIT): Promise<ConversationRow[]> {
-  const { data, error } = await db().rpc("admin_conversations", { p_business_id: businessId, p_limit: limit });
+// issuesOnly: only those with an issue (see hasIssue).
+export async function listConversations(businessId: string, { issuesOnly = false, limit = LIST_LIMIT } = {}): Promise<ConversationRow[]> {
+  const { data, error } = await db().rpc("admin_conversation_list", { p_business_id: businessId, p_limit: limit, p_issues_only: issuesOnly });
   if (error) throw new Error(`Loading conversations failed: ${error.message}`);
   return ((data ?? []) as ConversationRecord[]).map((c) => ({
     id: c.id,
@@ -50,6 +54,7 @@ export async function listConversations(businessId: string, limit = LIST_LIMIT):
     messages: Number(c.message_count),
     channels: [...(c.has_text ? (["text"] as const) : []), ...(c.has_voice ? (["voice"] as const) : [])],
     preview: c.preview,
+    hasIssue: c.has_issue,
   }));
 }
 
@@ -61,12 +66,12 @@ export interface Transcript {
 }
 
 export async function conversationTranscript(businessId: string, conversationId: string): Promise<Transcript> {
-  const [conversation, messages, calls, flags] = await Promise.all([
+  const [conversation, messages, calls] = await Promise.all([
     db().from("conversations").select("id, created_at, last_message_at, leads(id, name)").eq("business_id", businessId).eq("id", conversationId).maybeSingle(),
     // One more than shown, to know whether older ones exist.
     db()
       .from("messages")
-      .select("id, role, channel, content, sources, created_at, reply_failed_at")
+      .select("id, role, channel, content, sources, created_at, reply_failed_at, replaced_original, replaced_reason")
       .eq("conversation_id", conversationId)
       .order("id", { ascending: false })
       .limit(TRANSCRIPT_LIMIT + 1),
@@ -76,25 +81,15 @@ export async function conversationTranscript(businessId: string, conversationId:
       .eq("conversation_id", conversationId)
       .order("id", { ascending: false })
       .limit(TRANSCRIPT_LIMIT * 2),
-    db().from("flags").select("id, message_id, layer, category, reason, original, status").eq("conversation_id", conversationId).order("id"),
   ]);
   if (conversation.error) throw new Error(`Loading conversation failed: ${conversation.error.message}`);
   if (messages.error) throw new Error(`Loading messages failed: ${messages.error.message}`);
   if (calls.error) throw new Error(`Loading tool calls failed: ${calls.error.message}`);
-  if (flags.error) throw new Error(`Loading flags failed: ${flags.error.message}`);
   // Checked after the reads (which ran in parallel): nothing read for a
   // conversation of another business is returned.
   if (!conversation.data) throw new ChatHttpError(404, "That conversation doesn't exist.");
 
   const earlierOmitted = (messages.data ?? []).length > TRANSCRIPT_LIMIT;
-  const flagsByMessage = new Map<number, MessageFlag[]>();
-  for (const f of flags.data ?? []) {
-    if (f.message_id === null) continue;
-    flagsByMessage.set(f.message_id, [
-      ...(flagsByMessage.get(f.message_id) ?? []),
-      { id: f.id, layer: f.layer as MessageFlag["layer"], status: f.status as MessageFlag["status"], category: f.category, reason: f.reason, original: f.original },
-    ]);
-  }
   const shown: TranscriptMessage[] = (messages.data ?? []).slice(0, TRANSCRIPT_LIMIT).map((m) => ({
     kind: "message",
     id: m.id,
@@ -104,7 +99,7 @@ export async function conversationTranscript(businessId: string, conversationId:
     sources: Array.isArray(m.sources) ? (m.sources as unknown as Source[]) : [],
     createdAt: m.created_at,
     replyFailed: m.reply_failed_at !== null,
-    flags: flagsByMessage.get(m.id) ?? [],
+    replaced: m.replaced_reason !== null && m.replaced_original !== null ? { original: m.replaced_original, reason: m.replaced_reason } : null,
   }));
   // With older messages left out, their tool calls are left out too.
   const oldest = earlierOmitted ? new Date(shown[shown.length - 1].createdAt).getTime() : -Infinity;
@@ -156,4 +151,47 @@ export async function knowledgeGaps(businessId: string, limit = 8): Promise<Know
     const args = g.arguments as { query?: unknown };
     return { id: g.id, query: typeof args.query === "string" ? args.query : "", conversationId: g.conversation_id, askedAt: g.created_at };
   });
+}
+
+export interface Issue {
+  kind: "replaced_answer" | "tool_failed";
+  // What happened, in staff words (no customer details).
+  label: string;
+  conversationId: string;
+  at: string;
+}
+
+// Tool errors that are problems: the database was down, or a write's outcome
+// is unknown. Not invalid input or confirm_first: those are the conversation
+// working as intended.
+export const FAILED_TOOL_ERRORS = ["temporarily_unavailable", "outcome_unknown"];
+
+// The newest issues across the business, and how many since `since`: answers
+// the answer check replaced, and tool calls that failed. Both rare, both on
+// partial indexes.
+export async function recentIssues(businessId: string, since: string, limit = 5): Promise<{ issues: Issue[]; count: number }> {
+  const replacedAnswers = () =>
+    db().from("messages").select("conversation_id, created_at, replaced_reason, conversations!inner(business_id)").eq("conversations.business_id", businessId).not("replaced_reason", "is", null);
+  const failedTools = () =>
+    db().from("tool_calls").select("name, result, conversation_id, created_at, conversations!inner(business_id)").eq("conversations.business_id", businessId).in("result->>error", FAILED_TOOL_ERRORS);
+  const [replaced, failed, replacedCount, failedCount] = await Promise.all([
+    replacedAnswers().order("created_at", { ascending: false }).limit(limit),
+    failedTools().order("created_at", { ascending: false }).limit(limit),
+    db().from("messages").select("id, conversations!inner(business_id)", { count: "exact", head: true }).eq("conversations.business_id", businessId).not("replaced_reason", "is", null).gte("created_at", since),
+    db().from("tool_calls").select("id, conversations!inner(business_id)", { count: "exact", head: true }).eq("conversations.business_id", businessId).in("result->>error", FAILED_TOOL_ERRORS).gte("created_at", since),
+  ]);
+  for (const r of [replaced, failed, replacedCount, failedCount]) {
+    if (r.error) throw new Error(`Loading issues failed: ${r.error.message}`);
+  }
+  const issues: Issue[] = [
+    ...(replaced.data ?? []).map((m) => ({ kind: "replaced_answer" as const, label: `Answer replaced: ${m.replaced_reason}`, conversationId: m.conversation_id, at: m.created_at })),
+    ...(failed.data ?? []).map((t) => ({
+      kind: "tool_failed" as const,
+      label: `${t.name} failed: ${String((t.result as { error?: string }).error ?? "error").replace(/_/g, " ")}`,
+      conversationId: t.conversation_id,
+      at: t.created_at,
+    })),
+  ];
+  issues.sort((a, b) => b.at.localeCompare(a.at));
+  return { issues: issues.slice(0, limit), count: (replacedCount.count ?? 0) + (failedCount.count ?? 0) };
 }

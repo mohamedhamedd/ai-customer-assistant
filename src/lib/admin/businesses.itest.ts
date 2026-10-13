@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { findBusiness, forgetBusiness } from "@/lib/chat/turn";
-import { businessProfile, createBusiness, listBusinesses, listBusinessLinks, ProfileError, updateBusiness } from "./businesses";
+import { businessProfile, createBusiness, listBusinesses, ProfileError, updateBusiness } from "./businesses";
 
 const slugs: string[] = [];
 const slug = () => {
@@ -102,14 +102,4 @@ test("a lookup that started before a save doesn't put the old profile back in th
   // Changed behind the cache's back: only a fresh read can see it.
   await db().from("businesses").update({ name: "Changed" }).eq("slug", s);
   assert.equal((await findBusiness(s))?.name, "Changed", "the in-flight result wasn't cached");
-});
-
-test("the guard eval's throwaway copies never show on the home page or in the switcher", async () => {
-  const copy = `eval-${randomUUID().slice(0, 8)}`;
-  slugs.push(copy);
-  const { error } = await db().from("businesses").insert({ slug: copy, name: "Lakeside Dental Clinic" });
-  assert.ifError(error);
-  assert.ok(!(await listBusinesses()).some((b) => b.slug === copy));
-  assert.ok(!(await listBusinessLinks()).some((b) => b.slug === copy));
-  await assert.rejects(createBusiness({ ...profile(slug()), slug: "eval-mine" }), fieldError(400, "slug"), "reserved in the form");
 });

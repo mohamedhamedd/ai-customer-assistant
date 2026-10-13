@@ -1,12 +1,11 @@
 "use client";
 
-import { AlertCircle, ArrowLeft, Check, ChevronDown, CircleHelp, Copy, Loader2, MessageSquare, Mic, RefreshCw, ShieldAlert, Volume2, Wrench, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, ChevronDown, CircleHelp, Copy, Loader2, MessageSquare, Mic, RefreshCw, Volume2, Wrench, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ConversationRow, Transcript } from "@/lib/admin/conversations";
-import { summarizeToolCall, type MessageFlag, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
+import { summarizeToolCall, type Tone, type TranscriptMessage, type TranscriptToolCall } from "@/lib/admin/transcript";
 import { Markdown } from "@/components/chat/markdown";
-import { guardLabel } from "@/lib/guard/labels";
 import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
@@ -20,7 +19,11 @@ import { useCopy } from "./ui";
 
 export function Conversations({ slug, businessName, timeZone }: { slug: string; businessName: string; timeZone: string }) {
   const api = `/api/admin/${encodeURIComponent(slug)}`;
-  const selected = useSearchParams().get("c");
+  const params = useSearchParams();
+  const selected = params.get("c");
+  // Only conversations with an issue (a replaced answer, a failed save). The
+  // overview links here with ?issues=1.
+  const [issuesOnly, setIssuesOnly] = useState(params.get("issues") === "1");
   const [list, setList] = useState<ConversationRow[] | null>(null);
   const [failed, setFailed] = useState(false);
   // Bumped by Refresh: loads the list and the open transcript again.
@@ -30,7 +33,7 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
 
   useEffect(() => {
     let live = true;
-    fetch(`${api}/conversations`, { cache: "no-store" })
+    fetch(`${api}/conversations${issuesOnly ? "?issues=1" : ""}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((body: { conversations: ConversationRow[] }) => {
         if (!live) return;
@@ -41,7 +44,7 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
     return () => {
       live = false;
     };
-  }, [api, reloadKey]);
+  }, [api, reloadKey, issuesOnly]);
 
   // Desktop shows the newest conversation until one is picked; on a phone
   // the list comes first and a pick opens the transcript full width.
@@ -70,7 +73,7 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
             <Loader2 aria-hidden className="size-4 animate-spin" /> Loading conversations…
           </p>
         )}
-        {list && list.length === 0 && !selected && (
+        {list && list.length === 0 && !selected && !issuesOnly && (
           <section className="flex flex-col items-center rounded-2xl border border-border bg-surface p-12 text-center">
             <span aria-hidden className="mb-4 flex size-12 items-center justify-center rounded-full bg-surface-muted text-text-muted">
               <MessageSquare className="size-6" />
@@ -78,12 +81,24 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
             <p className="max-w-md text-[14px] text-text-muted">Conversations appear here when customers chat with or call the assistant.</p>
           </section>
         )}
-        {list && (list.length > 0 || selected) && (
+        {list && (list.length > 0 || selected || issuesOnly) && (
           <div className="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-border bg-surface">
             <section aria-label="Conversations" className={`min-h-0 w-full flex-col border-border md:flex md:w-[340px] md:shrink-0 md:border-r ${selected ? "hidden" : "flex"}`}>
-              <div className="flex h-12 shrink-0 items-center border-b border-border bg-surface-muted px-4 text-[13px] font-medium">
-                All conversations ({list.length})
+              <div className="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-surface-muted px-3 text-[13px] font-medium" role="group" aria-label="Show">
+                {([false, true] as const).map((issues) => (
+                  <button
+                    key={String(issues)}
+                    type="button"
+                    aria-pressed={issuesOnly === issues}
+                    onClick={() => setIssuesOnly(issues)}
+                    className={`h-8 rounded-md px-2.5 focus-visible:outline-2 focus-visible:outline-accent ${issuesOnly === issues ? "bg-surface shadow-sm" : "text-text-muted hover:text-text"}`}
+                  >
+                    {issues ? "Issues" : "All"}
+                    {issuesOnly === issues && ` (${list.length})`}
+                  </button>
+                ))}
               </div>
+              {issuesOnly && list.length === 0 && <p className="p-4 text-[14px] text-text-muted">No conversations with issues.</p>}
               <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
                 {list.map((c) => (
                   <li key={c.id}>
@@ -147,6 +162,12 @@ function ConversationItem({ conversation: c, active, onOpen }: { conversation: C
       <span className="flex items-center gap-2 text-[12px] text-text-muted">
         <Channels channels={c.channels} />
         {c.messages} {c.messages === 1 ? "message" : "messages"}
+        {c.hasIssue && (
+          <span className="flex items-center gap-1 font-medium text-danger">
+            <AlertCircle aria-hidden className="size-3" />
+            Issue
+          </span>
+        )}
       </span>
     </button>
   );
@@ -253,7 +274,7 @@ function TranscriptPane({
             item.kind === "tool" ? (
               showActivity && <ToolCallRow key={`t${item.id}`} call={item} />
             ) : (
-              <Message key={`m${item.id}`} message={item} businessName={businessName} timeZone={timeZone} api={api} />
+              <Message key={`m${item.id}`} message={item} businessName={businessName} timeZone={timeZone} />
             ),
           )}
         </div>
@@ -263,7 +284,7 @@ function TranscriptPane({
 }
 
 // The customer side's message styles, smaller and read-only.
-function Message({ message: m, businessName, timeZone, api }: { message: TranscriptMessage; businessName: string; timeZone: string; api: string }) {
+function Message({ message: m, businessName, timeZone }: { message: TranscriptMessage; businessName: string; timeZone: string }) {
   const voice = m.channel === "voice";
   const time = (
     <time dateTime={m.createdAt} className="text-[11px] text-text-muted">
@@ -284,7 +305,6 @@ function Message({ message: m, businessName, timeZone, api }: { message: Transcr
             Not answered: the reply failed
           </p>
         )}
-        <Flags flags={m.flags} api={api} />
         {time}
       </div>
     );
@@ -298,7 +318,7 @@ function Message({ message: m, businessName, timeZone, api }: { message: Transcr
         {m.content ? <Markdown text={m.content} /> : noTranscript}
       </div>
       <Sources sources={m.sources} businessName={businessName} />
-      <Flags flags={m.flags} api={api} />
+      {m.replaced && <ReplacedNote replaced={m.replaced} />}
       {time}
     </div>
   );
@@ -375,88 +395,21 @@ function CopyButton({ text }: { text: string }) {
 }
 
 
-// What the guards did here (PR-16). On a customer message: it was blocked
-// (or, by voice, flagged after it was heard), or its answer was caught. On
-// an answer: the customer saw a replacement; the original is one click away.
-function Flags({ flags, api }: { flags: MessageFlag[]; api: string }) {
-  if (flags.length === 0) return null;
+// The answer check replaced this answer: the customer saw the safe reply
+// above; what the model wrote, and why it was replaced, are one click away.
+function ReplacedNote({ replaced }: { replaced: NonNullable<TranscriptMessage["replaced"]> }) {
   return (
-    <div className="flex max-w-full flex-col gap-1">
-      {flags.map((f) => (
-        <FlagNote key={f.id} flag={f} api={api} />
-      ))}
-    </div>
-  );
-}
-
-const REVIEWED: Record<Exclude<MessageFlag["status"], "new">, string> = {
-  confirmed: "Confirmed attack: the guard learns from it.",
-  dismissed: "Dismissed: a real customer. Not used for learning.",
-};
-
-function FlagNote({ flag, api }: { flag: MessageFlag; api: string }) {
-  const [status, setStatus] = useState(flag.status);
-  const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const blockedMessage = flag.layer === "input" || flag.layer === "caught";
-  const review = async (next: "confirmed" | "dismissed") => {
-    setSaving(true);
-    setFailed(false);
-    try {
-      const res = await fetch(`${api}/flags/${flag.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: next }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!res.ok) throw new Error();
-      setStatus(next);
-    } catch {
-      setFailed(true);
-    } finally {
-      setSaving(false);
-    }
-  };
-  return (
-    <div className={`rounded-lg border px-3 py-2 text-[12px] ${blockedMessage ? "border-danger/40 bg-danger/5 text-danger" : "border-warning/40 bg-warning/5 text-warning"}`}>
+    <div className="max-w-full rounded-lg border border-danger/40 bg-danger/5 px-3 py-2 text-[12px] text-danger">
       <p className="flex items-start gap-1.5 font-medium">
-        <ShieldAlert aria-hidden className="mt-px size-3.5 shrink-0" />
+        <AlertCircle aria-hidden className="mt-px size-3.5 shrink-0" />
         <span>
-          {blockedMessage ? "Guard" : "Replaced"}: {guardLabel(flag)}
-          {flag.reason && <span className="font-normal text-text-muted"> · {flag.reason}</span>}
+          Replaced by the answer check<span className="font-normal text-text-muted"> · {replaced.reason}</span>
         </span>
       </p>
-      {!blockedMessage && (
-        <details className="mt-1 text-text-muted">
-          <summary className="cursor-pointer">Original answer (not kept)</summary>
-          <p className="mt-1 whitespace-pre-wrap break-words">{flag.original}</p>
-        </details>
-      )}
-      {blockedMessage &&
-        (status === "new" ? (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-text">
-            <span className="text-text-muted">Teach the guard?</span>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => review("confirmed")}
-              className="h-7 rounded-md border border-border bg-surface px-2 font-medium hover:bg-surface-muted disabled:opacity-50"
-            >
-              Confirm attack
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => review("dismissed")}
-              className="h-7 rounded-md border border-border bg-surface px-2 font-medium hover:bg-surface-muted disabled:opacity-50"
-            >
-              Not an attack
-            </button>
-            {failed && <span className="text-danger">Couldn&apos;t save. Try again.</span>}
-          </div>
-        ) : (
-          <p className="mt-1 text-text-muted">{REVIEWED[status]}</p>
-        ))}
+      <details className="mt-1 text-text-muted">
+        <summary className="cursor-pointer">Original answer (not shown to the customer after the check)</summary>
+        <p className="mt-1 whitespace-pre-wrap break-words">{replaced.original}</p>
+      </details>
     </div>
   );
 }

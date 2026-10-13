@@ -40,8 +40,8 @@ export interface PromptInput {
   channel: Channel;
   customerFacts: CustomerFacts;
   state?: ConversationState;
-  // A secret marker the guards look for in answers: if it ever appears, the
-  // prompt leaked (PR-16). Stable per deployment, so the prefix still caches.
+  // A secret marker the answer check looks for: if it ever appears in an
+  // answer, the prompt leaked. Stable per deployment, so the prefix still caches.
   canary?: string;
 }
 
@@ -68,8 +68,8 @@ export function buildSystemPrompt({ business, now, channel, customerFacts, state
 }
 
 // The facts the prompt gives the model (the clock and calendar, what the
-// customer said, what's already done), without the rules. The guards check
-// an answer's figures against these: the rules contain numbers too ("2 to 5
+// customer said, what's already done), without the rules. The answer check
+// compares an answer's figures with these: the rules contain numbers too ("2 to 5
 // sentences"), and those must not vouch for a price.
 export function promptFacts({ business, now, customerFacts, state }: Pick<PromptInput, "business" | "now" | "customerFacts" | "state">): string {
   return [clock(business.timezone, now), facts(customerFacts), done(state)].filter(Boolean).join("\n\n");

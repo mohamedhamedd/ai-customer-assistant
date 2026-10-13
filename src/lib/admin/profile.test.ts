@@ -25,7 +25,7 @@ test("each bad field gets its own message", () => {
 });
 
 test("slugs: no double or trailing dash, and 'new' is reserved for /admin/new", () => {
-  for (const slug of ["acme--fitness", "-acme", "acme-", "new", "eval-1a2b3c4d"]) assert.ok(!profileSchema.safeParse({ ...valid, slug }).success, slug);
+  for (const slug of ["acme--fitness", "-acme", "acme-", "new"]) assert.ok(!profileSchema.safeParse({ ...valid, slug }).success, slug);
   assert.ok(profileSchema.safeParse({ ...valid, slug: "new-wave-gym" }).success);
   assert.ok(profileSchema.safeParse({ ...valid, timezone: "UTC" }).success);
 });

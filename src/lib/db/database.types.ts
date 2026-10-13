@@ -123,38 +123,6 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
-                },"flags": {
-                  Row: {
-                    "business_id": string,"category": string,"conversation_id": string | null,"created_at": string,"embedding": string | null,"id": number,"layer": string,"message_id": number | null,"original": string,"reason": string,"reviewed_at": string | null,"status": string
-                  }
-                  ComputedFields: never
-                  Insert: {
-                    "business_id": string,"category": string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer": string,"message_id"?: number | null,"original": string,"reason"?: string,"reviewed_at"?: string | null,"status"?: string
-                  }
-                  Update: {
-                    "business_id"?: string,"category"?: string,"conversation_id"?: string | null,"created_at"?: string,"embedding"?: string | null,"id"?: never,"layer"?: string,"message_id"?: number | null,"original"?: string,"reason"?: string,"reviewed_at"?: string | null,"status"?: string
-                  }
-                  Relationships: [
-                    {
-      foreignKeyName: "flags_business_id_fkey"
-      columns: ["business_id"]
-isOneToOne: false
-      referencedRelation: "businesses"
-      referencedColumns: ["id"]
-    },{
-      foreignKeyName: "flags_conversation_id_fkey"
-      columns: ["conversation_id"]
-isOneToOne: false
-      referencedRelation: "conversations"
-      referencedColumns: ["id"]
-    },{
-      foreignKeyName: "flags_message_id_fkey"
-      columns: ["message_id"]
-isOneToOne: false
-      referencedRelation: "messages"
-      referencedColumns: ["id"]
-    }
-                  ]
                 },"leads": {
                   Row: {
                     "business_id": string,"created_at": string,"email": string | null,"id": string,"interest": string | null,"name": string,"phone": string | null,"source_channel": string,"updated_at": string
@@ -177,14 +145,14 @@ isOneToOne: false
                   ]
                 },"messages": {
                   Row: {
-                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"reply_attempt_at": string,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
+                    "actions": NonNullable<Json>,"channel": string,"client_message_id": string | null,"content": string | null,"conversation_id": string,"created_at": string,"id": number,"replaced_original": string | null,"replaced_reason": string | null,"reply_attempt_at": string,"reply_failed_at": string | null,"reply_to_message_id": number | null,"role": string,"sources": NonNullable<Json>
                   }
                   ComputedFields: never
                   Insert: {
-                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id": string,"created_at"?: string,"id"?: never,"replaced_original"?: string | null,"replaced_reason"?: string | null,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role": string,"sources"?: NonNullable<Json>
                   }
                   Update: {
-                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
+                    "actions"?: NonNullable<Json>,"channel"?: string,"client_message_id"?: string | null,"content"?: string | null,"conversation_id"?: string,"created_at"?: string,"id"?: never,"replaced_original"?: string | null,"replaced_reason"?: string | null,"reply_attempt_at"?: string,"reply_failed_at"?: string | null,"reply_to_message_id"?: number | null,"role"?: string,"sources"?: NonNullable<Json>
                   }
                   Relationships: [
                     {
@@ -273,9 +241,9 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "admin_conversations":
-{ Args: { "p_business_id": string,"p_limit": number }; Returns: {
-              "has_text": boolean,"has_voice": boolean,"id": string,"last_message_at": string,"lead_id": string,"lead_name": string,"message_count": number,"preview": string,"started_at": string
+            "admin_conversation_list":
+{ Args: { "p_business_id": string,"p_issues_only"?: boolean,"p_limit": number }; Returns: {
+              "has_issue": boolean,"has_text": boolean,"has_voice": boolean,"id": string,"last_message_at": string,"lead_id": string,"lead_name": string,"message_count": number,"preview": string,"started_at": string
             }[]
                            },
 "admin_counts":
@@ -286,9 +254,6 @@ isOneToOne: false
                            },
 "claim_reply_attempt":
 { Args: { "p_message_id": number,"p_window_seconds": number }; Returns: boolean
-                           },
-"clone_business_for_eval":
-{ Args: { "p_slug": string,"p_source": string }; Returns: string
                            },
 "commit_document_chunks":
 { Args: { "p_chunks": Json,"p_document_id": string,"p_replaces_document_id"?: string }; Returns: number
@@ -317,11 +282,6 @@ isOneToOne: false
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
-                           },
-"similar_flags":
-{ Args: { "p_business_id": string,"p_embedding": string,"p_limit": number }; Returns: {
-              "category": string,"original": string,"similarity": number
-            }[]
                            },
 "take_rate_limit":
 { Args: { "p_key": string,"p_max": number,"p_window_seconds": number }; Returns: boolean

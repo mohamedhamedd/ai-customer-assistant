@@ -209,6 +209,8 @@ The user-visible turns only. Tool traffic goes to `tool_calls` (see §10, altern
 | `actions` | jsonb | no | `'[]'` | Action cards an assistant reply produced (`lead_saved`, `consultation_requested`, `action_failed`), copied from tool results by the server, so they survive a reload |
 | `reply_attempt_at` | timestamptz | no | `now()` | User rows: when the latest attempt to answer started. The in-progress window counts from here (§7.1) |
 | `reply_failed_at` | timestamptz | yes | | User rows only: set when the server gave up producing the reply (model error, deadline). Lets a retry re-run at once instead of waiting out the in-progress window (§7.1) |
+| `replaced_original` | text | yes | | Assistant rows only: what the model wrote, when the answer check replaced it (a leaked prompt, an invented figure). `content` holds the safe reply the customer got. Staff-only |
+| `replaced_reason` | text | yes | | Why it was replaced. Set together with `replaced_original` (`CHECK`). Partial index `(conversation_id, created_at desc) WHERE replaced_reason IS NOT NULL` for the issues list |
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
 **Voice turn ordering.** Realtime transcription of the *user's* speech finishes asynchronously, often *after* the assistant has started answering. If transcripts were inserted when they arrive, the answer would get a lower `id` than the question. So a voice turn is stored in **two steps**:
@@ -239,24 +241,9 @@ Audit log of every tool the agent executed: what it asked for and what it got ba
 One row per voice call (PR-09). `/api/voice/session` creates it after OpenAI accepts the call and returns a random secret to the browser; only its **sha256** is stored (`token_hash`, unique). Every tool relay and transcript report must carry the secret: it resolves the call's conversation and business in one query, and an unknown or expired secret (`expires_at`, 70 minutes) is a 401 before anything runs. `openai_call_id` (from the `Location` header) is kept so the server can hang a call up later. RLS on, no anon/authenticated privileges.
 | `created_at` | timestamptz | no | `clock_timestamp()` | See conventions |
 
-### 3.6b `flags` (PR-16)
+### 3.6b Removed: `flags`
 
-What the guards blocked or replaced. One row per event: the customer message the input guard blocked, or the answer an output check replaced (canary, numbers, scope).
-
-| Column | Type | Null | Notes |
-|---|---|---|---|
-| `id` | bigint identity | no | PK |
-| `business_id` | uuid | no | FK, cascade |
-| `conversation_id` | uuid | yes | FK, cascade |
-| `message_id` | bigint | yes | The blocked customer message, or the stored replacement answer |
-| `layer` | text | no | `input`, `canary`, `scope`, `numbers` |
-| `category` | text | no | e.g. `injection`, `authority_claim`, `off_business`, `money`; `missed` for an attack caught in the answer, recorded on the customer message so the input guard learns it |
-| `reason` | text | no | The guard's one-line reason |
-| `original` | text | no | What was blocked: the message, or the answer before it was replaced. Staff-only |
-| `embedding` | vector(1536) | yes | Input layer only: the guard's examples come from the most similar past blocks (`similar_flags()`, same business) |
-| `created_at` | timestamptz | no | |
-
-Input-layer flags also keep a message out of the model's history on later turns. Indexes: `(business_id, created_at desc)` for the overview, `message_id` and `conversation_id` for the transcript, HNSW on `embedding` where present. `clone_business_for_eval()` copies a business (profile, ready documents, chunks with embeddings, input flags) for `npm run eval:guards`, which deletes the copy afterwards.
+PR-16 kept what its guards blocked or replaced in a `flags` table, with embeddings its input guard learned from. The input guard and the model-based scope check were removed (they judged single messages without the conversation and replaced ordinary answers), and with them `flags`, `similar_flags()` and `clone_business_for_eval()`. A replaced answer is now kept on the message itself (`replaced_original`, `replaced_reason`), and failed tool calls are already in `tool_calls`: together they are the admin's issues list.
 
 ### 3.7 `leads`
 
@@ -362,7 +349,7 @@ Indexes are derived from the queries the app actually runs.
 | Q5b | Has this message already been stored? | Every chat request (retry) | `UNIQUE (conversation_id, client_message_id)` |
 | Q6 | Consultations by business + status, newest first | Admin | `consultation_requests (business_id, status, created_at DESC)` |
 | Q7 | Leads by business, newest first | Admin | `leads (business_id, created_at DESC)` |
-| Q8 | Conversations by business, most recent activity, with message count, channels and last message | Admin conversations | `admin_conversations()`: walks `conversations (business_id, last_message_at DESC)`, two lookups per row on `messages (conversation_id, id)` |
+| Q8 | Conversations by business, most recent activity, with message count, channels, last message and whether it has an issue (optionally issues only) | Admin conversations | `admin_conversation_list()`: walks `conversations (business_id, last_message_at DESC)`, lookups per row on `messages (conversation_id, id)` and the partial issue indexes on `messages` and `tool_calls` |
 | Q9 | Tool calls of a conversation in order | Admin transcript | `tool_calls (conversation_id, id)` |
 | Q9b | Latest searches that found nothing (knowledge gaps) | Admin overview | Partial index `tool_calls (created_at DESC) WHERE name = 'search_knowledge' AND result->>'found' = 'false'` |
 | Q10 | Documents of a business | Admin | Leading column of `UNIQUE (business_id, content_hash)` |

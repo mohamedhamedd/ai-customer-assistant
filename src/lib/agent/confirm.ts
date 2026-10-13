@@ -11,7 +11,7 @@
 //      reached the customer (the next assistant message, stored with words,
 //      not replaced by an answer check) and the customer answered it, within
 //      ANSWER_WINDOW_MS. A turn that failed after proposing, or a read-back
-//      a guard replaced, delivered nothing, so nothing can commit.
+//      the answer check replaced, delivered nothing, so nothing can commit.
 //
 // "The same details" means the same key (ConfirmSpec.propose): the details
 // that identify what's saved (the contact, or the time slot), compared as
