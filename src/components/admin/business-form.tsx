@@ -2,7 +2,7 @@
 
 import { Check, Copy } from "lucide-react";
 import { MAX_SLUG_CHARS } from "@/lib/chat/limits";
-import { PROFILE_LIMITS, TIMEZONES, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
+import { parseServices, PROFILE_LIMITS, TIMEZONES, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
 import { useCopy } from "./ui";
 
 // The profile fields, shared by Settings (US-10.1) and New business
@@ -111,6 +111,25 @@ export function ProfileFields({
           aria-invalid={!!errors.guidelines}
           aria-describedby="guidelines-hint"
           className={`${input} ${border("guidelines")} resize-y p-3 leading-relaxed`}
+        />
+      </Field>
+
+      <Field
+        id="services"
+        label="Services customers can request"
+        error={errors.services}
+        hint="One per line, named as customers should see them. A consultation request can only be for one of these (the assistant matches what the customer says, e.g. “braces”, to your name for it). Leave empty to accept any service."
+        count={[parseServices(values.services).length, PROFILE_LIMITS.services]}
+      >
+        <textarea
+          id="services"
+          rows={6}
+          value={values.services}
+          onChange={(e) => onChange("services", e.target.value)}
+          placeholder={"e.g. Personal training session\nGroup class trial\nNutrition consultation"}
+          aria-invalid={!!errors.services}
+          aria-describedby="services-hint"
+          className={`${input} ${border("services")} resize-y p-3 leading-relaxed`}
         />
       </Field>
     </div>

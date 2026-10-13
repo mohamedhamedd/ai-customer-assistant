@@ -17,10 +17,10 @@ after(async () => {
 });
 
 // What /api/voice/session does after OpenAI accepts the call.
-async function openCall(opts: { sessionId?: string; expiresInMs?: number } = {}) {
+async function openCall(opts: { sessionId?: string; expiresInMs?: number; businessSlug?: string } = {}) {
   const sessionId = opts.sessionId ?? randomUUID();
   if (!opts.sessionId) sessions.push(sessionId);
-  const business = (await findBusiness(env().DEMO_BUSINESS_SLUG))!;
+  const business = (await findBusiness(opts.businessSlug ?? env().DEMO_BUSINESS_SLUG))!;
   const conversation = await conversationFor(business.id, sessionId);
   const callToken = randomBytes(32).toString("base64url");
   const { data, error } = await db()
@@ -216,4 +216,19 @@ test("a hang-up is claimed once, then again only after a minute", async () => {
   assert.equal(await claimHangUp(callId, now + 1_000), false, "a second request right after: skipped");
   const [a, b] = await Promise.all([claimHangUp(callId, now + 61_000), claimHangUp(callId, now + 61_000)]);
   assert.equal(Number(a) + Number(b), 1, "after a minute, exactly one of two concurrent requests retries");
+});
+
+test("voice: a consultation request uses the business's list of services too", async () => {
+  const slug = `itest-${randomUUID().slice(0, 8)}`;
+  const { data: created, error } = await db().from("businesses").insert({ slug, name: "Acme Fitness", timezone: "America/Chicago", consultation_services: ["Personal training session"] }).select("id").single();
+  assert.ifError(error);
+  try {
+    const { callToken } = await openCall({ businessSlug: slug });
+    const relayed = await runVoiceTool({ callToken, callId: "call_service", name: "create_consultation_request", arguments: JSON.stringify({ service: "training", preferred_datetime: "2026-12-01T10:00" }) });
+    assert.equal((relayed.output as { error?: string }).error, "invalid_input");
+    assert.match((relayed.output as { message: string }).message, /The options are: Personal training session\./);
+  } finally {
+    await db().from("conversations").delete().eq("business_id", created!.id);
+    await db().from("businesses").delete().eq("id", created!.id);
+  }
 });

@@ -66,7 +66,7 @@ test("saving a profile applies to the next message, under the new slug; the old 
   const after = await findBusiness(renamed);
   assert.equal(after?.name, "Acme Fitness & Spa");
   assert.equal(after?.guidelines, "");
-  assert.deepEqual(await businessProfile(before!.id), { ...profile(renamed), name: "Acme Fitness & Spa", guidelines: "" });
+  assert.deepEqual(await businessProfile(before!.id), { ...profile(renamed), name: "Acme Fitness & Spa", guidelines: "", services: "" });
 });
 
 test("renaming to another business's slug is a 409 and changes nothing", async () => {
@@ -102,4 +102,14 @@ test("a lookup that started before a save doesn't put the old profile back in th
   // Changed behind the cache's back: only a fresh read can see it.
   await db().from("businesses").update({ name: "Changed" }).eq("slug", s);
   assert.equal((await findBusiness(s))?.name, "Changed", "the in-flight result wasn't cached");
+});
+
+test("the services list is saved cleaned up, shown again in the settings, and used by the next message", async () => {
+  const s = slug();
+  await createBusiness(profile(s));
+  const business = (await findBusiness(s))!;
+  assert.deepEqual(business.services, [], "none yet: any service");
+  await updateBusiness(business, { ...profile(s), services: " Personal training session\n\nGroup class trial\npersonal training session " });
+  assert.equal((await businessProfile(business.id)).services, "Personal training session\nGroup class trial");
+  assert.deepEqual((await findBusiness(s))?.services, ["Personal training session", "Group class trial"], "the cached profile was dropped");
 });

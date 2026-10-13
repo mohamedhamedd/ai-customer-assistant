@@ -311,3 +311,28 @@ test("confirm before write: a turn that failed after proposing delivered no read
   await run(newInput(sessionId, "yes"), yes.deps);
   assert.equal(yes.toolResults()[0].ok, true);
 });
+
+test("a business's list of services: the model gets them as the only choices, and anything else is refused with the options", async () => {
+  const slug = `itest-${randomUUID().slice(0, 8)}`;
+  const services = ["Personal training session", "Group class trial"];
+  const { data: created, error } = await db().from("businesses").insert({ slug, name: "Acme Fitness", timezone: "America/Chicago", consultation_services: services }).select("id").single();
+  assert.ifError(error);
+  try {
+    let offered: unknown;
+    const model = callsTools([{ name: "create_consultation_request", args: { service: "training", preferred_datetime: "2026-12-01T10:00" } }], "Which one?");
+    const watching: ChatTurnDeps = {
+      complete: (params, signal) => {
+        offered ??= params.tools?.find((t) => t.type === "function" && t.function.name === "create_consultation_request");
+        return model.deps.complete(params, signal);
+      },
+    };
+    await run({ ...newInput(session(), "I'd like a training consultation on December 1 at 10"), businessSlug: slug }, watching);
+    assert.deepEqual((offered as { function: { parameters: { properties: { service: { enum: string[] } } } } }).function.parameters.properties.service.enum, services);
+    const [result] = model.toolResults();
+    assert.equal(result.error, "invalid_input");
+    assert.match(result.message, /"training" isn't one of the services customers can request\. The options are: Personal training session; Group class trial\./);
+  } finally {
+    await db().from("conversations").delete().eq("business_id", created!.id);
+    await db().from("businesses").delete().eq("id", created!.id);
+  }
+});

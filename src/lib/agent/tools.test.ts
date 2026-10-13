@@ -5,6 +5,7 @@ import { ANSWER_WINDOW_MS } from "./confirm";
 import { executeTool, OUTCOME_UNKNOWN, type AuditRow, type ExecuteDeps, type Proposals, UNAVAILABLE } from "./execute";
 import {
   consultationSchema,
+  offeredService,
   resolvePreferredTime,
   saveLeadSchema,
   searchKnowledgeSchema,
@@ -248,7 +249,7 @@ test("every call leaves one structured log line, without the arguments", async (
 // A conversation in memory, kept like the database keeps it: every call is
 // audited (a confirm_first call is the proposal), and messages are stamped on
 // the same clock. proposals() reads them like execute.ts reads the tables.
-function conversation(opts: { auditFails?: boolean } = {}) {
+function conversation(opts: { auditFails?: boolean; services?: string[] } = {}) {
   let clock = 0;
   const tick = (ms = 1) => t((clock += ms));
   const audits: (AuditRow & { at: Date })[] = [];
@@ -274,7 +275,7 @@ function conversation(opts: { auditFails?: boolean } = {}) {
     customerSays: (afterMs = 1) => void messages.push({ role: "user", at: tick(afterMs), delivered: true }),
     // delivered: false is a read-back an answer check replaced.
     assistantSays: (delivered = true) => void messages.push({ role: "assistant", at: tick(), delivered }),
-    call: async (name: string, args: object) => (await executeTool(name, JSON.stringify(args), { ...ctx, client }, deps)).output,
+    call: async (name: string, args: object) => (await executeTool(name, JSON.stringify(args), { ...ctx, client, services: opts.services }, deps)).output,
   };
 }
 
@@ -456,4 +457,60 @@ test("tools without a confirmation spec (search, read tools) are never gated", a
   assert.equal(loaded, false);
   assert.equal(out.output.ok, true);
   assert.ok(TOOLS.save_lead.confirm && TOOLS.create_consultation_request.confirm && !TOOLS.search_knowledge.confirm, "both write tools are gated");
+});
+
+// ---------------------------------------------------------------------------
+// The services customers can request (businesses.consultation_services)
+// ---------------------------------------------------------------------------
+
+const SERVICES = ["Routine check-up and cleaning", "Traditional braces (full treatment)"];
+
+test("a requested service resolves to the business's own name for it; no list means any service", () => {
+  assert.deepEqual(offeredService("traditional  braces (FULL treatment)", SERVICES), { ok: true, name: "Traditional braces (full treatment)" });
+  const braces = offeredService("braces", SERVICES);
+  assert.ok(!braces.ok && braces.message.includes("The options are: Routine check-up and cleaning; Traditional braces (full treatment)."));
+  assert.deepEqual(offeredService("braces", []), { ok: true, name: "braces" });
+});
+
+test("with a list, the model is given the services as the only choices", () => {
+  const consult = (defs: ReturnType<typeof toolDefinitions>) =>
+    (defs.find((d) => d.name === "create_consultation_request")!.parameters as { properties: { service: { enum?: string[] } } }).properties.service;
+  assert.deepEqual(consult(toolDefinitions(undefined, { services: SERVICES })).enum, SERVICES);
+  assert.equal(consult(toolDefinitions()).enum, undefined, "no list: free text, as before");
+});
+
+test("a service not on the list is rejected with the options, and nothing is proposed or written", async () => {
+  const calls: { fn: string; args: Record<string, unknown> }[] = [];
+  const client = {
+    rpc: async (fn: string, args: Record<string, unknown>) => (calls.push({ fn, args }), { data: { request_id: "R1", status: "pending", service: args.p_service, created: true }, error: null }),
+  } as unknown as NonNullable<ToolContext["client"]>;
+  const withList = { ...ctx, client, services: SERVICES };
+
+  const braces = { service: "braces", preferred_datetime: "2026-10-20T15:00" };
+  const rejected = await executeTool("create_consultation_request", JSON.stringify(braces), withList, { ...quiet, audit: async () => {}, proposals: proposed(braces) });
+  assert.ok(!rejected.output.ok && rejected.output.error === "invalid_input" && /isn't one of the services customers can request/.test(rejected.output.message));
+  assert.equal(calls.length, 0);
+
+  // Proposed with the business's name, then saved under it.
+  const exact = { service: "traditional braces (full treatment)", preferred_datetime: "2026-10-20T15:00" };
+  const proposal = await executeTool("create_consultation_request", JSON.stringify(exact), withList, { ...quiet, audit: async () => {} });
+  assert.ok(!proposal.output.ok && proposal.output.details?.service === "Traditional braces (full treatment)");
+  const saved = await executeTool("create_consultation_request", JSON.stringify(exact), withList, { ...quiet, audit: async () => {}, proposals: proposed(exact) });
+  assert.equal(saved.output.ok, true);
+  assert.equal(calls[0].args.p_service, "Traditional braces (full treatment)");
+});
+
+test("with a list of services, a different service at the same time is a new proposal, read back again", async () => {
+  const at = "2026-10-20T15:00";
+  const c = conversation({ services: SERVICES });
+  c.customerSays(); // "a cleaning next Tuesday at 3"
+  await c.call("create_consultation_request", { service: "Routine check-up and cleaning", preferred_datetime: at });
+  c.assistantSays(); // "Routine check-up and cleaning on Tuesday … at 3:00 PM. Is that right?"
+  c.customerSays(); // "Actually, braces"
+  const changed = await c.call("create_consultation_request", { service: "Traditional braces (full treatment)", preferred_datetime: at });
+  assert.ok(!changed.ok && changed.error === "confirm_first", "not committed: the customer never saw this service");
+  c.assistantSays();
+  c.customerSays(); // "Yes"
+  assert.equal((await c.call("create_consultation_request", { service: "traditional braces (full treatment)", preferred_datetime: at })).ok, true);
+  assert.deepEqual(c.rpcs, ["create_consultation_request"]);
 });

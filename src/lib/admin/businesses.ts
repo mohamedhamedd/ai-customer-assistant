@@ -1,7 +1,7 @@
 import "server-only";
 import { db } from "@/lib/db/supabase";
 import { ChatHttpError, forgetBusiness } from "@/lib/chat/turn";
-import { profileSchema, fieldErrors, type FieldErrors, type Profile } from "./profile";
+import { parseServices, profileSchema, fieldErrors, type FieldErrors, type Profile } from "./profile";
 
 // Businesses (US-10.1, 10.2): the home page cards, the admin switcher, and
 // creating or editing a profile. One assistant per business, many
@@ -54,12 +54,26 @@ export async function listBusinessLinks(): Promise<{ slug: string; name: string 
 }
 
 export async function businessProfile(businessId: string): Promise<Profile> {
-  const { data, error } = await db().from("businesses").select("slug, name, description, timezone, assistant_guidelines").eq("id", businessId).single();
+  const { data, error } = await db().from("businesses").select("slug, name, description, timezone, assistant_guidelines, consultation_services").eq("id", businessId).single();
   if (error) throw new Error(`Loading profile failed: ${error.message}`);
-  return { slug: data.slug, name: data.name, description: data.description, timezone: data.timezone, guidelines: data.assistant_guidelines };
+  return {
+    slug: data.slug,
+    name: data.name,
+    description: data.description,
+    timezone: data.timezone,
+    guidelines: data.assistant_guidelines,
+    services: data.consultation_services.join("\n"),
+  };
 }
 
-const toRow = (p: Profile) => ({ slug: p.slug, name: p.name, description: p.description, timezone: p.timezone, assistant_guidelines: p.guidelines });
+const toRow = (p: Profile) => ({
+  slug: p.slug,
+  name: p.name,
+  description: p.description,
+  timezone: p.timezone,
+  assistant_guidelines: p.guidelines,
+  consultation_services: parseServices(p.services),
+});
 
 // Postgres unique_violation: the slug is taken (two admins racing included).
 const isSlugTaken = (error: { code?: string; message: string }) => error.code === "23505" && error.message.includes("slug");

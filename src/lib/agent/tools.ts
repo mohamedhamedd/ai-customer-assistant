@@ -24,6 +24,9 @@ export interface ToolContext {
   // for the tool call, so an answer's cards come from exactly its tool calls.
   voiceCallId?: string;
   realtimeCallId?: string;
+  // The services customers can request a consultation for, as the business
+  // names them (businesses.consultation_services). Empty or absent: any.
+  services?: string[];
   // Defaults to the service-role client; tests pass a stub.
   client?: SupabaseClient<Database>;
 }
@@ -221,6 +224,22 @@ export const consultationSchema = z.object({
 
 export type PreferredTime = { ok: true; at: Date } | { ok: false; message: string };
 
+export type OfferedService = { ok: true; name: string } | { ok: false; message: string };
+
+// The business's own name for the requested service: one of its listed
+// services, matched ignoring case and spacing ("traditional braces (full
+// treatment)"). With no list, the service as given. Pure, so it is tested.
+export function offeredService(service: string, services: string[] = []): OfferedService {
+  if (services.length === 0) return { ok: true, name: service };
+  const key = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const name = services.find((s) => key(s) === key(service));
+  if (name) return { ok: true, name };
+  return {
+    ok: false,
+    message: `"${service}" isn't one of the services customers can request. The options are: ${services.join("; ")}. Use the option that matches what the customer asked for, exactly as written (ask them if more than one could fit); if none fits, tell them it isn't one you can request.`,
+  };
+}
+
 // Pure, so the date rules are unit-tested without a database.
 export function resolvePreferredTime(local: string, timeZone: string, now: Date): PreferredTime {
   const parsed = zonedLocalToUtc(local, timeZone);
@@ -262,21 +281,30 @@ const createConsultationRequest = defineTool({
   },
   schema: consultationSchema,
   confirm: {
-    // The time slot, as the dedupe does: the service may be worded differently.
+    // The time slot, as the dedupe does; and, when the business lists its
+    // services, the service too: those names are exact, so a different one
+    // ("the take-home kit" after the in-office one was read back) is a new
+    // proposal, read back again. Free-text services are worded differently
+    // from one call to the next, so without a list only the slot counts.
+    // Null when run() would reject them: a past time, a service not offered.
     propose: (args, ctx) => {
       const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
-      if (!when.ok) return null;
-      return { key: when.at.toISOString(), details: { service: args.service, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes } };
+      const service = offeredService(args.service, ctx.services);
+      if (!when.ok || !service.ok) return null;
+      const key = ctx.services?.length ? `${when.at.toISOString()}|${service.name}` : when.at.toISOString();
+      return { key, details: { service: service.name, preferred_time: formatHuman(when.at, ctx.timeZone), notes: args.notes } };
     },
   },
   async run(args, ctx) {
     const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
     if (!when.ok) return invalid(when.message);
+    const service = offeredService(args.service, ctx.services);
+    if (!service.ok) return invalid(service.message);
 
     const { data, error } = await (ctx.client ?? db()).rpc("create_consultation_request", {
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
-      p_service: args.service,
+      p_service: service.name,
       p_preferred_at: when.at.toISOString(),
       p_notes: args.notes,
     });
@@ -299,7 +327,7 @@ const createConsultationRequest = defineTool({
         status: row.status,
         already_requested: !row.created,
         // On a repeat, the service as first requested (the wording may differ).
-        service: row.service ?? args.service,
+        service: row.service ?? service.name,
         // The action card shows this string as is.
         preferred_time: formatHuman(when.at, ctx.timeZone),
         preferred_datetime: formatLocal(when.at, ctx.timeZone),
@@ -313,6 +341,27 @@ export const TOOLS: Record<string, Tool> = Object.fromEntries(
   [searchKnowledge, saveLead, createConsultationRequest].map((t) => [t.name, t]),
 );
 
-export function toolDefinitions(tools: Record<string, Tool> = TOOLS): ToolDefinition[] {
-  return Object.values(tools).map(({ name, description, parameters }) => ({ name, description, parameters }));
+// What the model is given. With a list of services, the consultation tool's
+// service can only be one of them (run() checks it too).
+export function toolDefinitions(tools: Record<string, Tool> = TOOLS, { services = [] }: { services?: string[] } = {}): ToolDefinition[] {
+  return Object.values(tools).map(({ name, description, parameters }) => ({
+    name,
+    description,
+    parameters: name === "create_consultation_request" && services.length > 0 ? withServiceOptions(parameters, services) : parameters,
+  }));
+}
+
+function withServiceOptions(parameters: Record<string, unknown>, services: string[]): Record<string, unknown> {
+  const properties = parameters.properties as Record<string, Record<string, unknown>>;
+  return {
+    ...parameters,
+    properties: {
+      ...properties,
+      service: {
+        type: "string",
+        enum: services,
+        description: "The service the consultation is for: one of these, exactly as written. Match what the customer asked for to one of them.",
+      },
+    },
+  };
 }

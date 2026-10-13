@@ -5,7 +5,17 @@ import { BUSINESS_SLUG, MAX_SLUG_CHARS } from "@/lib/chat/limits";
 // (counters, the slug suggestion) and the server (validation). The database
 // enforces the same limits (migration business_profile). No server imports.
 
-export const PROFILE_LIMITS = { name: 100, description: 500, guidelines: 2000 } as const;
+export const PROFILE_LIMITS = { name: 100, description: 500, guidelines: 2000, services: 50, serviceName: 120 } as const;
+
+// The services customers can request a consultation for: one per line in the
+// form. Trimmed, blank lines dropped, repeats (ignoring case) kept once.
+export function parseServices(text: string): string[] {
+  const seen = new Set<string>();
+  return text
+    .split("\n")
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter((line) => line && !seen.has(line.toLowerCase()) && seen.add(line.toLowerCase()));
+}
 
 // /admin/new is the create page, so no business can be called "new".
 const RESERVED_SLUGS = new Set(["new"]);
@@ -41,6 +51,14 @@ export const profileSchema = z.object({
   description: z.string().trim().max(PROFILE_LIMITS.description, `Keep the description under ${PROFILE_LIMITS.description} characters.`),
   timezone: z.string().refine(isTimeZone, "Choose a timezone from the list."),
   guidelines: z.string().trim().max(PROFILE_LIMITS.guidelines, `Keep the guidelines under ${PROFILE_LIMITS.guidelines} characters.`),
+  // One per line; stored as a list (businesses.consultation_services).
+  services: z
+    .string()
+    .default("")
+    .transform((text) => parseServices(text))
+    .refine((list) => list.length <= PROFILE_LIMITS.services, `List at most ${PROFILE_LIMITS.services} services.`)
+    .refine((list) => list.every((s) => s.length <= PROFILE_LIMITS.serviceName), `Keep each service under ${PROFILE_LIMITS.serviceName} characters.`)
+    .transform((list) => list.join("\n")),
 });
 
 export type Profile = z.infer<typeof profileSchema>;

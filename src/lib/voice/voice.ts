@@ -39,7 +39,7 @@ export async function startVoiceCall(target: { businessSlug: string; sessionId: 
     customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts,
     state,
     history,
-    tools: toolDefinitions(),
+    tools: toolDefinitions(undefined, { services: business.services }),
     model: env().OPENAI_REALTIME_MODEL,
     voice: env().OPENAI_REALTIME_VOICE,
     transcribeModel: env().OPENAI_TRANSCRIBE_MODEL,
@@ -77,6 +77,7 @@ interface LiveCall {
   conversationId: string;
   businessId: string;
   timeZone: string;
+  services: string[];
 }
 
 // One query per request: the secret names the call, its conversation and
@@ -84,7 +85,7 @@ interface LiveCall {
 async function liveCall(callToken: string): Promise<LiveCall> {
   const { data, error } = await db()
     .from("voice_calls")
-    .select("id, conversation_id, expires_at, openai_call_id, conversations!inner(business_id, businesses!inner(timezone))")
+    .select("id, conversation_id, expires_at, openai_call_id, conversations!inner(business_id, businesses!inner(timezone, consultation_services))")
     .eq("token_hash", hashToken(callToken))
     .maybeSingle();
   if (error) throw new Error(`Loading voice call failed: ${error.message}`);
@@ -100,6 +101,7 @@ async function liveCall(callToken: string): Promise<LiveCall> {
     conversationId: data.conversation_id,
     businessId: data.conversations.business_id,
     timeZone: data.conversations.businesses.timezone,
+    services: data.conversations.businesses.consultation_services,
   };
 }
 
@@ -114,6 +116,7 @@ export async function runVoiceTool(input: { callToken: string; callId: string; n
     conversationId: call.conversationId,
     channel: "voice",
     timeZone: call.timeZone,
+    services: call.services,
     now: () => new Date(),
     voiceCallId: call.id,
     realtimeCallId: input.callId,

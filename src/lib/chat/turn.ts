@@ -58,6 +58,8 @@ export interface Business {
   timezone: string;
   // The business's own rules for its assistant (added to the prompt).
   guidelines: string;
+  // The services customers can request a consultation for (empty: any).
+  services: string[];
 }
 
 // Each chat page serves one business, picked by the slug in its URL
@@ -82,7 +84,7 @@ export async function findBusiness(slug: string): Promise<Business | null> {
   const version = businessVersion;
   const { data, error } = await db()
     .from("businesses")
-    .select("id, slug, name, description, timezone, assistant_guidelines")
+    .select("id, slug, name, description, timezone, assistant_guidelines, consultation_services")
     .eq("slug", slug)
     .maybeSingle();
   if (error) throw new Error(`Loading business failed: ${error.message}`);
@@ -90,8 +92,8 @@ export async function findBusiness(slug: string): Promise<Business | null> {
     businessCache.delete(slug);
     return null;
   }
-  const { assistant_guidelines, ...rest } = data;
-  const business = { ...rest, guidelines: assistant_guidelines };
+  const { assistant_guidelines, consultation_services, ...rest } = data;
+  const business = { ...rest, guidelines: assistant_guidelines, services: consultation_services };
   if (version === businessVersion) businessCache.set(slug, { value: business, expires: Date.now() + BUSINESS_TTL_MS });
   return business;
 }
@@ -289,8 +291,8 @@ export async function runChatTurn(
         system: buildSystemPrompt({ ...promptInput, channel: "text", canary: canary() }),
         history,
         userText: input.message,
-        tools: toolDefinitions(),
-        toolCtx: { businessId: business.id, conversationId: conversation.id, channel: "text", timeZone: business.timezone, now: () => new Date() },
+        tools: toolDefinitions(undefined, { services: business.services }),
+        toolCtx: { businessId: business.id, conversationId: conversation.id, channel: "text", timeZone: business.timezone, services: business.services, now: () => new Date() },
         emit,
       },
       { complete: deps.complete, executeTool },

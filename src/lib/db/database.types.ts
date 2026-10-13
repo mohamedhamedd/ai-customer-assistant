@@ -7,14 +7,14 @@ export type Database = {
           Tables: {
             "businesses": {
                   Row: {
-                    "assistant_guidelines": string,"created_at": string,"description": string,"id": string,"name": string,"slug": string,"timezone": string
+                    "assistant_guidelines": string,"consultation_services": string[],"created_at": string,"description": string,"id": string,"name": string,"slug": string,"timezone": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"name": string,"slug": string,"timezone"?: string
+                    "assistant_guidelines"?: string,"consultation_services"?: string[],"created_at"?: string,"description"?: string,"id"?: string,"name": string,"slug": string,"timezone"?: string
                   }
                   Update: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"name"?: string,"slug"?: string,"timezone"?: string
+                    "assistant_guidelines"?: string,"consultation_services"?: string[],"created_at"?: string,"description"?: string,"id"?: string,"name"?: string,"slug"?: string,"timezone"?: string
                   }
                   Relationships: [
                     

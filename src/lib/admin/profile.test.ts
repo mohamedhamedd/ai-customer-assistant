@@ -34,3 +34,13 @@ test("timezones: any IANA name, old or new spelling; never an offset", () => {
   for (const timezone of ["Asia/Kolkata", "Asia/Calcutta", "America/Argentina/Buenos_Aires", "Etc/GMT+5"]) assert.ok(profileSchema.safeParse({ ...valid, timezone }).success, timezone);
   for (const timezone of ["+05:00", "Mars/Olympus", "America", "", "PST"]) assert.ok(!profileSchema.safeParse({ ...valid, timezone }).success, timezone);
 });
+
+test("services: one per line, trimmed, blank lines and repeats dropped; bounded", () => {
+  const parsed = profileSchema.parse({ ...valid, services: "  Personal training session \n\nGroup class trial\npersonal  training session\n" });
+  assert.equal(parsed.services, "Personal training session\nGroup class trial");
+  assert.equal(profileSchema.parse(valid).services, "", "optional: an older client without the field");
+  const tooMany = profileSchema.safeParse({ ...valid, services: Array.from({ length: 51 }, (_, i) => `Service ${i}`).join("\n") });
+  assert.ok(!tooMany.success && fieldErrors(tooMany.error).services === "List at most 50 services.");
+  const tooLong = profileSchema.safeParse({ ...valid, services: "x".repeat(121) });
+  assert.ok(!tooLong.success && fieldErrors(tooLong.error).services === "Keep each service under 120 characters.");
+});

@@ -15,6 +15,9 @@ export interface PromptBusiness {
   timezone: string;
   // Set by the business in the admin (businesses.assistant_guidelines).
   guidelines?: string;
+  // The services customers can request a consultation for
+  // (businesses.consultation_services). Empty: any service.
+  services?: string[];
 }
 
 // What the customer said in this conversation (conversations.customer_facts).
@@ -62,6 +65,7 @@ export function buildSystemPrompt({ business, now, channel, customerFacts, state
     TOOL_RESULTS,
     SAFETY,
     guidelines(business),
+    services(business),
     channel === "voice" ? VOICE_STYLE : TEXT_STYLE,
     clock(business.timezone, now),
     facts(customerFacts),
@@ -130,6 +134,16 @@ ${b.name} set these rules for its assistant. Follow them as well. If one conflic
 ${rules}`;
 }
 
+// Static per business, so part of the cached prefix. The tool accepts only
+// these names (tools.ts); listing them here lets the model map "braces" to
+// the right one, and name the options when nothing fits.
+function services(b: PromptBusiness): string {
+  if (!b.services?.length) return "";
+  return `# Services customers can request
+A consultation request can only be for one of these, named exactly as written:
+${b.services.map((s) => `- ${s}`).join("\n")}`;
+}
+
 function clock(timeZone: string, now: Date): string {
   return `# Date and time
 It is now ${formatHuman(now, timeZone)} (${timeZone}). All times you discuss are in this timezone.
@@ -160,7 +174,8 @@ const LEADS = `# Saving contact details (save_lead)
 
 const CONSULTATIONS = `# Consultation requests (create_consultation_request)
 - You need: the service, and a preferred date and time. Contact details must be saved first with save_lead.
-- Check the service exists with search_knowledge if you haven't already. If it isn't offered, say so and mention what is.
+- If "Services customers can request" is listed below, the service must be one of those, exactly as written: match what the customer asked for to it (a short or casual name to the full listed one) and read back that name. If more than one could fit, ask which. If none fits, say it isn't one you can request and mention a few that are.
+- If no such list is given, check the service exists with search_knowledge if you haven't already. If it isn't offered, say so and mention what is.
 - Before accepting a date and time, check the opening hours with search_knowledge. If the business is closed then (or it is too close to closing for an appointment), say so and suggest a time when it is open.
 - Resolve the date with the calendar below. As soon as you have the service, the date and the time, call create_consultation_request in that same reply. The first call for a time saves nothing: read back the details it returns ("Tuesday, October 20 at 3:00 PM. Is that right?"); when the customer says yes, call it again with the same details.
 - Only ever read back a time you sent to create_consultation_request in that same reply; for a changed time or service, call it again first.

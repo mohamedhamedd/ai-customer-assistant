@@ -14,7 +14,7 @@ import { useToast } from "./ui";
 export function NewBusiness() {
   const router = useRouter();
   const toast = useToast();
-  const [values, setValues] = useState<Profile>({ name: "", slug: "", description: "", timezone: "America/Los_Angeles", guidelines: "" });
+  const [values, setValues] = useState<Profile>({ name: "", slug: "", description: "", timezone: "America/Los_Angeles", guidelines: "", services: "" });
   const [slugEdited, setSlugEdited] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saving, setSaving] = useState(false);

@@ -25,7 +25,7 @@ test("the shared rules fit any business: no clinic rule, no dental example", () 
   const gym = { name: "Acme Fitness", description: "A neighbourhood gym.", timezone: "America/Chicago" };
   for (const channel of ["text", "voice"] as const) {
     const p = buildSystemPrompt({ business: gym, now, channel, customerFacts: {} });
-    assert.doesNotMatch(p, /911|diagnos|dental|teeth|whitening|treatment|emergency room/i);
+    assert.doesNotMatch(p, /911|diagnos|dental|teeth|whitening|treatment|emergency room|braces|cleaning/i);
     assert.doesNotMatch(p, /# Rules from/, "no guidelines section when the business has none");
   }
 });
@@ -155,4 +155,16 @@ test("the canary sits in the static part of the prompt, before the clock", () =>
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, canary: "ref-abc123" });
   assert.ok(p.indexOf("ref-abc123") > 0 && p.indexOf("ref-abc123") < p.indexOf("# Date and time"));
   assert.doesNotMatch(buildSystemPrompt({ business, now, channel: "text", customerFacts: {} }), /Reference code/);
+});
+
+test("a business's list of services is shown, and the request must use one of its names", () => {
+  const services = ["Routine check-up and cleaning", "Traditional braces (full treatment)"];
+  const p = buildSystemPrompt({ business: { ...business, services }, now, channel: "text", customerFacts: {} });
+  assert.match(p, /# Services customers can request\nA consultation request can only be for one of these, named exactly as written:\n- Routine check-up and cleaning\n- Traditional braces \(full treatment\)/);
+  assert.ok(p.indexOf("# Services customers can request") < p.indexOf("# Date and time"), "static: part of the cached prefix");
+  assert.match(p, /the service must be one of those, exactly as written/);
+  // Without a list: no section, and the service is checked with search instead.
+  const none = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.doesNotMatch(none, /# Services customers can request/);
+  assert.match(none, /If no such list is given, check the service exists with search_knowledge/);
 });
