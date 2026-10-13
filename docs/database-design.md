@@ -275,9 +275,24 @@ A business's weekly opening hours, one row per time range: a day with a lunch br
 | `day` | smallint | no | | ISO weekday, 1 = Monday ... 7 = Sunday (`CHECK`) |
 | `opens` | time | no | | |
 | `closes` | time | no | | After `opens`, or `00:00` for midnight (`CHECK`) |
+| `weeks` | smallint[] | no | `'{}'` | Which of its weekday in the month: 1 to 5, -1 for the last (`CHECK`). Empty: every week |
 | `created_at` | timestamptz | no | `now()` | |
 
-Unique `(business_id, day, opens)`. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `businesses.hours_notes` (text, at most 500, default `''`) holds what the ranges can't say: days that differ by week, holidays. `replace_opening_hours(business, rows jsonb, last_start int, notes text)` replaces the week, the setting and the notes in one transaction (at most 28 ranges). RLS on, no anon/authenticated privileges. Dated closures aren't checked in code.
+Unique `(business_id, day, opens, weeks)`: ranges on different weeks may share a time. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `businesses.hours_notes` (text, at most 500, default `''`) holds what the ranges can't say: days that differ by week, holidays. `replace_opening_hours(business, rows jsonb, last_start int, notes text, closed jsonb)` replaces the week, the setting, the notes and the closed dates in one transaction (at most 28 ranges, 100 dates). RLS on, no anon/authenticated privileges.
+
+### 3.6.4 `closed_dates`
+
+Days the business is closed whatever the weekday's hours (holidays), as local dates. A consultation request for one is refused in code.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK. Replaced on every save |
+| `business_id` | uuid | no | | FK → `businesses`, cascade |
+| `date` | date | no | | Unique per business |
+| `label` | text | no | `''` | At most 80: "Christmas Day" |
+| `created_at` | timestamptz | no | `now()` | |
+
+RLS on, no anon/authenticated privileges.
 
 ### 3.7 `leads`
 
