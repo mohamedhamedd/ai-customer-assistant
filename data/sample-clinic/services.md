@@ -1,6 +1,6 @@
 # Lakeside Dental Clinic — Services
 
-Lakeside Dental Clinic is a family dental practice in Lake Oswego, Oregon. Our team, led by Dr. Elena Marsh and Dr. Samuel Okafor, provides general, cosmetic and orthodontic care for patients of all ages. Prices for every service are listed in our Pricing guide.
+Lakeside Dental Clinic is a family dental practice in Lake Oswego, Oregon. Our team, led by Dr. Elena Marsh and Dr. Samuel Okafor, provides general, cosmetic and orthodontic care for patients of all ages.
 
 ## General dentistry
 

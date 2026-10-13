@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Check, FileText, Loader2, Search, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // Type-only: erased at build, so no server code reaches the browser.
@@ -158,6 +159,18 @@ export function KnowledgeBase({ slug }: { slug: string }) {
 
       <main className="min-h-0 flex-1 overflow-y-auto p-4 md:p-8">
         <div className="mx-auto flex max-w-6xl flex-col gap-6">
+          {/* One place per fact: the tables are exact and answered as written; a price or time in a document too would drift from them. */}
+          <p className="max-w-3xl text-[14px] text-text-muted">
+            Documents are for everything descriptive: what a service involves, FAQs, policies, insurance, location. Put service names, prices and durations in{" "}
+            <Link href={`/admin/${encodeURIComponent(slug)}/services`} className="font-medium text-accent hover:underline">
+              Services
+            </Link>{" "}
+            and your hours in{" "}
+            <Link href={`/admin/${encodeURIComponent(slug)}/hours`} className="font-medium text-accent hover:underline">
+              Opening hours
+            </Link>
+            , not here.
+          </p>
           <input
             ref={picker}
             type="file"
