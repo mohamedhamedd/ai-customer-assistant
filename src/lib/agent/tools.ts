@@ -6,6 +6,7 @@ import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
 import { describeHours, formatTime, startCheck, type Week } from "@/lib/admin/hours-rows";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
+import { loadServices, loadWeek } from "./tables";
 import { chooseService, MAX_LISTED, words, type ServiceEvidence } from "./service-choice";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
@@ -270,7 +271,7 @@ const SAID = 30;
 async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence> {
   const client = ctx.client ?? db();
   const [services, said, offer] = await Promise.all([
-    client.from("services").select("name, requestable").eq("business_id", ctx.businessId).order("position"),
+    loadServices(ctx.businessId, client),
     client.from("messages").select("content").eq("conversation_id", ctx.conversationId).eq("role", "user").order("id", { ascending: false }).limit(SAID),
     client
       .from("tool_calls")
@@ -282,7 +283,7 @@ async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence>
       .limit(1)
       .maybeSingle(),
   ]);
-  for (const r of [services, said, offer]) if (r.error) throw new Error(`Loading the services failed: ${r.error.message}`);
+  for (const r of [said, offer]) if (r.error) throw new Error(`Loading the services failed: ${r.error.message}`);
 
   let offered: string[] = [];
   if (offer.data) {
@@ -301,25 +302,12 @@ async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence>
     if (answer && Array.isArray(options)) offered = options.filter((o): o is string => typeof o === "string");
   }
   return {
-    services: services.data ?? [],
+    services,
     customerSaid: (said.data ?? []).flatMap((m) => (m.content ? [m.content] : [])).reverse(),
     offered,
   };
 }
 
-async function openingHoursFromDb(ctx: ToolContext): Promise<Week> {
-  const client = ctx.client ?? db();
-  const [hours, business] = await Promise.all([
-    client.from("opening_hours").select("day, opens, closes").eq("business_id", ctx.businessId).order("day").order("opens"),
-    client.from("businesses").select("last_start_before_close").eq("id", ctx.businessId).single(),
-  ]);
-  if (hours.error || business.error) throw new Error(`Loading the opening hours failed: ${(hours.error ?? business.error)!.message}`);
-  return {
-    // Postgres returns "09:00:00".
-    hours: hours.data.map((r) => ({ day: r.day, opens: r.opens.slice(0, 5), closes: r.closes.slice(0, 5) })),
-    lastStartBeforeClose: business.data.last_start_before_close,
-  };
-}
 
 const createConsultationRequest = defineTool({
   name: "create_consultation_request",
@@ -346,7 +334,7 @@ const createConsultationRequest = defineTool({
   // The service, from the business's services table (service-choice.ts);
   // then the time, against its opening hours. Neither table: as before.
   async prepare(args, ctx) {
-    const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), (ctx.openingHours ?? openingHoursFromDb)(ctx)]);
+    const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), (ctx.openingHours ?? ((c) => loadWeek(c.businessId, c.client)))(ctx)]);
     const choice = chooseService(args.service, evidence);
     if (choice.kind === "ok") {
       // An invalid or past time is left to run(), which says what's wrong.

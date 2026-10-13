@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSystemPrompt } from "./prompt";
+import { buildSystemPrompt, promptFacts } from "./prompt";
 
 const business = { name: "Lakeside Dental Clinic", description: "A family dental clinic.", timezone: "America/Los_Angeles" };
 const now = new Date("2026-10-11T23:30:00Z"); // Sunday Oct 11, 4:30 PM PDT
@@ -161,4 +161,62 @@ test("the canary sits in the static part of the prompt, before the clock", () =>
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {}, canary: "ref-abc123" });
   assert.ok(p.indexOf("ref-abc123") > 0 && p.indexOf("ref-abc123") < p.indexOf("# Date and time"));
   assert.doesNotMatch(buildSystemPrompt({ business, now, channel: "text", customerFacts: {} }), /Reference code/);
+});
+
+// ---------------------------------------------------------------------------
+// The business's tables (Admin > Services, Admin > Opening hours)
+// ---------------------------------------------------------------------------
+
+const tables = {
+  services: [
+    { name: "Traditional braces (full treatment)", category: "Orthodontics", price: "$4,000 to $6,000", duration: "18 to 24 months", description: "Metal braces.", requestable: true },
+    { name: "Whitening touch-up gel (refill)", category: "", price: "$45", duration: "", description: "", requestable: false },
+  ],
+  week: { hours: [1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })), lastStartBeforeClose: 60 },
+};
+
+test("the tables are in the prompt whole, as written, after the rules and before the clock", () => {
+  for (const channel of ["text", "voice"] as const) {
+    const p = buildSystemPrompt({ business, tables, now, channel, customerFacts: {} });
+    assert.ok(p.includes("# Lakeside Dental Clinic's services and prices, and opening hours"));
+    assert.ok(p.includes("- Traditional braces (full treatment) (category: Orthodontics; price: $4,000 to $6,000; duration: 18 to 24 months) Metal braces."));
+    assert.ok(p.includes("- Whitening touch-up gel (refill) (price: $45) [can't be requested as a consultation]"));
+    assert.ok(p.includes("## Opening hours (America/Los_Angeles)\n- Monday: 8:00 AM to 5:00 PM"));
+    assert.ok(p.includes("- Friday: closed"));
+    assert.ok(p.includes("- The last appointment starts 1 hour before closing."));
+    // Staff change them rarely: part of the cached prefix, before the clock.
+    assert.ok(p.indexOf("## Services") > p.indexOf("# Style") && p.indexOf("## Services") < p.indexOf("# Date and time"));
+  }
+});
+
+test("with tables: services, prices and hours are answered from them; everything else is still searched", () => {
+  const p = buildSystemPrompt({ business, tables, now, channel: "text", customerFacts: {} });
+  assert.match(p, /come ONLY from two places: the "services and prices, and opening hours" section below, and search_knowledge results/);
+  assert.match(p, /For which services there are, their prices and durations, and the opening hours: answer from .* exactly as written\. No search is needed, and if a search result says otherwise, the section is right\./);
+  assert.match(p, /For anything else \(what a service involves .*\): call search_knowledge before answering/);
+  assert.match(p, /A service the section doesn't list: search for it/);
+  assert.match(p, /check the opening hours in the section below \(the tool checks them too\)/);
+  assert.doesNotMatch(p, /ONLY from search_knowledge results/);
+
+  const hoursOnly = buildSystemPrompt({ business, tables: { services: [], week: tables.week }, now, channel: "text", customerFacts: {} });
+  assert.match(hoursOnly, /For the opening hours: answer from the "opening hours" section below/);
+  assert.doesNotMatch(hoursOnly, /## Services/);
+  assert.match(hoursOnly, /If you don't know whether the business offers it, check with search_knowledge first/);
+});
+
+test("empty tables: no section, and the search-only rules", () => {
+  const p = buildSystemPrompt({ business, tables: { services: [], week: { hours: [], lastStartBeforeClose: 60 } }, now, channel: "text", customerFacts: {} });
+  assert.doesNotMatch(p, /## Services|## Opening hours/);
+  assert.match(p, /ONLY from search_knowledge results/);
+  assert.match(p, /check the opening hours with search_knowledge/);
+});
+
+test("the tables are facts for the answer check; a long list leaves out descriptions", () => {
+  const facts = promptFacts({ business, tables, now, customerFacts: {} });
+  assert.ok(facts.includes("$4,000 to $6,000") && facts.includes("$45"));
+  assert.doesNotMatch(facts, /search_knowledge/, "facts, not rules");
+
+  const many = Array.from({ length: 200 }, (_, i) => ({ ...tables.services[0], name: `Service ${i}`, description: "x".repeat(200) }));
+  const p = buildSystemPrompt({ business, tables: { services: many, week: tables.week }, now, channel: "text", customerFacts: {} });
+  assert.ok(p.includes("- Service 199 (category: Orthodontics;") && !p.includes("x".repeat(200)));
 });

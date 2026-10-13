@@ -6,6 +6,7 @@ import { openai } from "@/lib/openai";
 import { executeTool } from "@/lib/agent/execute";
 import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type TurnEvent, type TurnResult, TurnDeadlineError } from "@/lib/agent/loop";
 import { buildSystemPrompt, promptFacts, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
+import { loadTables } from "@/lib/agent/tables";
 import { formatHuman } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
 import { ENGLISH_ONLY_REPLY, isClearlyNotEnglish } from "@/lib/chat/language";
@@ -280,9 +281,13 @@ export async function runChatTurn(
   let result: TurnResult;
   let evidence: string;
   try {
-    // Independent reads, in parallel: both sit before the first model call.
-    const [history, state] = await Promise.all([recentHistory(conversation.id, userMessageId), conversationState(conversation, business.timezone)]);
-    const promptInput = { business, now: new Date(), customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state };
+    // Independent reads, in parallel: all sit before the first model call.
+    const [history, state, tables] = await Promise.all([
+      recentHistory(conversation.id, userMessageId),
+      conversationState(conversation, business.timezone),
+      loadTables(business.id),
+    ]);
+    const promptInput = { business, tables, now: new Date(), customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts, state };
     result = await runAgentTurn(
       {
         model: env().OPENAI_CHAT_MODEL,

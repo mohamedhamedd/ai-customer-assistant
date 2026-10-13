@@ -8,6 +8,7 @@ import { executeTool } from "@/lib/agent/execute";
 import { repeatsAction, toAction, type Action } from "@/lib/agent/loop";
 import type { CustomerFacts } from "@/lib/agent/prompt";
 import { toolDefinitions, type ToolOutput } from "@/lib/agent/tools";
+import { loadTables } from "@/lib/agent/tables";
 import { ChatHttpError, conversationFor, conversationState, recentHistory, requireBusiness } from "@/lib/chat/turn";
 import type { Source } from "@/lib/rag/retrieve";
 import { realtimeSession } from "./session";
@@ -32,9 +33,10 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
 export async function startVoiceCall(target: { businessSlug: string; sessionId: string; sdp: string }) {
   const business = await requireBusiness(target.businessSlug);
   const conversation = await conversationFor(business.id, target.sessionId);
-  const [history, state] = await Promise.all([recentHistory(conversation.id), conversationState(conversation, business.timezone)]);
+  const [history, state, tables] = await Promise.all([recentHistory(conversation.id), conversationState(conversation, business.timezone), loadTables(business.id)]);
   const session = realtimeSession({
     business,
+    tables,
     now: new Date(),
     customerFacts: (conversation.customer_facts ?? {}) as CustomerFacts,
     state,
