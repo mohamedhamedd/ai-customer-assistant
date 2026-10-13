@@ -52,10 +52,15 @@ test("upcoming days: today, tomorrow, and no duplicate date across the clock cha
   const days = upcomingDays(now, LA, 4);
   assert.deepEqual(days, [
     "Saturday 2026-10-31 (today; 5th and last Saturday of October)",
-    "Sunday 2026-11-01 (tomorrow; 1st Sunday of November)",
-    "Monday 2026-11-02 (1st Monday of November)",
-    "Tuesday 2026-11-03 (1st Tuesday of November)",
+    "Sunday 2026-11-01 (tomorrow; this Sunday; 1st Sunday of November)",
+    "Monday 2026-11-02 (next Monday; 1st Monday of November)",
+    "Tuesday 2026-11-03 (next Tuesday; 1st Tuesday of November)",
   ]);
+  // This week runs to Sunday; next week is the one after.
+  const tuesday = upcomingDays(new Date("2026-10-13T17:00:00Z"), LA, 14);
+  assert.equal(tuesday[2], "Thursday 2026-10-15 (this Thursday; 3rd Thursday of October)");
+  assert.equal(tuesday[9], "Thursday 2026-10-22 (next Thursday; 4th Thursday of October)");
+  assert.equal(tuesday[13], "Monday 2026-10-26 (4th and last Monday of October)", "two weeks on: no label");
   // Which of its weekday in the month: for hours like "first and third Saturday only".
-  assert.equal(upcomingDays(new Date("2026-10-13T17:00:00Z"), LA, 12)[11], "Saturday 2026-10-24 (4th Saturday of October)");
+  assert.equal(upcomingDays(new Date("2026-10-13T17:00:00Z"), LA, 12)[11], "Saturday 2026-10-24 (next Saturday; 4th Saturday of October)");
 });

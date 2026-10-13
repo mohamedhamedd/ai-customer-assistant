@@ -4,10 +4,11 @@
 // The model sends a service; the customer's own messages say what they asked
 // for. A request goes through only for one service that customers can
 // request, under its exact name, and only when the choice is the customer's:
-//   - one of their messages names it, and no other service as well
-//     ("braces", "the take-home kit"); or
+//   - one of their messages names it ("braces", "the take-home kit"; a
+//     message can name several: "a crown Thursday and a cleaning Friday"); or
 //   - the agent offered it as an option (choose_service) and the customer
-//     has answered since ("the first one").
+//     has answered since ("the first one"; a plain yes answers only an
+//     offer of one option: it's usually the contact read-back's).
 // Otherwise the result is choose_service with the options, and the agent
 // must ask: which one, when several fit ("whitening"); or whether this is
 // what they mean, when the customer's words name no service and the model
@@ -16,12 +17,13 @@
 //
 // Matching is by words, for any business: the words of a service's name
 // against the words of a message, ignoring filler words ("consultation",
-// "book", days, ...), email addresses and links, and endings ("crowns" is
-// "crown", "whiter" is "whitening"). A message names one service when it is
-// the only one sharing a word with it ("braces"), or when it shares the most
-// words and the message has all of its main words, the ones outside brackets
-// ("root canal, the molar" for "Root canal (molar)"; but "teeth whitening"
-// doesn't settle "In-office teeth whitening" against "Take-home whitening kit").
+// "book", "treatment", days, ...), email addresses and links, and endings ("crowns" is
+// "crown", "whiter" is "whitening"). A message names a service when it is
+// the only one sharing a word with it ("braces"), or when the message has all
+// of its main words, the ones outside brackets, and no service sharing one of
+// them fits as well ("root canal, the molar" for "Root canal (molar)"; but
+// "teeth whitening" doesn't settle "In-office teeth whitening" against
+// "Take-home whitening kit", nor "root canal" the front tooth against the molar).
 //
 // A business with no services table keeps free-text services, as before.
 
@@ -49,7 +51,7 @@ const FILLER = new Set(
     "the and for with from that this those these into about your you our are was were has have had can could would should will shall " +
     "what which when where who how why not but also just very really some any all one two get got want wanted need needed like liked " +
     "please thanks thank hello hey yes yeah okay sure fine great good maybe well then there here its it's i'm i'd i'll we're " +
-    "book booking booked request requesting appointment appointments consultation consultations consult session sessions service services visit " +
+    "book booking booked request requesting appointment appointments consultation consultations consult session sessions service services visit treatment treatments " +
     "price prices cost costs much many time times date day days today tomorrow week weeks next morning afternoon evening noon " +
     "monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december " +
     "name email phone number call contact take make give come see know think let try use other same first second third last"
@@ -75,8 +77,9 @@ function sameWord(a: string, b: string): boolean {
 export interface Named {
   // Every service sharing a word with the text, in the table's order.
   matched: string[];
-  // The one service the text names, if it names exactly one.
-  only: string | null;
+  // The services the text names: none, one, or several distinct ones
+  // ("a porcelain crown and a routine check-up and cleaning").
+  named: string[];
 }
 
 export function namedIn(text: string, names: string[]): Named {
@@ -84,11 +87,17 @@ export function namedIn(text: string, names: string[]): Named {
   const shares = (w: string) => said.some((s) => sameWord(s, w));
   const scores = names.map((name) => words(name).filter(shares).length);
   const matched = names.filter((_, i) => scores[i] > 0);
-  if (matched.length <= 1) return { matched, only: matched[0] ?? null };
-  const best = Math.max(...scores);
-  const top = names.filter((_, i) => scores[i] === best);
-  const main = top.length === 1 ? words(top[0].replace(/\([^)]*\)/g, " ")) : [];
-  return { matched, only: top.length === 1 && main.every(shares) ? top[0] : null };
+  if (matched.length <= 1) return { matched, named: matched };
+  const main = names.map((name) => words(name.replace(/\([^)]*\)/g, " ")));
+  // Every word of the name, brackets too: "composite filling (one surface)".
+  const whole = (i: number) => scores[i] === words(names[i]).length;
+  const variants = (i: number, j: number) => main[i].join() === main[j].join();
+  // A rival: another service sharing one of its main words that fits as well
+  // (as many words in common; but between variants of one service, only the
+  // whole name wins a tie: "(one surface)" against "(two or more surfaces)").
+  const fitsAsWell = (j: number, i: number) => scores[j] > scores[i] || (scores[j] === scores[i] && !(variants(i, j) && whole(i) && !whole(j)));
+  const rivalled = (i: number) => names.some((_, j) => j !== i && main[j].some((w) => main[i].includes(w)) && fitsAsWell(j, i));
+  return { matched, named: names.filter((_, i) => main[i].length > 0 && main[i].every(shares) && !rivalled(i)) };
 }
 
 const key = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
@@ -101,13 +110,13 @@ export function chooseService(requested: string, { services, customerSaid, offer
 
   // What the model sent: an exact name, or the names its words fit.
   const sent = namedIn(requested, requestable);
-  const candidates = listedAs ? [listedAs.name] : sent.only ? [sent.only] : sent.matched;
+  const candidates = listedAs ? [listedAs.name] : sent.named.length === 1 ? sent.named : sent.matched;
   if (candidates.length === 0) return { kind: "not_found", listed: false, options: requestable.slice(0, MAX_LISTED) };
   // What each of the customer's messages names, and the latest that names any.
   const named = customerSaid.map((m) => namedIn(m, requestable)).filter((n) => n.matched.length > 0);
   const latest = named.at(-1)?.matched ?? [];
 
-  const chosenByCustomer = candidates.filter((c) => offered.includes(c) || named.some((n) => n.only === c));
+  const chosenByCustomer = candidates.filter((c) => offered.includes(c) || named.some((n) => n.named.includes(c)));
   if (chosenByCustomer.length === 1) return { kind: "ok", service: chosenByCustomer[0] };
 
   // Several the customer chose between, or what the model sent and what the
