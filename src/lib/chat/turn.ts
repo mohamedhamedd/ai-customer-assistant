@@ -8,6 +8,7 @@ import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type Tu
 import { buildSystemPrompt, promptFacts, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { formatHuman } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
+import { ENGLISH_ONLY_REPLY, isClearlyNotEnglish } from "@/lib/chat/language";
 import { toolDefinitions } from "@/lib/agent/tools";
 import type { Source } from "@/lib/rag/retrieve";
 import { checkAnswer } from "@/lib/guard/answer-check";
@@ -252,6 +253,27 @@ export async function runChatTurn(
   const { business, conversation, userMessageId } = prepared;
   const started = Date.now();
   emit({ type: "start", userMessageId });
+
+  // English only (language.ts): a message clearly in another language gets
+  // the fixed reply, saved like any answer, without calling the model.
+  if (isClearlyNotEnglish(input.message)) {
+    emit({ type: "delta", text: ENGLISH_ONLY_REPLY });
+    let messageId: number;
+    try {
+      messageId = await withOneRetry(() =>
+        saveReply(conversation.id, userMessageId, { text: ENGLISH_ONLY_REPLY, sources: [], actions: [], toolCalls: [], evidence: [], rounds: 0, usage: { input: 0, output: 0, cachedInput: 0 } }),
+      );
+    } catch (err) {
+      await markFailed(userMessageId);
+      log({ outcome: "save_failed", conversationId: conversation.id, ms: Date.now() - started, error: errorText(err) });
+      emit({ type: "error", message: REPLY_NOT_SAVED, retryable: false });
+      return;
+    }
+    emit({ type: "sources", sources: [] });
+    emit({ type: "done", messageId });
+    log({ outcome: "not_english", conversationId: conversation.id, ms: Date.now() - started });
+    return;
+  }
 
   // Everything from here on is covered: any failure marks the turn failed, so
   // a retry re-runs at once instead of waiting out the in-progress window.

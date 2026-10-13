@@ -10,6 +10,7 @@ import { env } from "@/lib/env";
 import { listConversations } from "@/lib/admin/conversations";
 import { leakReply, unsureReply } from "@/lib/guard/answer-check";
 import { canary } from "@/lib/guard/canary";
+import { ENGLISH_ONLY_REPLY } from "./language";
 import { prepareChatTurn, runChatTurn, type ChatEvent, type ChatTurnDeps } from "./turn";
 
 const sessions: string[] = [];
@@ -116,4 +117,20 @@ test("a read-back the check replaced never reached the customer, so their yes ca
   assert.equal((last!.result as { error?: string }).error, "confirm_first", "proposed again: the details are read back first");
   const { count } = await db().from("leads").select("id", { count: "exact", head: true }).eq("email", email);
   assert.equal(count, 0);
+});
+
+test("English only: a message clearly in another language gets the fixed reply, and the model isn't called", async () => {
+  const notCalled: ChatTurnDeps = {
+    complete: async () => {
+      throw new Error("the model must not be called");
+    },
+  };
+  for (const message of ["¿Cuánto cuesta el blanqueamiento dental?", "ما هي ساعات العمل يوم السبت؟"]) {
+    const r = await turn(message, notCalled);
+    assert.equal(r.saved.content, ENGLISH_ONLY_REPLY, message);
+    assert.ok(r.events.some((e) => e.type === "done"), message);
+  }
+  // An email on its own is not "another language": it goes to the model.
+  const email = await turn("sara.lang@example.com", scripted([{ text: "Thanks! What's your name?" }]));
+  assert.equal(email.saved.content, "Thanks! What's your name?");
 });
