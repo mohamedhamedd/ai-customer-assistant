@@ -151,6 +151,43 @@ const defaultDeps: ExecuteDeps = {
   proposals: proposalsFromDb,
 };
 
+// The read-backs this message answers: for each write tool, its latest call
+// in the conversation, when that was a proposal (confirm_first) whose
+// read-back reached the customer and this is their answer (confirm.ts). In
+// the order they were proposed (contact before request). The chat commits
+// them when the answer is a plain yes (turn.ts), instead of trusting the
+// model to call the tool again: seen live, it said "I have updated your
+// contact details" after the yes without calling anything.
+export async function answeredProposals(ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<{ name: string; arguments: string }[]> {
+  const d = { ...defaultDeps, ...deps };
+  const writes = Object.values(d.tools).filter((t) => t.writes && t.confirm);
+  const client = ctx.client ?? db();
+  const latest = await Promise.all(
+    writes.map(async (tool) => {
+      const { data, error } = await client
+        .from("tool_calls")
+        .select("id, arguments, result")
+        .eq("conversation_id", ctx.conversationId)
+        .eq("name", tool.name)
+        .order("id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`Loading proposals failed: ${error.message}`);
+      const result = (data?.result ?? {}) as { error?: string; details?: Record<string, unknown> };
+      return data && result.error === "confirm_first" ? { tool, id: data.id, arguments: data.arguments, details: result.details ?? {} } : null;
+    }),
+  );
+  const answered: { id: number; name: string; arguments: string }[] = [];
+  for (const p of latest) {
+    if (!p) continue;
+    const parsed = p.tool.schema.safeParse(p.arguments);
+    // Keyed as read back (a change's details hold its whole new state).
+    const proposal = parsed.success ? p.tool.confirm?.propose({ ...(parsed.data as Record<string, unknown>), ...p.details }, ctx) : null;
+    if (proposal && (await confirmed(p.tool, proposal.key, ctx, d)).ok) answered.push({ id: p.id, name: p.tool.name, arguments: JSON.stringify(p.arguments) });
+  }
+  return answered.sort((a, b) => a.id - b.id).map(({ name, arguments: args }) => ({ name, arguments: args }));
+}
+
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<ToolOutcome> {
   const d = { ...defaultDeps, ...deps };
   const started = Date.now();

@@ -315,3 +315,30 @@ test("confirm before write: a turn that failed after proposing delivered no read
   await run(newInput(sessionId, "yes"), yes.deps);
   assert.equal(yes.toolResults()[0].ok, true);
 });
+
+test("a plain yes to a read-back saves it in code, even when the model doesn't call the tool again", async () => {
+  const sessionId = session();
+  const phone = uniquePhone();
+  const details = { name: "Itest Mo Hamed", phone };
+  // The model proposes, reads back, and then (seen live) answers the yes
+  // with "I have updated your details" without calling anything.
+  await run(newInput(sessionId, `I'm Mo Hamed, ${phone}`), callsTools([{ name: "save_lead", args: details }], `Just to confirm: Mo Hamed, ${formatted(phone)}. Is that right?`).deps);
+  assert.equal((await conversationOf(sessionId)).lead_id, null, "nothing saved before the yes");
+
+  const { events } = await run(newInput(sessionId, "yes"), replies("I have updated your contact details."));
+  assert.notEqual((await conversationOf(sessionId)).lead_id, null, "saved by the code on the plain yes");
+  assert.deepEqual(actionsOf(events), ["lead_saved"]);
+  const { data: audit } = await db().from("tool_calls").select("ok, result").eq("conversation_id", (await conversationOf(sessionId)).id).order("id");
+  assert.deepEqual(
+    audit!.map((a) => (a.ok ? "saved" : (a.result as { error: string }).error)),
+    ["confirm_first", "saved"],
+  );
+});
+
+test("anything but a plain yes goes to the model as before: nothing is saved by the code", async () => {
+  const sessionId = session();
+  const phone = uniquePhone();
+  await run(newInput(sessionId, `I'm Mo Hamed, ${phone}`), callsTools([{ name: "save_lead", args: { name: "Itest Mo Hamed", phone } }], "Just to confirm. Is that right?").deps);
+  await run(newInput(sessionId, "yes but my name is Mohamed"), replies("Got it."));
+  assert.equal((await conversationOf(sessionId)).lead_id, null);
+});
