@@ -24,7 +24,7 @@ async function business() {
 }
 
 const weekdays = [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" }));
-const week = (hours: typeof weekdays, lastStartBeforeClose = 0, notes = "") => ({ hours, lastStartBeforeClose, notes });
+const week = (hours: typeof weekdays, lastStartBeforeClose = 0, notes = "", closed: { date: string; label: string }[] = []) => ({ hours, lastStartBeforeClose, notes, closed });
 
 test("the week is saved sorted, replaced as a whole, and kept per business", async () => {
   const mine = await business();
@@ -32,11 +32,16 @@ test("the week is saved sorted, replaced as a whole, and kept per business", asy
   await saveHours(theirs, week(weekdays));
 
   const saturday = { day: 6, opens: "10:00", closes: "00:00" };
+  const holidays = [
+    { date: "2026-12-25", label: "Christmas Day" },
+    { date: "2026-11-26", label: "Thanksgiving" },
+  ];
   assert.deepEqual(
-    await saveHours(mine, week([saturday, ...weekdays], 60, " Closed on public holidays. ")),
-    week([...weekdays, saturday], 60, "Closed on public holidays."),
-    "midnight closing kept as 00:00; the notes trimmed",
+    await saveHours(mine, week([saturday, ...weekdays], 60, " Shorter hours in August. ", holidays)),
+    week([...weekdays, saturday], 60, "Shorter hours in August.", [holidays[1], holidays[0]]),
+    "midnight closing kept as 00:00; closed dates sorted; the notes trimmed",
   );
+  assert.deepEqual((await saveHours(mine, week([saturday]))).closed, [], "closed dates replaced too");
   assert.deepEqual(await saveHours(mine, week([saturday])), week([saturday]), "replaced, not added to");
   assert.deepEqual(await listHours(theirs), week(weekdays), "another business's hours are untouched");
 });
@@ -55,7 +60,6 @@ test("a week with problems is refused with each one on its range, and nothing ch
 
 test("a consultation request for a time no appointment can start is refused with the hours", async () => {
   const id = await business();
-  await saveHours(id, week(weekdays, 60));
   const { data: convo } = await db().from("conversations").insert({ business_id: id, session_id: randomUUID() }).select("id").single();
   const ctx = { businessId: id, conversationId: convo!.id, channel: "text" as const, timeZone: TZ, now: () => new Date() };
   // The next Sunday, and the Monday after it.
@@ -64,6 +68,8 @@ test("a consultation request for a time no appointment can start is refused with
     while (new Date(`${formatLocal(at, TZ).slice(0, 10)}T12:00:00Z`).getUTCDay() !== weekday) at.setTime(at.getTime() + 86_400_000);
     return formatLocal(at, TZ).slice(0, 10);
   };
+  // Weekdays 9 to 5, the last start an hour before closing, closed on the coming Tuesday.
+  await saveHours(id, week(weekdays, 60, "", [{ date: day(2), label: "Staff training" }]));
   const request = async (local: string) =>
     (await executeTool("create_consultation_request", JSON.stringify({ service: "personal training", preferred_datetime: local }), ctx, { log: () => {}, trace: () => {} })).output;
 
@@ -73,4 +79,6 @@ test("a consultation request for a time no appointment can start is refused with
   assert.equal((await request(`${day(1)}T16:30`)).error, "outside_opening_hours", "after the last start on Monday");
   assert.equal((await request(`${day(1)}T16:00`)).error, "confirm_first", "the last start itself");
   assert.equal((await request(`${day(1)}T10:00`)).error, "confirm_first", "open on Monday");
+  const tuesday = await request(`${day(2)}T10:00`);
+  assert.ok(!tuesday.ok && tuesday.error === "outside_opening_hours" && /closed on that date \(Staff training\)/.test(tuesday.message), "a closed date, read from the database");
 });

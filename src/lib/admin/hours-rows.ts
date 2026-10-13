@@ -2,6 +2,7 @@ import { z } from "zod";
 
 // A business's opening hours as rows (the opening_hours table): one row per
 // time range, so a day with a lunch break has two and a closed day has none.
+// Dates can be closed (the closed_dates table: holidays).
 // Shared by the admin page (editing), the server (validation) and the
 // consultation tool (is the business open then?). The database enforces the
 // same rules. No server imports.
@@ -14,16 +15,28 @@ export interface HoursRow {
   closes: string;
 }
 
+// A day the business is closed (a holiday), whatever its weekday's hours.
+export interface ClosedDate {
+  // "YYYY-MM-DD", the business's local date.
+  date: string;
+  // Optional: "Christmas Day".
+  label: string;
+}
+
 // The week: its ranges, how long before closing the last appointment
-// starts (minutes; 0 means any time before closing), and notes for what the
-// ranges can't say ("Saturdays: first and third of the month only").
+// starts (minutes; 0 means any time before closing), notes for what the
+// ranges can't say ("Saturdays: first and third of the month only"), and
+// the closed dates.
 export interface Week {
   hours: HoursRow[];
   lastStartBeforeClose: number;
   notes: string;
+  closed: ClosedDate[];
 }
 
 export const NOTES_MAX = 500;
+export const MAX_CLOSED = 100;
+export const CLOSED_LABEL_MAX = 80;
 
 export const LAST_START_CHOICES = [0, 15, 30, 45, 60, 90, 120] as const;
 
@@ -48,7 +61,10 @@ export interface HoursRowError {
   // Index in the list as sent.
   row: number;
   message: string;
+  // Which list: the ranges (default) or the closed dates.
+  list?: "closed";
 }
+
 
 // The whole week: each range valid, closing after opening, ranges on the
 // same day not overlapping, at most MAX_RANGES_PER_DAY a day. Sorted by day,
@@ -74,16 +90,46 @@ export function validateHours(input: unknown): { ok: true; rows: HoursRow[] } | 
   return { ok: true, rows: rows.map(({ day, opens, closes }) => ({ day, opens, closes })) };
 }
 
+const isDate = (s: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+};
+
+// The closed dates: each a real date, at most once, with a short label.
+// Sorted by date. Errors say which row (list: "closed").
+export function validateClosed(input: unknown): { ok: true; closed: ClosedDate[] } | { ok: false; error: string; errors: HoursRowError[] } {
+  if (input === undefined) return { ok: true, closed: [] };
+  if (!Array.isArray(input) || input.length > MAX_CLOSED) return { ok: false, error: `List at most ${MAX_CLOSED} closed dates.`, errors: [] };
+  const errors: HoursRowError[] = [];
+  const closed: ClosedDate[] = [];
+  for (const [i, c] of input.entries()) {
+    const date = typeof c?.date === "string" ? c.date : "";
+    const label = typeof c?.label === "string" ? c.label.trim() : "";
+    if (!isDate(date)) errors.push({ row: i, message: "Enter a date.", list: "closed" });
+    else if (label.length > CLOSED_LABEL_MAX) errors.push({ row: i, message: `Keep the label under ${CLOSED_LABEL_MAX} characters.`, list: "closed" });
+    else if (closed.some((o) => o.date === date)) errors.push({ row: i, message: "Already listed.", list: "closed" });
+    else closed.push({ date, label });
+  }
+  if (errors.length) return { ok: false, error: "Some closed dates need fixing.", errors };
+  return { ok: true, closed: closed.sort((a, b) => a.date.localeCompare(b.date)) };
+}
+
 // The week as the admin sends it: the ranges (validateHours), the
-// last-start setting and the notes.
+// last-start setting, the notes and the closed dates.
 export function validateWeek(input: unknown): { ok: true; week: Week } | { ok: false; error: string; errors: HoursRowError[] } {
-  const body = (input && typeof input === "object" ? input : {}) as { hours?: unknown; lastStartBeforeClose?: unknown; notes?: unknown };
+  const body = (input && typeof input === "object" ? input : {}) as { hours?: unknown; lastStartBeforeClose?: unknown; notes?: unknown; closed?: unknown };
   const last = body.lastStartBeforeClose ?? 0;
   if (typeof last !== "number" || !Number.isInteger(last) || last < 0 || last > 240) return { ok: false, error: "Choose when the last appointment starts.", errors: [] };
   const notes = typeof body.notes === "string" ? body.notes.trim() : "";
   if (notes.length > NOTES_MAX) return { ok: false, error: `Keep the notes under ${NOTES_MAX} characters.`, errors: [] };
   const hours = validateHours(body.hours);
-  return hours.ok ? { ok: true, week: { hours: hours.rows, lastStartBeforeClose: last, notes } } : hours;
+  const closed = validateClosed(body.closed);
+  if (!hours.ok && !closed.ok) return { ok: false, error: hours.error, errors: [...hours.errors, ...closed.errors] };
+  if (!hours.ok) return hours;
+  if (!closed.ok) return closed;
+  return { ok: true, week: { hours: hours.rows, lastStartBeforeClose: last, notes, closed: closed.closed } };
 }
 
 // "45 minutes", "1 hour", "1 hour 30 minutes".
@@ -110,7 +156,26 @@ export function describeHours(rows: HoursRow[]): string[] {
   });
 }
 
-export type StartCheck = { ok: true } | { ok: false; reason: "closed" } | { ok: false; reason: "too_late"; latest: string };
+const WEEKDAYS_FROM_SUNDAY = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+// "Friday, December 25, 2026 (Christmas Day)".
+export function formatClosedDate({ date, label }: ClosedDate): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const weekday = WEEKDAYS_FROM_SUNDAY[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${weekday}, ${MONTHS[m - 1]} ${d}, ${y}${label ? ` (${label})` : ""}`;
+}
+
+// The closed dates from today on (the business's local date), soonest
+// first: the past ones don't concern a customer.
+export const upcomingClosed = (closed: ClosedDate[], today: string, limit = 30) => closed.filter((c) => c.date >= today).slice(0, limit);
+
+export type StartCheck =
+  | { ok: true }
+  | { ok: false; reason: "closed" }
+  | { ok: false; reason: "closed_date"; label: string }
+  | { ok: false; reason: "too_late"; latest: string };
+
 
 const hhmm = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
@@ -119,12 +184,18 @@ const hhmm = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}
 // range, from its opening minute, before its closing time, and no later
 // than the last start (closing less the setting: "one hour before closing"
 // at 5 PM allows 4:00 PM). Each range on its own, so an appointment before a
-// lunch break ends by the break. Too late says the range's last start. Null
-// when the text isn't such a time.
-export function startCheck({ hours, lastStartBeforeClose: last }: Week, local: string): StartCheck | null {
+// lunch break ends by the break. A closed date is closed whatever the
+// weekday. Too late says the range's last start. Null when the text isn't
+// such a time.
+export function startCheck({ hours, lastStartBeforeClose: last, closed }: Week, local: string): StartCheck | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})$/.exec(local);
   if (!m || !HHMM.test(m[4])) return null;
-  const weekday = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay();
+  const [year, month, date] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const closedDate = closed.find((c) => c.date === local.slice(0, 10));
+  if (closedDate) return { ok: false, reason: "closed_date", label: closedDate.label };
+  // No weekly hours set: only the closed dates are known.
+  if (hours.length === 0) return { ok: true };
+  const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
   const day = weekday === 0 ? 7 : weekday;
   const at = minutes(m[4]);
   const range = hours.find((r) => r.day === day && at >= minutes(r.opens) && at < minutes(r.closes, true));

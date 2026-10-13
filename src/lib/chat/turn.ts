@@ -8,7 +8,7 @@ import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type Tu
 import { buildSystemPrompt, promptFacts, type BusinessTables, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { tableSources } from "@/lib/agent/table-sources";
 import { loadTables } from "@/lib/agent/tables";
-import { formatHuman } from "@/lib/agent/time";
+import { formatHuman, formatLocal } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
 import { ENGLISH_ONLY_REPLY, isClearlyNotEnglish } from "@/lib/chat/language";
 import { toolDefinitions } from "@/lib/agent/tools";
@@ -325,7 +325,8 @@ export async function runChatTurn(
     emit({ type: "replace", text: check.safeReply });
   } else {
     // An answer from the tables cites the rows it quotes, before the documents.
-    result = { ...result, sources: [...tableSources(result.text, tables), ...result.sources] };
+    const today = formatLocal(new Date(), business.timezone).slice(0, 10);
+    result = { ...result, sources: [...tableSources(result.text, tables, today), ...result.sources] };
   }
 
   // The customer has now read the whole answer. Saving it gets one retry; if

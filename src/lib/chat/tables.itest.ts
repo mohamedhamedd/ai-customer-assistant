@@ -39,7 +39,7 @@ async function business() {
   assert.ifError(error);
   businesses.push(data!.id);
   await saveServices(data!.id, [{ ...emptyRow(), name: "Traditional braces (full treatment)", category: "Orthodontics", price: "$4,000 to $6,000" }]);
-  await saveHours(data!.id, { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 60, notes: "Closed on major US public holidays." });
+  await saveHours(data!.id, { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 60, notes: "Closed on major US public holidays.", closed: [] });
   return slug;
 }
 

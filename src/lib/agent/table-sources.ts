@@ -9,11 +9,12 @@
 //   of its main words ("the take-home kit is $199").
 // - Opening hours: quoted when the answer has a time the business opens or
 //   closes ("2:00 PM", "2 PM", "2pm") and talks about hours (a weekday, or
-//   open, close, hours).
+//   open, close, hours); or names a coming closed date's label and says
+//   closed ("we're closed on Christmas Day").
 //
 // Pure, so it is unit-tested. Text chat only: voice speaks figures as words
 // ("three hundred and forty-nine dollars"), which don't match the table.
-import { describeHours, formatMinutes, formatTime, type Week } from "@/lib/admin/hours-rows";
+import { describeHours, formatClosedDate, formatMinutes, formatTime, upcomingClosed, type Week } from "@/lib/admin/hours-rows";
 import type { ServiceRow } from "@/lib/admin/service-rows";
 import type { Source } from "@/lib/rag/retrieve";
 import type { BusinessTables } from "./prompt";
@@ -58,31 +59,35 @@ function timePattern(hhmm: string, closing: boolean): RegExp | null {
 
 const HOURS_TALK = /\b(open|opens|opening|close|closes|closed|closing|hours|monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekdays?|weekends?)\b/;
 
-function hoursQuoted(answer: string, week: Week): boolean {
+function hoursQuoted(answer: string, week: Week, closed: Week["closed"]): boolean {
   if (!HOURS_TALK.test(answer)) return false;
+  if (/\bclosed\b/.test(answer) && closed.some((c) => c.label.length >= 4 && answer.includes(flat(c.label)))) return true;
   return week.hours.some((r) => [timePattern(r.opens, false), timePattern(r.closes, true)].some((p) => p?.test(answer)));
 }
 
-function hoursSource(week: Week): Source {
+function hoursSource(week: Week, closed: Week["closed"]): Source {
   const last = week.lastStartBeforeClose ? `\n\nThe last appointment starts ${formatMinutes(week.lastStartBeforeClose)} before closing.` : "";
+  const dates = closed.length ? `\n\nClosed on:\n${closed.map((c) => `- ${formatClosedDate(c)}`).join("\n")}` : "";
   const notes = week.notes ? `\n\n${week.notes}` : "";
   return {
     documentId: "table:hours",
     title: "Opening hours",
     heading: "",
-    excerpt: describeHours(week.hours).map((d) => `- ${d}`).join("\n") + last + notes,
+    excerpt: describeHours(week.hours).map((d) => `- ${d}`).join("\n") + last + dates + notes,
     similarity: 1,
     table: "hours",
   };
 }
 
 // The chips for an answer: services first, then hours. None when the answer
-// quotes neither (or the business has no tables).
-export function tableSources(answerText: string, { services, week }: BusinessTables): Source[] {
+// quotes neither (or the business has no tables). today: the business's
+// local date, so only coming closed dates count.
+export function tableSources(answerText: string, { services, week }: BusinessTables, today: string): Source[] {
   const answer = flat(answerText);
   const sources: Source[] = [];
   const rows = services.filter((s) => quoted(answer, s));
   if (rows.length) sources.push(servicesSource(rows));
-  if (week.hours.length && hoursQuoted(answer, week)) sources.push(hoursSource(week));
+  const closed = upcomingClosed(week.closed, today);
+  if (week.hours.length && hoursQuoted(answer, week, closed)) sources.push(hoursSource(week, closed));
   return sources;
 }

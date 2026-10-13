@@ -172,7 +172,16 @@ const tables = {
     { name: "Traditional braces (full treatment)", category: "Orthodontics", price: "$4,000 to $6,000", duration: "18 to 24 months", description: "Metal braces.", requestable: true },
     { name: "Whitening touch-up gel (refill)", category: "", price: "$45", duration: "", description: "", requestable: false },
   ],
-  week: { hours: [1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays." },
+  week: {
+    hours: [1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })),
+    lastStartBeforeClose: 60,
+    notes: "Saturdays: first and third of the month only.",
+    // NOW is Oct 11: the past one is left out.
+    closed: [
+      { date: "2026-10-01", label: "Past" },
+      { date: "2026-11-26", label: "Thanksgiving" },
+    ],
+  },
 };
 
 test("the tables are in the prompt whole, as written, after the rules and before the clock", () => {
@@ -183,7 +192,12 @@ test("the tables are in the prompt whole, as written, after the rules and before
     assert.ok(p.includes("- Whitening touch-up gel (refill) (price: $45) [can't be requested as a consultation]"));
     assert.ok(p.includes("## Opening hours (America/Los_Angeles)\n- Monday: 8:00 AM to 5:00 PM"));
     assert.ok(p.includes("- Friday: closed"));
-    assert.ok(p.includes("- The last appointment starts 1 hour before closing.\nNotes on these hours (they qualify the days above): Closed on major US public holidays."));
+    assert.ok(
+      p.includes(
+        "- The last appointment starts 1 hour before closing.\nClosed all day on these dates, whatever the weekday:\n- Thursday, November 26, 2026 (Thanksgiving)\nNotes on these hours (they qualify the days above): Saturdays: first and third of the month only.",
+      ),
+      "coming closed dates only, then the notes",
+    );
     // Staff change them rarely: part of the cached prefix, before the clock.
     assert.ok(p.indexOf("## Services") > p.indexOf("# Style") && p.indexOf("## Services") < p.indexOf("# Date and time"));
   }
@@ -199,7 +213,7 @@ test("with tables: services, prices and hours are answered from them; everything
   assert.match(p, /The notes on the hours are part of them: when they qualify a day you mention .*, say so in the same answer\./);
   assert.match(p, /check the opening hours in the section below, with their notes/);
   // Seen live: the 4th Saturday read back although the notes say first and third only.
-  assert.match(p, /The tool checks the weekly hours, not the notes\. For a day the notes qualify .* check the date yourself before calling the tool/);
+  assert.match(p, /The tool checks the hours and the closed dates\. It can't check the notes: for a day they qualify .* check the date yourself with the calendar below/);
   assert.doesNotMatch(p, /ONLY from search_knowledge results/);
 
   const hoursOnly = buildSystemPrompt({ business, tables: { services: [], week: tables.week }, now, channel: "text", customerFacts: {} });
@@ -209,7 +223,7 @@ test("with tables: services, prices and hours are answered from them; everything
 });
 
 test("empty tables: no section, and the search-only rules", () => {
-  const p = buildSystemPrompt({ business, tables: { services: [], week: { hours: [], lastStartBeforeClose: 60, notes: "" } }, now, channel: "text", customerFacts: {} });
+  const p = buildSystemPrompt({ business, tables: { services: [], week: { hours: [], lastStartBeforeClose: 60, notes: "", closed: [] } }, now, channel: "text", customerFacts: {} });
   assert.doesNotMatch(p, /## Services|## Opening hours/);
   assert.match(p, /ONLY from search_knowledge results/);
   assert.match(p, /check the opening hours with search_knowledge/);

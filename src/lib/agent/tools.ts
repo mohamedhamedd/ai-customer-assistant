@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { db } from "@/lib/db/supabase";
 import type { Database } from "@/lib/db/database.types";
 import type { Channel } from "@/lib/db/enums";
-import { describeHours, formatTime, startCheck, type Week } from "@/lib/admin/hours-rows";
+import { describeHours, formatClosedDate, formatTime, startCheck, upcomingClosed, type Week } from "@/lib/admin/hours-rows";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
 import { loadServices, loadWeek } from "./tables";
 import { chooseService, MAX_LISTED, words, type ServiceEvidence } from "./service-choice";
@@ -42,9 +42,9 @@ export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
   // details: confirm_first only, what would be saved (confirm.ts).
   // options: choose_service and service_not_found, service names to offer.
-  // hours, notes: outside_opening_hours, the week's hours (one line a day)
-  // and the business's notes on them.
-  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[]; notes?: string };
+  // hours, closed_dates, notes: outside_opening_hours, the week's hours (one
+  // line a day), the coming closed dates, and the business's notes.
+  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[]; closed_dates?: string[]; notes?: string };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -340,19 +340,24 @@ const createConsultationRequest = defineTool({
     if (choice.kind === "ok") {
       // An invalid or past time is left to run(), which says what's wrong.
       const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
-      const start = when.ok && week.hours.length > 0 ? startCheck(week, args.preferred_datetime) : null;
+      const start = when.ok ? startCheck(week, args.preferred_datetime) : null;
       if (when.ok && start && !start.ok) {
+        const at = formatHuman(when.at, ctx.timeZone);
         const why =
           start.reason === "closed"
-            ? `the business is closed at that time (${formatHuman(when.at, ctx.timeZone)})`
-            : `${formatHuman(when.at, ctx.timeZone)} is too close to closing: the last appointment then starts at ${formatTime(start.latest)}`;
+            ? `the business is closed at that time (${at})`
+            : start.reason === "closed_date"
+              ? `the business is closed on that date${start.label ? ` (${start.label})` : ""}, ${at}`
+              : `${at} is too close to closing: the last appointment then starts at ${formatTime(start.latest)}`;
+        const closed = upcomingClosed(week.closed, formatLocal(ctx.now(), ctx.timeZone).slice(0, 10), 10).map(formatClosedDate);
         return {
           result: {
             output: {
               ok: false,
               error: "outside_opening_hours",
               message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}${week.notes ? ", keeping to the notes" : ""}; ask which they prefer.`,
-              hours: describeHours(week.hours),
+              ...(week.hours.length ? { hours: describeHours(week.hours) } : {}),
+              ...(closed.length ? { closed_dates: closed } : {}),
               ...(week.notes ? { notes: week.notes } : {}),
             },
           },

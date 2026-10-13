@@ -45,6 +45,26 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"closed_dates": {
+                  Row: {
+                    "business_id": string,"created_at": string,"date": string,"id": string,"label": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "business_id": string,"created_at"?: string,"date": string,"id"?: string,"label"?: string
+                  }
+                  Update: {
+                    "business_id"?: string,"created_at"?: string,"date"?: string,"id"?: string,"label"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "closed_dates_business_id_fkey"
+      columns: ["business_id"]
+isOneToOne: false
+      referencedRelation: "businesses"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"consultation_requests": {
                   Row: {
                     "business_id": string,"contact_email": string | null,"contact_name": string,"contact_phone": string | null,"conversation_id": string | null,"created_at": string,"id": string,"lead_id": string,"notes": string | null,"preferred_at": string,"service": string,"status": string,"updated_at": string
@@ -321,7 +341,7 @@ isOneToOne: false
 { Args: Record<PropertyKey, never>; Returns: number
                            },
 "replace_opening_hours":
-{ Args: { "p_business_id": string,"p_hours": Json,"p_last_start_before_close": number,"p_notes": string }; Returns: number
+{ Args: { "p_business_id": string,"p_closed": Json,"p_hours": Json,"p_last_start_before_close": number,"p_notes": string }; Returns: number
                            },
 "replace_services":
 { Args: { "p_business_id": string,"p_services": Json }; Returns: number

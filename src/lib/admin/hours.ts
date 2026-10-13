@@ -29,6 +29,7 @@ export async function saveHours(businessId: string, input: unknown): Promise<Wee
     p_hours: result.week.hours as unknown as Json,
     p_last_start_before_close: result.week.lastStartBeforeClose,
     p_notes: result.week.notes,
+    p_closed: result.week.closed as unknown as Json,
   });
   if (error) throw new Error(`Saving opening hours failed: ${error.message}`);
   return listHours(businessId);

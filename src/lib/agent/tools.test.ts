@@ -83,7 +83,7 @@ test("tool definitions match the validation schemas (no drift)", () => {
 // ---------------------------------------------------------------------------
 
 // No services table: the service stays as sent (service-choice.ts).
-const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW, serviceEvidence: async () => ({ services: [], customerSaid: [], offered: [] }), openingHours: async () => ({ hours: [], lastStartBeforeClose: 0, notes: "" }) };
+const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW, serviceEvidence: async () => ({ services: [], customerSaid: [], offered: [] }), openingHours: async () => ({ hours: [], lastStartBeforeClose: 0, notes: "", closed: [] }) };
 
 const t = (ms: number) => new Date(NOW.getTime() + ms);
 
@@ -294,7 +294,7 @@ function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["
     // delivered: false is a read-back an answer check replaced.
     assistantSays: (delivered = true) => void messages.push({ role: "assistant", at: tick(), delivered }),
     call: async (name: string, args: object) =>
-      (await executeTool(name, JSON.stringify(args), { ...ctx, client, serviceEvidence, openingHours: async () => opts.week ?? { hours: [], lastStartBeforeClose: 0, notes: "" } }, deps)).output,
+      (await executeTool(name, JSON.stringify(args), { ...ctx, client, serviceEvidence, openingHours: async () => opts.week ?? { hours: [], lastStartBeforeClose: 0, notes: "", closed: [] } }, deps)).output,
   };
 }
 
@@ -447,7 +447,7 @@ test("with a services table: a service that isn't offered is refused with what c
 
 test("with opening hours: a time the business is closed is refused with the week's hours, and nothing is proposed or written", async () => {
   // Weekdays 9 to 5, the last appointment an hour before closing. 2026-10-20 is a Tuesday, 2026-10-24 a Saturday.
-  const c = conversation({ week: { hours: [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays." } });
+  const c = conversation({ week: { hours: [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays.", closed: [] } });
   c.customerSays(1, "whitening on Saturday at 10?");
   const saturday = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-24T10:00" });
   assert.ok(!saturday.ok && saturday.error === "outside_opening_hours");
@@ -461,6 +461,29 @@ test("with opening hours: a time the business is closed is refused with the week
   assert.equal((await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-20T16:00" })).error, "confirm_first", "the last start itself: proposed as usual");
   const past = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-04T10:00" });
   assert.ok(!past.ok && past.error === "invalid_input" && /in the past/.test(past.message), "a past Sunday: the real problem first");
+  assert.deepEqual(c.rpcs, []);
+});
+
+test("with opening hours: a closed date is refused in code, with the coming closed dates", async () => {
+  // Tuesdays 9 to 5; closed on Tuesday 2026-10-27. NOW is Sun Oct 11.
+  const c = conversation({
+    week: {
+      hours: [{ day: 2, opens: "09:00", closes: "17:00" }],
+      lastStartBeforeClose: 0,
+      notes: "",
+      closed: [
+        { date: "2026-10-01", label: "Long past" },
+        { date: "2026-10-27", label: "Staff training" },
+      ],
+    },
+  });
+  c.customerSays(1, "whitening");
+  const training = await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-27T10:00" });
+  assert.ok(!training.ok && training.error === "outside_opening_hours");
+  assert.match(training.message, /^Nothing is saved: the business is closed on that date \(Staff training\), Tuesday, October 27, 2026 at 10:00 AM PDT\./);
+  assert.deepEqual(training.closed_dates, ["Tuesday, October 27, 2026 (Staff training)"], "the coming closed dates, not past ones");
+
+  assert.equal((await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-20T10:00" })).error, "confirm_first", "the Tuesday before");
   assert.deepEqual(c.rpcs, []);
 });
 
