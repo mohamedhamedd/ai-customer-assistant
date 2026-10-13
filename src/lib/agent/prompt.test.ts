@@ -278,3 +278,10 @@ test("voice: phone numbers one digit at a time, in the order heard; typing them 
   assert.match(p, /ask the customer to say them one digit at a time, keep the digits exactly in the order heard \(don't regroup them into tens or hundreds\)/);
   assert.match(p, /If a number still isn't right after two tries, suggest typing it in the chat box instead\./);
 });
+
+test("corrected contact details: the assistant says what happened to the requests, only as save_lead reports it", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  // Seen live: "Your phone number is updated" while the request kept the old number.
+  assert.match(p, /New details \(a corrected phone number\) apply to the customer's requests in this conversation too: save_lead says how many\./);
+  assert.match(p, /Don't say a request was updated unless save_lead said so\./);
+});
