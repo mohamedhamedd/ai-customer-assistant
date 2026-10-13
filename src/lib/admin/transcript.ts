@@ -111,6 +111,8 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   // the customer is asked to choose, or told it isn't offered.
   if (!call.ok && result.error === "choose_service") return { detail, outcome: "asked which service", tone: "neutral", failed: false };
   if (!call.ok && result.error === "service_not_found") return { detail, outcome: "not on the services list", tone: "warning", failed: false };
+  // A time the business is closed (Admin > Opening hours): another time is suggested.
+  if (!call.ok && result.error === "outside_opening_hours") return { detail, outcome: "outside opening hours", tone: "warning", failed: false };
   if (!call.ok) {
     const error = text(result.error) ?? "failed";
     // Validation messages are short and say what was wrong; the others are

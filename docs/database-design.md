@@ -264,6 +264,21 @@ A business's services as rows: the structured, exact part of its knowledge (free
 
 `replace_services(business, rows jsonb)` replaces a business's rows in one transaction, in the order given (at most 200). Index `(business_id, position)` for the list. RLS on, no anon/authenticated privileges.
 
+### 3.6.3 `opening_hours`
+
+A business's weekly opening hours, one row per time range: a day with a lunch break has two rows, a closed day none. Local time in the business's timezone. Edited in the admin as a whole week. A consultation request for a time no appointment can start is refused in code.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK. Replaced on every save |
+| `business_id` | uuid | no | | FK → `businesses`, cascade |
+| `day` | smallint | no | | ISO weekday, 1 = Monday ... 7 = Sunday (`CHECK`) |
+| `opens` | time | no | | |
+| `closes` | time | no | | After `opens`, or `00:00` for midnight (`CHECK`) |
+| `created_at` | timestamptz | no | `now()` | |
+
+Unique `(business_id, day, opens)`. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `replace_opening_hours(business, rows jsonb, last_start int)` replaces the week and the setting in one transaction (at most 28 ranges). RLS on, no anon/authenticated privileges. Not covered yet: closures on given dates (holidays) and every-other-week days.
+
 ### 3.7 `leads`
 
 A person who shared contact details with the agent.

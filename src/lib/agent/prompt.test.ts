@@ -118,6 +118,8 @@ test("writes are proposed, read back, and repeated after the customer's yes", ()
   assert.match(p, /never pick a service for the customer/);
   assert.match(p, /error: choose_service means the customer must choose/);
   assert.match(p, /error: service_not_found means it isn't something they can request/);
+  // The time is checked against the opening hours in code (tools.ts).
+  assert.match(p, /error: outside_opening_hours means no appointment can start at that time/);
 });
 
 test("the assistant stays on the business and keeps conditions in short answers", () => {

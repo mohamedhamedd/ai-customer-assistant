@@ -7,14 +7,14 @@ export type Database = {
           Tables: {
             "businesses": {
                   Row: {
-                    "assistant_guidelines": string,"created_at": string,"description": string,"id": string,"name": string,"slug": string,"timezone": string
+                    "assistant_guidelines": string,"created_at": string,"description": string,"id": string,"last_start_before_close": number,"name": string,"slug": string,"timezone": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"name": string,"slug": string,"timezone"?: string
+                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"last_start_before_close"?: number,"name": string,"slug": string,"timezone"?: string
                   }
                   Update: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"name"?: string,"slug"?: string,"timezone"?: string
+                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"last_start_before_close"?: number,"name"?: string,"slug"?: string,"timezone"?: string
                   }
                   Relationships: [
                     
@@ -169,6 +169,26 @@ isOneToOne: true
       referencedColumns: ["id"]
     }
                   ]
+                },"opening_hours": {
+                  Row: {
+                    "business_id": string,"closes": string,"created_at": string,"day": number,"id": string,"opens": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "business_id": string,"closes": string,"created_at"?: string,"day": number,"id"?: string,"opens": string
+                  }
+                  Update: {
+                    "business_id"?: string,"closes"?: string,"created_at"?: string,"day"?: number,"id"?: string,"opens"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "opening_hours_business_id_fkey"
+      columns: ["business_id"]
+isOneToOne: false
+      referencedRelation: "businesses"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"rate_limit_hits": {
                   Row: {
                     "hits": number,"key": string,"window_start": string
@@ -299,6 +319,9 @@ isOneToOne: false
                            },
 "prune_rate_limits":
 { Args: Record<PropertyKey, never>; Returns: number
+                           },
+"replace_opening_hours":
+{ Args: { "p_business_id": string,"p_hours": Json,"p_last_start_before_close": number }; Returns: number
                            },
 "replace_services":
 { Args: { "p_business_id": string,"p_services": Json }; Returns: number

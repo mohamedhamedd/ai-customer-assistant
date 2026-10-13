@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Check, ChevronsUpDown, FileText, LayoutDashboard, MessagesSquare, Plus, Settings, Tags, Users } from "lucide-react";
+import { CalendarDays, Check, ChevronsUpDown, Clock, FileText, LayoutDashboard, MessagesSquare, Plus, Settings, Tags, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -11,6 +11,7 @@ const NAV = [
   { href: "overview", label: "Overview", icon: LayoutDashboard },
   { href: "knowledge-base", label: "Knowledge base", icon: FileText },
   { href: "services", label: "Services", icon: Tags },
+  { href: "hours", label: "Opening hours", icon: Clock },
   { href: "leads", label: "Leads", icon: Users },
   { href: "consultations", label: "Consultations", icon: CalendarDays },
   { href: "conversations", label: "Conversations", icon: MessagesSquare },

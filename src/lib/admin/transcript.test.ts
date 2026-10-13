@@ -95,6 +95,7 @@ test("asking which service, or a service that isn't offered, is the conversation
     summarizeToolCall({ name: "create_consultation_request", arguments: { service: "whitening" }, result: { ok: false, error, message: "…", options: ["In-office whitening"] }, ok: false });
   assert.deepEqual(call("choose_service"), { detail: "whitening", outcome: "asked which service", tone: "neutral", failed: false });
   assert.deepEqual(call("service_not_found"), { detail: "whitening", outcome: "not on the services list", tone: "warning", failed: false });
+  assert.deepEqual(call("outside_opening_hours"), { detail: "whitening", outcome: "outside opening hours", tone: "warning", failed: false });
 });
 
 test("a consultation request shows the service and time, and a repeat says so", () => {

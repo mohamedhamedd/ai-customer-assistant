@@ -136,7 +136,19 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 - **Saved at once:** the whole table is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its row and field, and nothing changes.
 - Price and duration are text ("$4,000 to $6,000", "Free"): businesses write ranges and words.
 - **Consultation requests take the service from this table** (see Agent: the service of a consultation request).
-- **Next steps:** the opening hours will get a table too; answers about services and prices will come from it.
+- **Next step:** answers about services and prices will come from this table.
+
+## Admin: opening hours
+
+`/admin/[slug]/hours` holds the business's week: one or more time ranges a day (a lunch break is two), or closed, in the business's timezone, and when the last appointment starts ("1 hour before closing"). Code: `src/components/admin/hours.tsx`, `src/lib/admin/hours.ts`, `src/lib/admin/hours-rows.ts`.
+
+- **Editing:** "Open this day", "Add hours" (up to 4 ranges a day), remove a range, "Copy Monday to Tuesday–Friday". A range ending at 12:00 AM closes at midnight. Saved at once: overlaps and a closing time before the opening one show on their range, and nothing changes.
+- **The consultation tool checks the time in code** (`startCheck()`), for text and voice. A request for a time no appointment can start returns `outside_opening_hours`, nothing is proposed, and the assistant suggests another time:
+  - closed then (Sunday, a lunch break, after closing): the week's hours, one line a day;
+  - too close to closing: the last start that day too ("the last appointment then starts at 4:00 PM"). The last start itself is allowed: "one hour before closing" at 5 PM allows 4:00 PM.
+
+  Each range counts on its own, so an appointment before a lunch break must start by the break minus the setting. A business without hours keeps today's behaviour: the prompt still asks the model to check the hours in the documents.
+- **Not covered yet:** closures on given dates (holidays) and days like "the first and third Saturday". Those stay in the documents, which the model still reads. For such a day, enter its hours: the code then only refuses times that are always closed.
 
 ## Admin: overview, leads and consultations
 
