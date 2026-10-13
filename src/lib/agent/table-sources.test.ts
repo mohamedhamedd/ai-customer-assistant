@@ -15,6 +15,7 @@ const services = [
 const week = {
   hours: [...[1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })), { day: 5, opens: "08:00", closes: "14:00" }],
   lastStartBeforeClose: 60,
+  notes: "Closed on major US public holidays.",
 };
 const tables = { services, week };
 const chips = (answer: string) => tableSources(answer, tables).map((s) => s.title);
@@ -45,12 +46,12 @@ test("opening hours: a time the business opens or closes, in talk about hours", 
   assert.deepEqual(chips("On Friday, Lakeside Dental Clinic closes at 2:00 PM. The last appointment starts 1 hour before closing."), ["Opening hours"]);
   assert.deepEqual(chips("We're open 8am to 5pm Monday to Thursday."), ["Opening hours"]);
   const hours = tableSources("We close at 2 p.m. on Fridays.", tables)[0];
-  assert.ok(hours.excerpt.startsWith("- Monday: 8:00 AM to 5:00 PM\n") && hours.excerpt.endsWith("The last appointment starts 1 hour before closing."));
+  assert.ok(hours.excerpt.startsWith("- Monday: 8:00 AM to 5:00 PM\n") && hours.excerpt.endsWith("The last appointment starts 1 hour before closing.\n\nClosed on major US public holidays."));
   assert.deepEqual(chips("Just to confirm: Thursday, October 15 at 4:00 PM. Is that right?"), [], "a read-back's time isn't the hours");
   assert.deepEqual(chips("The appointment takes about 2 hours."), []);
 });
 
 test("both, services first; nothing without tables", () => {
   assert.deepEqual(chips("A porcelain crown is $1,100, and we're open Friday until 2:00 PM."), ["Services", "Opening hours"]);
-  assert.deepEqual(tableSources("A porcelain crown is $1,100.", { services: [], week: { hours: [], lastStartBeforeClose: 0 } }), []);
+  assert.deepEqual(tableSources("A porcelain crown is $1,100.", { services: [], week: { hours: [], lastStartBeforeClose: 0, notes: "" } }), []);
 });

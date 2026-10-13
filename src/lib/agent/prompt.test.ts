@@ -172,7 +172,7 @@ const tables = {
     { name: "Traditional braces (full treatment)", category: "Orthodontics", price: "$4,000 to $6,000", duration: "18 to 24 months", description: "Metal braces.", requestable: true },
     { name: "Whitening touch-up gel (refill)", category: "", price: "$45", duration: "", description: "", requestable: false },
   ],
-  week: { hours: [1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })), lastStartBeforeClose: 60 },
+  week: { hours: [1, 2, 3, 4].map((day) => ({ day, opens: "08:00", closes: "17:00" })), lastStartBeforeClose: 60, notes: "Closed on major US public holidays." },
 };
 
 test("the tables are in the prompt whole, as written, after the rules and before the clock", () => {
@@ -183,7 +183,7 @@ test("the tables are in the prompt whole, as written, after the rules and before
     assert.ok(p.includes("- Whitening touch-up gel (refill) (price: $45) [can't be requested as a consultation]"));
     assert.ok(p.includes("## Opening hours (America/Los_Angeles)\n- Monday: 8:00 AM to 5:00 PM"));
     assert.ok(p.includes("- Friday: closed"));
-    assert.ok(p.includes("- The last appointment starts 1 hour before closing."));
+    assert.ok(p.includes("- The last appointment starts 1 hour before closing.\nNotes on these hours (they qualify the days above): Closed on major US public holidays."));
     // Staff change them rarely: part of the cached prefix, before the clock.
     assert.ok(p.indexOf("## Services") > p.indexOf("# Style") && p.indexOf("## Services") < p.indexOf("# Date and time"));
   }
@@ -195,6 +195,8 @@ test("with tables: services, prices and hours are answered from them; everything
   assert.match(p, /For which services there are, their prices and durations, and the opening hours: answer from .* exactly as written\. No search is needed, and if a search result says otherwise, the section is right\./);
   assert.match(p, /For anything else \(what a service involves .*\): call search_knowledge before answering/);
   assert.match(p, /A service the section doesn't list: search for it/);
+  // Seen live: "open Saturdays 9 to 1" without the documents' "first and third Saturday only".
+  assert.match(p, /The notes on the hours are part of them: when they qualify a day you mention .*, say so in the same answer\./);
   assert.match(p, /check the opening hours in the section below \(the tool checks them too\)/);
   assert.doesNotMatch(p, /ONLY from search_knowledge results/);
 
@@ -205,7 +207,7 @@ test("with tables: services, prices and hours are answered from them; everything
 });
 
 test("empty tables: no section, and the search-only rules", () => {
-  const p = buildSystemPrompt({ business, tables: { services: [], week: { hours: [], lastStartBeforeClose: 60 } }, now, channel: "text", customerFacts: {} });
+  const p = buildSystemPrompt({ business, tables: { services: [], week: { hours: [], lastStartBeforeClose: 60, notes: "" } }, now, channel: "text", customerFacts: {} });
   assert.doesNotMatch(p, /## Services|## Opening hours/);
   assert.match(p, /ONLY from search_knowledge results/);
   assert.match(p, /check the opening hours with search_knowledge/);

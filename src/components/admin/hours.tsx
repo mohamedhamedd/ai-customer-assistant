@@ -2,7 +2,7 @@
 
 import { Copy, Loader2, Plus, X } from "lucide-react";
 import { useState } from "react";
-import { DAYS, formatMinutes, LAST_START_CHOICES, MAX_RANGES_PER_DAY, minutes, type HoursRow, type HoursRowError, type Week } from "@/lib/admin/hours-rows";
+import { DAYS, formatMinutes, LAST_START_CHOICES, MAX_RANGES_PER_DAY, minutes, NOTES_MAX, type HoursRow, type HoursRowError, type Week } from "@/lib/admin/hours-rows";
 import { AdminHeader } from "./header";
 import { useToast } from "./ui";
 
@@ -35,11 +35,12 @@ export function OpeningHours({ slug, timeZone, initial }: { slug: string; timeZo
   const [saved, setSaved] = useState(initial);
   const [rows, setRows] = useState(() => keyed(initial.hours));
   const [lastStart, setLastStart] = useState(initial.lastStartBeforeClose);
+  const [notes, setNotes] = useState(initial.notes);
   // By key: errors stay on their range while others are added or removed.
   const [errors, setErrors] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const dirty = JSON.stringify(sorted(plain(rows))) !== JSON.stringify(sorted(saved.hours)) || lastStart !== saved.lastStartBeforeClose;
+  const dirty = JSON.stringify(sorted(plain(rows))) !== JSON.stringify(sorted(saved.hours)) || lastStart !== saved.lastStartBeforeClose || notes.trim() !== saved.notes;
 
   const update = (key: number, field: "opens" | "closes", value: string) => {
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
@@ -69,14 +70,15 @@ export function OpeningHours({ slug, timeZone, initial }: { slug: string; timeZo
       const res = await fetch(api, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ hours: plain(sent), lastStartBeforeClose: lastStart }),
+        body: JSON.stringify({ hours: plain(sent), lastStartBeforeClose: lastStart, notes }),
         signal: AbortSignal.timeout(15_000),
       });
       const body = (await res.json().catch(() => ({}))) as Partial<Week> & { error?: string; rows?: HoursRowError[] };
-      if (res.ok && Array.isArray(body.hours) && typeof body.lastStartBeforeClose === "number") {
-        setSaved({ hours: body.hours, lastStartBeforeClose: body.lastStartBeforeClose });
+      if (res.ok && Array.isArray(body.hours) && typeof body.lastStartBeforeClose === "number" && typeof body.notes === "string") {
+        setSaved({ hours: body.hours, lastStartBeforeClose: body.lastStartBeforeClose, notes: body.notes });
         setRows(keyed(body.hours));
         setLastStart(body.lastStartBeforeClose);
+        setNotes(body.notes);
         setErrors({});
         return toast.show("Opening hours saved");
       }
@@ -206,6 +208,28 @@ export function OpeningHours({ slug, timeZone, initial }: { slug: string; timeZo
             </select>
           </div>
 
+          <div className="flex flex-col gap-1.5 rounded-2xl border border-border bg-surface px-4 py-3">
+            <label htmlFor="hours-notes" className="text-[14px] font-medium">
+              Notes
+            </label>
+            <p id="hours-notes-help" className="text-[13px] text-text-muted">
+              What the hours above can&apos;t say: days that differ by week, holidays, seasonal hours. The assistant gives these with the hours.
+            </p>
+            <textarea
+              id="hours-notes"
+              value={notes}
+              maxLength={NOTES_MAX}
+              rows={3}
+              onChange={(e) => setNotes(e.target.value)}
+              aria-describedby="hours-notes-help"
+              placeholder="e.g. Saturdays: first and third of the month only. Closed on major US public holidays."
+              className="w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-[14px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <span className="self-end text-[12px] text-text-muted">
+              {notes.length}/{NOTES_MAX}
+            </span>
+          </div>
+
           {/* Down to the window's edge: past main's own padding, so rows don't show below it. */}
           <div className="sticky -bottom-4 -mx-4 -mb-4 flex items-center justify-end gap-3 border-t border-border bg-bg px-4 py-3 md:-bottom-8 md:-mx-8 md:-mb-8 md:px-8">
             <span className="mr-auto text-[13px] text-text-muted">
@@ -218,6 +242,7 @@ export function OpeningHours({ slug, timeZone, initial }: { slug: string; timeZo
               onClick={() => {
                 setRows(keyed(saved.hours));
                 setLastStart(saved.lastStartBeforeClose);
+                setNotes(saved.notes);
                 setErrors({});
               }}
               className="h-10 whitespace-nowrap rounded-lg px-3 text-[14px] font-medium text-text-muted hover:text-text disabled:opacity-50 sm:px-4"

@@ -39,7 +39,7 @@ async function business() {
   assert.ifError(error);
   businesses.push(data!.id);
   await saveServices(data!.id, [{ ...emptyRow(), name: "Traditional braces (full treatment)", category: "Orthodontics", price: "$4,000 to $6,000" }]);
-  await saveHours(data!.id, { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 60 });
+  await saveHours(data!.id, { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 60, notes: "Closed on major US public holidays." });
   return slug;
 }
 
@@ -59,7 +59,7 @@ test("the turn's prompt has the business's tables, and a price quoted from them 
   const { events, saved } = await turn(slug, "How much are braces, and when are you open?", model.deps);
   assert.ok(model.prompts[0].includes("- Traditional braces (full treatment) (category: Orthodontics; price: $4,000 to $6,000)"));
   assert.ok(model.prompts[0].includes("- Monday: 8:00 AM to 5:00 PM"));
-  assert.ok(model.prompts[0].includes("The last appointment starts 1 hour before closing."));
+  assert.ok(model.prompts[0].includes("The last appointment starts 1 hour before closing.\nNotes on these hours (they qualify the days above): Closed on major US public holidays."));
   assert.equal(saved.replaced_reason, null);
   assert.ok(!events.some((e) => e.type === "replace"));
 

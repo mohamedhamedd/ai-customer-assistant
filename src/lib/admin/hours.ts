@@ -6,7 +6,7 @@ import { loadWeek } from "@/lib/agent/tables";
 import { validateWeek, type HoursRowError, type Week } from "./hours-rows";
 
 // A business's opening hours (the opening_hours table, and the last-start
-// setting on businesses): listing, and saving the edited week.
+// setting and notes on businesses): listing, and saving the edited week.
 
 // A week with problems: the page shows each one on its range.
 export class OpeningHoursError extends ChatHttpError {
@@ -28,6 +28,7 @@ export async function saveHours(businessId: string, input: unknown): Promise<Wee
     p_business_id: businessId,
     p_hours: result.week.hours as unknown as Json,
     p_last_start_before_close: result.week.lastStartBeforeClose,
+    p_notes: result.week.notes,
   });
   if (error) throw new Error(`Saving opening hours failed: ${error.message}`);
   return listHours(businessId);

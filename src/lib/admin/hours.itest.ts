@@ -24,7 +24,7 @@ async function business() {
 }
 
 const weekdays = [1, 2, 3, 4, 5].map((day) => ({ day, opens: "09:00", closes: "17:00" }));
-const week = (hours: typeof weekdays, lastStartBeforeClose = 0) => ({ hours, lastStartBeforeClose });
+const week = (hours: typeof weekdays, lastStartBeforeClose = 0, notes = "") => ({ hours, lastStartBeforeClose, notes });
 
 test("the week is saved sorted, replaced as a whole, and kept per business", async () => {
   const mine = await business();
@@ -32,7 +32,11 @@ test("the week is saved sorted, replaced as a whole, and kept per business", asy
   await saveHours(theirs, week(weekdays));
 
   const saturday = { day: 6, opens: "10:00", closes: "00:00" };
-  assert.deepEqual(await saveHours(mine, week([saturday, ...weekdays], 60)), week([...weekdays, saturday], 60), "midnight closing kept as 00:00");
+  assert.deepEqual(
+    await saveHours(mine, week([saturday, ...weekdays], 60, " Closed on public holidays. ")),
+    week([...weekdays, saturday], 60, "Closed on public holidays."),
+    "midnight closing kept as 00:00; the notes trimmed",
+  );
   assert.deepEqual(await saveHours(mine, week([saturday])), week([saturday]), "replaced, not added to");
   assert.deepEqual(await listHours(theirs), week(weekdays), "another business's hours are untouched");
 });

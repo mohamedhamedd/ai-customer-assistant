@@ -42,8 +42,9 @@ export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
   // details: confirm_first only, what would be saved (confirm.ts).
   // options: choose_service and service_not_found, service names to offer.
-  // hours: outside_opening_hours, the week's hours, one line a day.
-  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[] };
+  // hours, notes: outside_opening_hours, the week's hours (one line a day)
+  // and the business's notes on them.
+  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[]; notes?: string };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -350,8 +351,9 @@ const createConsultationRequest = defineTool({
             output: {
               ok: false,
               error: "outside_opening_hours",
-              message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}; ask which they prefer.`,
+              message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}${week.notes ? ", keeping to the notes" : ""}; ask which they prefer.`,
               hours: describeHours(week.hours),
+              ...(week.notes ? { notes: week.notes } : {}),
             },
           },
         };

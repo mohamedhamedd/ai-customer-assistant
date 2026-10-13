@@ -65,11 +65,12 @@ function hoursQuoted(answer: string, week: Week): boolean {
 
 function hoursSource(week: Week): Source {
   const last = week.lastStartBeforeClose ? `\n\nThe last appointment starts ${formatMinutes(week.lastStartBeforeClose)} before closing.` : "";
+  const notes = week.notes ? `\n\n${week.notes}` : "";
   return {
     documentId: "table:hours",
     title: "Opening hours",
     heading: "",
-    excerpt: describeHours(week.hours).map((d) => `- ${d}`).join("\n") + last,
+    excerpt: describeHours(week.hours).map((d) => `- ${d}`).join("\n") + last + notes,
     similarity: 1,
     table: "hours",
   };

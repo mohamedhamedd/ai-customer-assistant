@@ -55,15 +55,19 @@ test("the week in words, one line a day", () => {
 });
 
 test("the week with its last-start setting", () => {
-  assert.deepEqual(validateWeek({ hours: [], lastStartBeforeClose: 60 }), { ok: true, week: { hours: [], lastStartBeforeClose: 60 } });
-  assert.deepEqual(validateWeek({ hours: [] }), { ok: true, week: { hours: [], lastStartBeforeClose: 0 } });
+  assert.deepEqual(validateWeek({ hours: [], lastStartBeforeClose: 60, notes: "  Saturdays: first and third only. " }), {
+    ok: true,
+    week: { hours: [], lastStartBeforeClose: 60, notes: "Saturdays: first and third only." },
+  });
+  assert.deepEqual(validateWeek({ hours: [] }), { ok: true, week: { hours: [], lastStartBeforeClose: 0, notes: "" } });
+  assert.deepEqual(validateWeek({ hours: [], notes: "x".repeat(501) }), { ok: false, error: "Keep the notes under 500 characters.", errors: [] });
   assert.deepEqual(validateWeek({ hours: [], lastStartBeforeClose: 300 }), { ok: false, error: "Choose when the last appointment starts.", errors: [] });
   assert.deepEqual([45, 60, 90, 120].map(formatMinutes), ["45 minutes", "1 hour", "1 hour 30 minutes", "2 hours"]);
 });
 
 test("an appointment can start: by weekday, from the opening minute up to (not at) closing", () => {
   const openAt = (rows: HoursRow[], local: string) => {
-    const check = startCheck({ hours: rows, lastStartBeforeClose: 0 }, local);
+    const check = startCheck({ hours: rows, lastStartBeforeClose: 0, notes: "" }, local);
     return check && check.ok;
   };
   // 2026-10-19 is a Monday.
@@ -79,7 +83,7 @@ test("an appointment can start: by weekday, from the opening minute up to (not a
 });
 
 test("the last appointment starts the set time before closing, for each range, and too late says when", () => {
-  const lastHour = { hours: week, lastStartBeforeClose: 60 };
+  const lastHour = { hours: week, lastStartBeforeClose: 60, notes: "" };
   // Seen live: "one hour before closing" at 5 PM was read as before 4 PM.
   assert.deepEqual(startCheck(lastHour, "2026-10-19T16:00"), { ok: true });
   assert.deepEqual(startCheck(lastHour, "2026-10-19T16:30"), { ok: false, reason: "too_late", latest: "16:00" });
@@ -87,5 +91,5 @@ test("the last appointment starts the set time before closing, for each range, a
   assert.deepEqual(startCheck(lastHour, "2026-10-23T23:00"), { ok: true }, "an hour before midnight");
   assert.deepEqual(startCheck(lastHour, "2026-10-23T23:30"), { ok: false, reason: "too_late", latest: "23:00" });
   assert.deepEqual(startCheck(lastHour, "2026-10-25T10:00"), { ok: false, reason: "closed" });
-  assert.deepEqual(startCheck({ hours: [{ day: 1, opens: "09:00", closes: "09:30" }], lastStartBeforeClose: 60 }, "2026-10-19T09:00"), { ok: true }, "a short range: from its opening");
+  assert.deepEqual(startCheck({ hours: [{ day: 1, opens: "09:00", closes: "09:30" }], lastStartBeforeClose: 60, notes: "" }, "2026-10-19T09:00"), { ok: true }, "a short range: from its opening");
 });

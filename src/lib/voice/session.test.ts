@@ -17,7 +17,7 @@ test("voice uses the shared prompt with the spoken style", () => {
 test("voice gets the business's tables too, so spoken prices and hours come from them", () => {
   const tables = {
     services: [{ name: "In-office teeth whitening", category: "", price: "$349", duration: "", description: "", requestable: true }],
-    week: { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 0 },
+    week: { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 0, notes: "" },
   };
   const instructions = voiceInstructions({ ...base, tables });
   assert.ok(instructions.includes("- In-office teeth whitening (price: $349)"));
