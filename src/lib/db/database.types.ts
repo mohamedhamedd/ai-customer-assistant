@@ -333,9 +333,14 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            "admin_conversation_list":
-{ Args: { "p_business_id": string,"p_issues_only"?: boolean,"p_limit": number }; Returns: {
-              "has_issue": boolean,"has_text": boolean,"has_voice": boolean,"id": string,"last_message_at": string,"lead_id": string,"lead_name": string,"message_count": number,"preview": string,"started_at": string
+            "admin_consultation_list":
+{ Args: { "p_business_id": string,"p_from": string,"p_limit": number,"p_offset"?: number,"p_sort": string,"p_status": string,"p_to": string }; Returns: {
+              "contact_email": string,"contact_name": string,"contact_phone": string,"created_at": string,"id": string,"lead_id": string,"notes": string,"preferred_at": string,"service": string,"status": string,"total_count": number
+            }[]
+                           },
+"admin_conversation_list":
+{ Args: { "p_business_id": string,"p_issues_only"?: boolean,"p_limit": number,"p_offset"?: number }; Returns: {
+              "has_issue": boolean,"has_text": boolean,"has_voice": boolean,"id": string,"last_message_at": string,"lead_id": string,"lead_name": string,"message_count": number,"preview": string,"started_at": string,"total_count": number
             }[]
                            },
 "admin_counts":

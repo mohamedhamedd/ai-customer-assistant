@@ -9,7 +9,16 @@ import { interleave, type TranscriptItem, type TranscriptMessage, type Transcrip
 // a conversation id from another business is a 404, like one that doesn't
 // exist.
 
-const LIST_LIMIT = 200;
+// One page of the list (admin_conversation_list returns the total too).
+export const PAGE_SIZE = 25;
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  // 1-based.
+  page: number;
+  pageSize: number;
+}
 // The newest messages of a long conversation, like the chat's own history.
 const TRANSCRIPT_LIMIT = 500;
 
@@ -39,23 +48,37 @@ interface ConversationRecord {
   has_voice: boolean;
   preview: string | null;
   has_issue: boolean;
+  total_count: number;
 }
 
 // Newest activity first; conversations nobody wrote in are left out.
 // issuesOnly: only those with an issue (see hasIssue).
-export async function listConversations(businessId: string, { issuesOnly = false, limit = LIST_LIMIT } = {}): Promise<ConversationRow[]> {
-  const { data, error } = await db().rpc("admin_conversation_list", { p_business_id: businessId, p_limit: limit, p_issues_only: issuesOnly });
+// Newest activity first, one page at a time.
+export async function listConversations(businessId: string, { issuesOnly = false, page = 1 } = {}): Promise<Page<ConversationRow>> {
+  const { data, error } = await db().rpc("admin_conversation_list", {
+    p_business_id: businessId,
+    p_limit: PAGE_SIZE,
+    p_offset: (Math.max(1, page) - 1) * PAGE_SIZE,
+    p_issues_only: issuesOnly,
+  });
   if (error) throw new Error(`Loading conversations failed: ${error.message}`);
-  return ((data ?? []) as ConversationRecord[]).map((c) => ({
-    id: c.id,
-    startedAt: c.started_at,
-    lastActivity: c.last_message_at,
-    lead: c.lead_id && c.lead_name ? { id: c.lead_id, name: c.lead_name } : null,
-    messages: Number(c.message_count),
-    channels: [...(c.has_text ? (["text"] as const) : []), ...(c.has_voice ? (["voice"] as const) : [])],
-    preview: c.preview,
-    hasIssue: c.has_issue,
-  }));
+  const rows = (data ?? []) as ConversationRecord[];
+  return {
+    items: rows.map((c) => ({
+      id: c.id,
+      startedAt: c.started_at,
+      lastActivity: c.last_message_at,
+      lead: c.lead_id && c.lead_name ? { id: c.lead_id, name: c.lead_name } : null,
+      messages: Number(c.message_count),
+      channels: [...(c.has_text ? (["text"] as const) : []), ...(c.has_voice ? (["voice"] as const) : [])],
+      preview: c.preview,
+      hasIssue: c.has_issue,
+    })),
+    // A page past the end has no rows to carry the total: count again from the start.
+    total: rows.length ? Number(rows[0].total_count) : page > 1 ? (await listConversations(businessId, { issuesOnly, page: 1 })).total : 0,
+    page: Math.max(1, page),
+    pageSize: PAGE_SIZE,
+  };
 }
 
 export interface Transcript {

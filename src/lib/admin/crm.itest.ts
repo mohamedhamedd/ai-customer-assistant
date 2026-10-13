@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { db } from "@/lib/db/supabase";
 import { ChatHttpError } from "@/lib/chat/turn";
+import { formatLocal } from "@/lib/agent/time";
 import { leadDetail, listConsultations, listLeads, overview, setConsultationStatus } from "./crm";
+
+// The test businesses have the default timezone.
+const TZ = "America/Los_Angeles";
 
 const businesses: string[] = [];
 let mine: string;
@@ -94,16 +98,16 @@ test("a lead's detail is scoped to the business", async () => {
 });
 
 test("consultations: filtered by status, soonest first, with counts per status", async () => {
-  const pending = await listConsultations(mine, "pending");
+  const pending = await listConsultations(mine, TZ, { status: "pending" });
   const ms = (iso: string) => new Date(iso).getTime();
   assert.deepEqual(pending.requests.map((r) => ms(r.preferredAt)), [ms(day(1)), ms(day(2))]);
   assert.equal(pending.requests[0].customer, "Snapshot Name", "the contact snapshot, not the lead");
   assert.deepEqual(pending.counts, { pending: 2, confirmed: 1, cancelled: 0 });
-  assert.equal((await listConsultations(mine, "all")).requests.length, 3);
+  assert.equal((await listConsultations(mine, TZ, { status: "all" })).requests.length, 3);
 });
 
 test("a status change saves, and only within the business", async () => {
-  const [first] = (await listConsultations(mine, "pending")).requests;
+  const [first] = (await listConsultations(mine, TZ, { status: "pending" })).requests;
   const updated = await setConsultationStatus(mine, first.id, "confirmed");
   assert.equal(updated.status, "confirmed");
   await assert.rejects(setConsultationStatus(mine, theirRequest, "cancelled"), notFound);
@@ -121,7 +125,7 @@ test("past requests come after upcoming ones, most recent first", async () => {
   const past = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
   await request(mine, omar, past(2), "confirmed");
   await request(mine, omar, past(20), "confirmed");
-  const confirmed = (await listConsultations(mine, "confirmed")).requests.map((r) => new Date(r.preferredAt).getTime());
+  const confirmed = (await listConsultations(mine, TZ, { status: "confirmed" })).requests.map((r) => new Date(r.preferredAt).getTime());
   const now = Date.now();
   const upcoming = confirmed.filter((t) => t >= now);
   const earlier = confirmed.filter((t) => t < now);
@@ -143,6 +147,33 @@ test("overview counts the last 7 days and pending requests", async () => {
   const o = await overview(mine);
   assert.equal(o.leads7d, 1, "Omar was captured 30 days ago");
   assert.equal(o.conversations7d, 1, "only the conversation with a message this week counts, not the new empty ones");
-  assert.equal(o.pendingRequests, (await listConsultations(mine, "pending")).counts.pending);
+  assert.equal(o.pendingRequests, (await listConsultations(mine, TZ, { status: "pending" })).counts.pending);
   assert.equal(o.recentLeads[0].name, "Sara Ali");
+});
+
+test("consultations: sorted by when they were requested or by date, filtered by a date range, in pages", async () => {
+  const many = await business("Many requests");
+  const someone = await lead(many, "Many", `many-${randomUUID().slice(0, 6)}@example.com`, new Date().toISOString());
+  const days = Array.from({ length: 30 }, (_, i) => day(i + 1));
+  // Requested in order; the preferred dates the other way round.
+  for (const at of [...days].reverse()) await request(many, someone, at);
+  const local = (iso: string) => formatLocal(new Date(iso), TZ).slice(0, 10);
+
+  const first = await listConsultations(many, TZ, { status: "all" });
+  assert.deepEqual([first.requests.length, first.total, first.page, first.pageSize], [25, 30, 1, 25]);
+  assert.equal(new Date(first.requests[0].preferredAt).getTime(), new Date(days[0]).getTime(), "upcoming: soonest first");
+  assert.equal((await listConsultations(many, TZ, { status: "all", page: 2 })).requests.length, 5);
+
+  const newest = await listConsultations(many, TZ, { status: "all", sort: "requested_desc" });
+  assert.equal(new Date(newest.requests[0].preferredAt).getTime(), new Date(days[0]).getTime(), "the last one requested was for the soonest day");
+  const latest = await listConsultations(many, TZ, { status: "all", sort: "date_desc" });
+  assert.equal(new Date(latest.requests[0].preferredAt).getTime(), new Date(days[29]).getTime());
+
+  // From the 3rd to the 5th day, both included, in the business's own dates.
+  const range = await listConsultations(many, TZ, { status: "all", sort: "date_asc", from: local(days[2]), to: local(days[4]) });
+  assert.deepEqual(
+    range.requests.map((r) => local(r.preferredAt)),
+    [local(days[2]), local(days[3]), local(days[4])],
+  );
+  assert.equal(range.total, 3);
 });
