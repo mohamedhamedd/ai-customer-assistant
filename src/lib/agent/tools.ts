@@ -7,7 +7,7 @@ import type { Channel } from "@/lib/db/enums";
 import { describeHours, formatClosedDate, formatTime, startCheck, upcomingClosed, type Week } from "@/lib/admin/hours-rows";
 import { retrieve, type Source } from "@/lib/rag/retrieve";
 import { loadServices, loadWeek } from "./tables";
-import { chooseService, MAX_LISTED, words, type ServiceEvidence } from "./service-choice";
+import { chooseService, MAX_LISTED, words, type ServiceChoice, type ServiceEvidence } from "./service-choice";
 import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
@@ -35,6 +35,9 @@ export interface ToolContext {
   // The business's opening hours (Admin > Opening hours), that a requested
   // time is checked against. Defaults to the database; tests pass their own.
   openingHours?: (ctx: ToolContext) => Promise<Week>;
+  // The requests made in this conversation, that change_consultation_request
+  // finds one in. Defaults to the database; tests pass their own.
+  conversationRequests?: (ctx: ToolContext) => Promise<StoredRequest[]>;
 }
 
 // What the model sees. Always an object with ok.
@@ -310,6 +313,63 @@ async function serviceEvidenceFromDb(ctx: ToolContext): Promise<ServiceEvidence>
 }
 
 
+const weekOf = (ctx: ToolContext) => (ctx.openingHours ?? ((c) => loadWeek(c.businessId, c.client)))(ctx);
+
+// The service isn't settled (service-choice.ts): the customer must choose,
+// or it isn't one they can request. Nothing is saved.
+function serviceRefusal(choice: Exclude<ServiceChoice, { kind: "ok" }>, requested: string): ToolRunResult {
+  if (choice.kind === "choose") {
+    return {
+      output: {
+        ok: false,
+        error: "choose_service",
+        message:
+          "Nothing is saved: the customer must choose the service. Ask them which of these options they want (or, for one option, whether it is what they mean), naming each exactly as written, and wait for their answer. Don't choose for them. Then call this tool again with the option they chose.",
+        options: choice.options,
+      },
+    };
+  }
+  const offer = choice.options.length
+    ? `Tell the customer, and offer the services they can request${choice.options.length === MAX_LISTED ? " (some of them)" : ""}: the options.`
+    : "This business takes no consultation requests here: offer to have the team contact the customer instead.";
+  return {
+    output: {
+      ok: false,
+      error: "service_not_found",
+      message: `Nothing is saved. "${requested}" ${choice.listed ? "can't be requested as a consultation" : "isn't one of the services customers can request"}. ${offer}`,
+      options: choice.options,
+    },
+  };
+}
+
+// No appointment can start at that local time (opening hours, closed dates,
+// the last start): the refusal, with the hours to suggest another time. Null
+// when it can, or when the time itself is invalid or past (run() says what's
+// wrong with it).
+function hoursRefusal(week: Week, local: string, ctx: ToolContext): ToolRunResult | null {
+  const when = resolvePreferredTime(local, ctx.timeZone, ctx.now());
+  const start = when.ok ? startCheck(week, local) : null;
+  if (!when.ok || !start || start.ok) return null;
+  const at = formatHuman(when.at, ctx.timeZone);
+  const why =
+    start.reason === "closed"
+      ? `the business is closed at that time (${at})`
+      : start.reason === "closed_date"
+        ? `the business is closed on that date${start.label ? ` (${start.label})` : ""}, ${at}`
+        : `${at} is too close to closing: the last appointment then starts at ${formatTime(start.latest)}`;
+  const closed = upcomingClosed(week.closed, formatLocal(ctx.now(), ctx.timeZone).slice(0, 10), 10).map(formatClosedDate);
+  return {
+    output: {
+      ok: false,
+      error: "outside_opening_hours",
+      message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}${week.notes ? ", keeping to the notes" : ""}; ask which they prefer.`,
+      ...(week.hours.length ? { hours: describeHours(week.hours) } : {}),
+      ...(closed.length ? { closed_dates: closed } : {}),
+      ...(week.notes ? { notes: week.notes } : {}),
+    },
+  };
+}
+
 const createConsultationRequest = defineTool({
   name: "create_consultation_request",
   writes: true,
@@ -335,62 +395,12 @@ const createConsultationRequest = defineTool({
   // The service, from the business's services table (service-choice.ts);
   // then the time, against its opening hours. Neither table: as before.
   async prepare(args, ctx) {
-    const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), (ctx.openingHours ?? ((c) => loadWeek(c.businessId, c.client)))(ctx)]);
+    const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), weekOf(ctx)]);
     const choice = chooseService(args.service, evidence);
-    if (choice.kind === "ok") {
-      // An invalid or past time is left to run(), which says what's wrong.
-      const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
-      const start = when.ok ? startCheck(week, args.preferred_datetime) : null;
-      if (when.ok && start && !start.ok) {
-        const at = formatHuman(when.at, ctx.timeZone);
-        const why =
-          start.reason === "closed"
-            ? `the business is closed at that time (${at})`
-            : start.reason === "closed_date"
-              ? `the business is closed on that date${start.label ? ` (${start.label})` : ""}, ${at}`
-              : `${at} is too close to closing: the last appointment then starts at ${formatTime(start.latest)}`;
-        const closed = upcomingClosed(week.closed, formatLocal(ctx.now(), ctx.timeZone).slice(0, 10), 10).map(formatClosedDate);
-        return {
-          result: {
-            output: {
-              ok: false,
-              error: "outside_opening_hours",
-              message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}${week.notes ? ", keeping to the notes" : ""}; ask which they prefer.`,
-              ...(week.hours.length ? { hours: describeHours(week.hours) } : {}),
-              ...(closed.length ? { closed_dates: closed } : {}),
-              ...(week.notes ? { notes: week.notes } : {}),
-            },
-          },
-        };
-      }
-      return { args: { ...args, service: choice.service } };
-    }
-    if (choice.kind === "choose") {
-      return {
-        result: {
-          output: {
-            ok: false,
-            error: "choose_service",
-            message:
-              "Nothing is saved: the customer must choose the service. Ask them which of these options they want (or, for one option, whether it is what they mean), naming each exactly as written, and wait for their answer. Don't choose for them. Then call this tool again with the option they chose.",
-            options: choice.options,
-          },
-        },
-      };
-    }
-    const offer = choice.options.length
-      ? `Tell the customer, and offer the services they can request${choice.options.length === MAX_LISTED ? " (some of them)" : ""}: the options.`
-      : "This business takes no consultation requests here: offer to have the team contact the customer instead.";
-    return {
-      result: {
-        output: {
-          ok: false,
-          error: "service_not_found",
-          message: `Nothing is saved. "${args.service}" ${choice.listed ? "can't be requested as a consultation" : "isn't one of the services customers can request"}. ${offer}`,
-          options: choice.options,
-        },
-      },
-    };
+    if (choice.kind !== "ok") return { result: serviceRefusal(choice, args.service) };
+    const closed = hoursRefusal(week, args.preferred_datetime, ctx);
+    if (closed) return { result: closed };
+    return { args: { ...args, service: choice.service } };
   },
   confirm: {
     // The time slot and the service. The service by its words, so wording
@@ -446,8 +456,186 @@ const createConsultationRequest = defineTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// change_consultation_request
+// ---------------------------------------------------------------------------
+
+// A request made in this conversation, as change_consultation_request finds it.
+export interface StoredRequest {
+  service: string;
+  preferredAt: Date;
+  status: string;
+}
+
+async function requestsFromDb(ctx: ToolContext): Promise<StoredRequest[]> {
+  const { data, error } = await (ctx.client ?? db())
+    .from("consultation_requests")
+    .select("service, preferred_at, status")
+    .eq("business_id", ctx.businessId)
+    .eq("conversation_id", ctx.conversationId)
+    .order("created_at");
+  if (error) throw new Error(`Loading the requests failed: ${error.message}`);
+  return (data ?? []).map((r) => ({ service: r.service, preferredAt: new Date(r.preferred_at), status: r.status }));
+}
+
+export const changeConsultationSchema = z
+  .object({
+    current_datetime: z.string().trim(),
+    service: optional(z.string().trim().min(2, "service is too short").max(120, "service is too long")),
+    preferred_datetime: optional(z.string().trim()),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.service && !v.preferred_datetime) ctx.addIssue({ code: "custom", message: "say what changes: a new service, a new preferred_datetime, or both", path: ["preferred_datetime"] });
+  });
+
+// The request's current time, from the arguments (local, as in "Already
+// done"). Null when it isn't such a time.
+const currentAt = (local: string, ctx: ToolContext) => {
+  const parsed = zonedLocalToUtc(local, ctx.timeZone);
+  return parsed.ok ? parsed.at : null;
+};
+
+const changeConsultationRequest = defineTool({
+  name: "change_consultation_request",
+  writes: true,
+  description:
+    "Change a consultation request the customer already made in this conversation: another time, another service, or both. Only pending requests can be changed. The first call saves nothing: it returns the new details to read back. Call again with the same details after the customer confirms.",
+  parameters: {
+    type: "object",
+    properties: {
+      current_datetime: {
+        type: "string",
+        description: "The request's current date and time, as listed under 'Already done in this conversation', format YYYY-MM-DDTHH:mm.",
+      },
+      service: { type: "string", description: "The new service, if it changes: its exact name, or the customer's words. Leave out to keep it." },
+      preferred_datetime: { type: "string", description: "The new date and time, if it changes: LOCAL time, format YYYY-MM-DDTHH:mm. Leave out to keep it." },
+    },
+    required: ["current_datetime"],
+    additionalProperties: false,
+  },
+  schema: changeConsultationSchema,
+  // The request (this conversation's, at that time, still pending); then
+  // the new service and time, checked like a new request's. The arguments
+  // come out complete: the exact service and the time, changed or not.
+  async prepare(args, ctx) {
+    const at = currentAt(args.current_datetime, ctx);
+    if (!at) return { result: invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm, as listed under 'Already done in this conversation'") };
+    const requests = await (ctx.conversationRequests ?? requestsFromDb)(ctx);
+    const atThatTime = requests.filter((r) => r.preferredAt.getTime() === at.getTime());
+    const request = atThatTime.find((r) => r.status !== "cancelled") ?? atThatTime[0];
+    if (!request) {
+      const listed = requests.filter((r) => r.status !== "cancelled").map((r) => `${r.service}, ${formatHuman(r.preferredAt, ctx.timeZone)} (${formatLocal(r.preferredAt, ctx.timeZone)}), ${r.status}`);
+      return {
+        result: {
+          output: {
+            ok: false,
+            error: "request_not_found",
+            message: listed.length
+              ? `Nothing is changed: there is no request in this conversation at that time. This customer's requests: ${listed.join("; ")}. Use the current_datetime of the one they mean.`
+              : "Nothing is changed: this customer has no consultation request in this conversation. To ask for one, use create_consultation_request.",
+          },
+        },
+      };
+    }
+    if (request.status !== "pending") {
+      return {
+        result: {
+          output: {
+            ok: false,
+            error: "request_not_pending",
+            message: `Nothing is changed: the team has already ${request.status} this request (${request.service}, ${formatHuman(request.preferredAt, ctx.timeZone)}), so it can't be changed here. Tell the customer, and offer to have the team contact them about it.`,
+          },
+        },
+      };
+    }
+
+    let service = request.service;
+    const [evidence, week] = await Promise.all([args.service ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null, args.preferred_datetime ? weekOf(ctx) : null]);
+    const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+    if (args.service && evidence && !same(args.service, request.service)) {
+      // The current service isn't one of the choices: "a veneer instead of
+      // the crown" names both, and only the veneer is being chosen.
+      const choice = chooseService(args.service, { ...evidence, services: evidence.services.filter((s) => !same(s.name, request.service)) });
+      if (choice.kind !== "ok") return { result: serviceRefusal(choice, args.service) };
+      service = choice.service;
+    }
+    const preferred = args.preferred_datetime ?? formatLocal(request.preferredAt, ctx.timeZone);
+    if (args.preferred_datetime && week) {
+      const closed = hoursRefusal(week, args.preferred_datetime, ctx);
+      if (closed) return { result: closed };
+    }
+    const sameTime = currentAt(preferred, ctx)?.getTime() === request.preferredAt.getTime();
+    if (sameTime && service === request.service) {
+      return {
+        result: {
+          output: {
+            ok: false,
+            error: "no_change",
+            message: `Nothing is changed: the request is already ${service} on ${formatHuman(request.preferredAt, ctx.timeZone)}.`,
+          },
+        },
+      };
+    }
+    return { args: { current_datetime: formatLocal(request.preferredAt, ctx.timeZone), service, preferred_datetime: preferred } };
+  },
+  confirm: {
+    // Which request, and what it becomes.
+    propose: (args, ctx) => {
+      const from = currentAt(args.current_datetime, ctx);
+      const when = args.preferred_datetime ? resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now()) : null;
+      if (!from || !when?.ok || !args.service) return null;
+      return {
+        key: JSON.stringify([from.toISOString(), when.at.toISOString(), words(args.service).sort()]),
+        // Complete, so the stored proposal says what it becomes even when the
+        // model sent only what changed (execute.ts reads it back from here).
+        details: { service: args.service, preferred_datetime: args.preferred_datetime, preferred_time: formatHuman(when.at, ctx.timeZone), instead_of: formatHuman(from, ctx.timeZone) },
+      };
+    },
+  },
+  async run(args, ctx) {
+    const from = currentAt(args.current_datetime, ctx);
+    if (!from) return invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm");
+    if (!args.service || !args.preferred_datetime) return invalid("say what changes: a new service, a new preferred_datetime, or both");
+    const when = resolvePreferredTime(args.preferred_datetime, ctx.timeZone, ctx.now());
+    if (!when.ok) return invalid(when.message);
+
+    const { data, error } = await (ctx.client ?? db()).rpc("change_consultation_request", {
+      p_business_id: ctx.businessId,
+      p_conversation_id: ctx.conversationId,
+      p_current_at: from.toISOString(),
+      p_service: args.service,
+      p_preferred_at: when.at.toISOString(),
+      p_current_time: formatHuman(from, ctx.timeZone),
+    });
+    const refused: Record<string, string> = {
+      // Staff confirmed or cancelled it between the read-back and the yes.
+      request_not_pending: "Nothing is changed: the team has just handled this request, so it can't be changed here. Tell the customer, and offer to have the team contact them about it.",
+      request_not_found: "Nothing is changed: that request isn't in this conversation any more. Check 'Already done in this conversation'.",
+      slot_taken: "Nothing is changed: the customer already has another request at that time. Ask for a different time.",
+    };
+    if (error && refused[error.message]) return { output: { ok: false, error: error.message, message: refused[error.message] } };
+    if (error) throw new Error(`change_consultation_request failed: ${error.message}`);
+
+    const row = data as { request_id: string; status: string; service: string; previous_service?: string; changed: boolean };
+    return {
+      output: {
+        ok: true,
+        request_id: row.request_id,
+        status: row.status,
+        service: row.service,
+        // The action card shows these strings as they are.
+        preferred_time: formatHuman(when.at, ctx.timeZone),
+        preferred_datetime: formatLocal(when.at, ctx.timeZone),
+        changed_from: { service: row.previous_service ?? row.service, preferred_time: formatHuman(from, ctx.timeZone) },
+        already_changed: !row.changed,
+        note: "This is still a request. The team will contact the customer to confirm.",
+      },
+    };
+  },
+});
+
 export const TOOLS: Record<string, Tool> = Object.fromEntries(
-  [searchKnowledge, saveLead, createConsultationRequest].map((t) => [t.name, t]),
+  [searchKnowledge, saveLead, createConsultationRequest, changeConsultationRequest].map((t) => [t.name, t]),
 );
 
 export function toolDefinitions(tools: Record<string, Tool> = TOOLS): ToolDefinition[] {

@@ -6,12 +6,14 @@ import { executeTool, OUTCOME_UNKNOWN, type AuditRow, type ExecuteDeps, type Pro
 import type { Week } from "@/lib/admin/hours-rows";
 import type { ServiceEvidence } from "./service-choice";
 import {
+  changeConsultationSchema,
   consultationSchema,
   resolvePreferredTime,
   saveLeadSchema,
   searchKnowledgeSchema,
   TOOLS,
   toolDefinitions,
+  type StoredRequest,
   type Tool,
   type ToolContext,
 } from "./tools";
@@ -75,7 +77,7 @@ test("tool definitions match the validation schemas (no drift)", () => {
     const props = Object.keys((def.parameters as { properties: object }).properties).sort();
     assert.deepEqual(props, Object.keys(schema.shape).sort(), def.name);
   }
-  assert.deepEqual(toolDefinitions().map((d) => d.name).sort(), ["create_consultation_request", "save_lead", "search_knowledge"]);
+  assert.deepEqual(toolDefinitions().map((d) => d.name).sort(), ["change_consultation_request", "create_consultation_request", "save_lead", "search_knowledge"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -253,7 +255,7 @@ test("every call leaves one structured log line, without the arguments", async (
 // the same clock. proposals() reads them like execute.ts reads the tables.
 // With services, the business has a services table (service-choice.ts), and
 // the evidence is read from the same messages and audits.
-function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["services"]; week?: Week } = {}) {
+function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["services"]; week?: Week; requests?: StoredRequest[] } = {}) {
   let clock = 0;
   const tick = (ms = 1) => t((clock += ms));
   const audits: (AuditRow & { at: Date })[] = [];
@@ -261,7 +263,15 @@ function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["
   const rpcs: string[] = [];
   const written: Record<string, unknown>[] = [];
   const client = {
-    rpc: async (fn: string, params: Record<string, unknown>) => (rpcs.push(fn), written.push(params), { data: { request_id: "R1", status: "pending", created: true }, error: null }),
+    rpc: async (fn: string, params: Record<string, unknown>) => {
+      rpcs.push(fn);
+      written.push(params);
+      const data =
+        fn === "change_consultation_request"
+          ? { request_id: "R1", status: "pending", service: params.p_service, previous_service: opts.requests?.[0]?.service, changed: true }
+          : { request_id: "R1", status: "pending", created: true };
+      return { data, error: null };
+    },
   } as unknown as NonNullable<ToolContext["client"]>;
   const serviceEvidence = async (): Promise<ServiceEvidence> => {
     const offer = audits.findLast((a) => a.result.error === "choose_service");
@@ -294,7 +304,7 @@ function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["
     // delivered: false is a read-back an answer check replaced.
     assistantSays: (delivered = true) => void messages.push({ role: "assistant", at: tick(), delivered }),
     call: async (name: string, args: object) =>
-      (await executeTool(name, JSON.stringify(args), { ...ctx, client, serviceEvidence, openingHours: async () => opts.week ?? { hours: [], lastStartBeforeClose: 0, notes: "", closed: [] } }, deps)).output,
+      (await executeTool(name, JSON.stringify(args), { ...ctx, client, serviceEvidence, openingHours: async () => opts.week ?? { hours: [], lastStartBeforeClose: 0, notes: "", closed: [] }, conversationRequests: async () => opts.requests ?? [] }, deps)).output,
   };
 }
 
@@ -485,6 +495,86 @@ test("with opening hours: a closed date is refused in code, with the coming clos
 
   assert.equal((await c.call("create_consultation_request", { service: "whitening", preferred_datetime: "2026-10-20T10:00" })).error, "confirm_first", "the Tuesday before");
   assert.deepEqual(c.rpcs, []);
+});
+
+// ---------------------------------------------------------------------------
+// change_consultation_request
+// ---------------------------------------------------------------------------
+
+// A pending request for a crown on Tuesday Oct 20 at 3 PM (LA), made in this conversation.
+const CROWN: StoredRequest = { service: "Porcelain crown", preferredAt: new Date("2026-10-20T22:00:00Z"), status: "pending" };
+const DENTAL = [
+  { name: "Porcelain crown", requestable: true },
+  { name: "Porcelain veneer (per tooth)", requestable: true },
+  { name: "Root canal (front tooth)", requestable: true },
+  { name: "Root canal (molar)", requestable: true },
+];
+
+test("change: a pending request gets a new time; read back with what it replaces, saved on the yes", async () => {
+  const c = conversation({ requests: [CROWN], week: { hours: [2, 4].map((day) => ({ day, opens: "09:00", closes: "17:00" })), lastStartBeforeClose: 0, notes: "", closed: [] } });
+  c.customerSays(1, "can we move it to Thursday at 10?");
+  const change = { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-22T10:00" };
+  const proposal = await c.call("change_consultation_request", change);
+  assert.deepEqual(proposal, {
+    ok: false,
+    error: "confirm_first",
+    message: CONFIRM_FIRST_MESSAGE,
+    details: {
+      service: "Porcelain crown",
+      preferred_datetime: "2026-10-22T10:00",
+      preferred_time: "Thursday, October 22, 2026 at 10:00 AM PDT",
+      instead_of: "Tuesday, October 20, 2026 at 3:00 PM PDT",
+    },
+  });
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  // The model sends only what changes again: the stored proposal says the rest.
+  const done = await c.call("change_consultation_request", change);
+  assert.ok(done.ok && done.service === "Porcelain crown" && done.preferred_time === "Thursday, October 22, 2026 at 10:00 AM PDT");
+  assert.deepEqual(done.changed_from, { service: "Porcelain crown", preferred_time: "Tuesday, October 20, 2026 at 3:00 PM PDT" });
+  assert.deepEqual(c.rpcs, ["change_consultation_request"]);
+  assert.deepEqual(c.written[0], {
+    p_business_id: "b",
+    p_conversation_id: "c",
+    p_current_at: "2026-10-20T22:00:00.000Z",
+    p_service: "Porcelain crown",
+    p_preferred_at: "2026-10-22T17:00:00.000Z",
+    p_current_time: "Tuesday, October 20, 2026 at 3:00 PM PDT",
+  });
+});
+
+test("change: another service goes through the same choice as a new request", async () => {
+  const c = conversation({ requests: [CROWN], services: DENTAL });
+  // Seen live: naming the current service too made it "crown or veneer?".
+  c.customerSays(1, "make it a veneer instead of the crown");
+  const veneer = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", service: "veneer" });
+  assert.ok(!veneer.ok && veneer.error === "confirm_first" && veneer.details?.service === "Porcelain veneer (per tooth)" && veneer.details?.preferred_datetime === "2026-10-20T15:00");
+  c.customerSays(1, "or a root canal");
+  const which = await c.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", service: "root canal" });
+  assert.ok(!which.ok && which.error === "choose_service");
+  assert.deepEqual(c.rpcs, []);
+});
+
+test("change: only a pending request in this conversation, and only into an open time", async () => {
+  const confirmed = conversation({ requests: [{ ...CROWN, status: "confirmed" }] });
+  const done = await confirmed.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-22T10:00" });
+  assert.ok(!done.ok && done.error === "request_not_pending" && /already confirmed this request/.test(done.message));
+
+  const other = conversation({ requests: [CROWN] });
+  const missing = await other.call("change_consultation_request", { current_datetime: "2026-10-21T15:00", preferred_datetime: "2026-10-22T10:00" });
+  assert.ok(!missing.ok && missing.error === "request_not_found" && /Porcelain crown, Tuesday, October 20, 2026 at 3:00 PM PDT \(2026-10-20T15:00\), pending/.test(missing.message));
+  const none = await conversation().call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-22T10:00" });
+  assert.ok(!none.ok && none.error === "request_not_found" && /no consultation request in this conversation/.test(none.message));
+
+  const closed = conversation({ requests: [CROWN], week: { hours: [{ day: 2, opens: "09:00", closes: "17:00" }], lastStartBeforeClose: 0, notes: "", closed: [] } });
+  assert.equal((await closed.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-24T10:00" })).error, "outside_opening_hours", "a Saturday");
+  assert.equal((await closed.call("change_consultation_request", { current_datetime: "2026-10-20T15:00", preferred_datetime: "2026-10-20T15:00" })).error, "no_change");
+  for (const c of [confirmed, other, closed]) assert.deepEqual(c.rpcs, []);
+});
+
+test("change: say what changes", () => {
+  const r = changeConsultationSchema.safeParse({ current_datetime: "2026-10-20T15:00" });
+  assert.ok(!r.success && /say what changes/.test(r.error.issues[0].message));
 });
 
 test("repeating a committed write later needs no new read-back (the save is idempotent)", async () => {

@@ -24,13 +24,21 @@ export function ActionCard({ action, businessName, onTryAgain }: { action: Actio
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <CalendarDays aria-hidden className="size-4 text-text-muted" />
-            <p className="text-[15px] font-semibold">{action.alreadyRequested ? "Consultation already requested" : "Consultation requested"}</p>
+            <p className="text-[15px] font-semibold">
+              {action.changedFrom ? "Consultation request changed" : action.alreadyRequested ? "Consultation already requested" : "Consultation requested"}
+            </p>
           </div>
           <span className="rounded-full bg-warning/10 px-2.5 py-0.5 text-[12px] font-medium text-warning">Pending</span>
         </div>
         <div className="flex flex-col gap-1 border-t border-border pt-3 text-[14px]">
           <p className="font-medium break-words">{action.service}</p>
           <p className="text-text-muted">{action.preferredTime}</p>
+          {action.changedFrom && (
+            <p className="mt-1 text-[13px] text-text-muted break-words">
+              Was: {action.changedFrom.service !== action.service ? `${action.changedFrom.service}, ` : ""}
+              {action.changedFrom.preferredTime}
+            </p>
+          )}
         </div>
         <p className="border-t border-border pt-2.5 text-[13px] text-text-muted">{businessName} will confirm with you.</p>
       </div>

@@ -174,7 +174,10 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
                           </button>
                         </td>
                         <td className="px-5 py-3 break-all text-text-muted">{r.email ?? r.phone}</td>
-                        <td className="px-5 py-3">{r.service}</td>
+                        <td className="px-5 py-3">
+                          {r.service}
+                          {r.notes && <p className="mt-0.5 max-w-xs text-[12px] text-text-muted">{r.notes}</p>}
+                        </td>
                         <td className="whitespace-nowrap px-5 py-3">{formatInZone(r.preferredAt, timeZone)}</td>
                         <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                           <StatusSelect value={r.status} customer={r.customer} disabled={saving.has(r.id)} onChange={(s) => change(r, s)} />
