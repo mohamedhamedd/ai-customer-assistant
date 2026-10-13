@@ -126,6 +126,19 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 - Every admin query is scoped to the business in the URL: another business's document id is "not found".
 - Failed documents show a plain reason (a scanned PDF, an interrupted upload); internal error details stay in the server log. An upload that died mid-way (server restart) shows as interrupted after 10 minutes instead of "Processing" forever.
 
+## Admin: services
+
+`/admin/[slug]/services` holds the business's services as a table: name, category, price, duration, a short description, and whether customers can request a consultation for it. This is the structured part of the knowledge: the facts that must be exact. Free-text documents stay for everything else (FAQs, policies, what to bring). Code: `src/components/admin/services.tsx`, `src/lib/admin/services.ts`, `src/lib/admin/service-rows.ts`.
+
+- **Three ways to fill it, for any business:**
+  - **Fill from documents:** one model call reads the business's ready documents and suggests rows. Code then keeps only what's written there: a service name must appear in the documents, a price or duration whose numbers aren't all in them is left blank, an unknown category is left blank, and no descriptions are suggested (the model would write its own). A name contained in a longer one is dropped (a services page next to a price list). On Lakeside it gives the price list's 21 services with their exact prices, categories from the price list's headings, and durations from the services page.
+  - **Import CSV:** the template (Download template / Download CSV) has the columns Service, Category, Price, Duration, Description, Customers can request. Columns can be in any order; only Service is required. Any spreadsheet can save it.
+  - **By hand:** Add service, edit in place, remove.
+- **Automatic start:** after an upload, or `npm run ingest`, a business with no services gets the suggestion saved, so it has a table to check instead of an empty one. A table someone saved is never replaced.
+- **Saved at once:** the whole table is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its row and field, and nothing changes.
+- Price and duration are text ("$4,000 to $6,000", "Free"): businesses write ranges and words.
+- **Next steps:** consultation requests will take the service from this table (and ask the customer which one when several fit); the opening hours will get a table too; answers about services and prices will come from it.
+
 ## Admin: overview, leads and consultations
 
 `/admin` opens on the **Overview**: conversations active and leads captured in the last 7 days, pending consultations, documents ready, the latest requests and leads (contact details masked, as it's the screen most likely to be shared), and the questions the assistant couldn't answer (see below).

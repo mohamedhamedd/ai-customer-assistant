@@ -245,6 +245,25 @@ One row per voice call (PR-09). `/api/voice/session` creates it after OpenAI acc
 
 PR-16 kept what its guards blocked or replaced in a `flags` table, with embeddings its input guard learned from. The input guard and the model-based scope check were removed (they judged single messages without the conversation and replaced ordinary answers), and with them `flags`, `similar_flags()` and `clone_business_for_eval()`. A replaced answer is now kept on the message itself (`replaced_original`, `replaced_reason`), and failed tool calls are already in `tool_calls`: together they are the admin's issues list.
 
+### 3.6.2 `services`
+
+A business's services as rows: the structured, exact part of its knowledge (free-text documents hold the rest). Edited in the admin (as a whole table), imported from a CSV template, or suggested from the documents.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK. Replaced on every save (nothing references it: a request keeps the name) |
+| `business_id` | uuid | no | | FK → `businesses`, cascade |
+| `position` | int | no | | The order staff gave the list |
+| `name` | text | no | | 1 to 120 characters (`CHECK`). Unique per business ignoring case and outer spaces (`services_business_name_idx`) |
+| `category` | text | no | `''` | At most 60 |
+| `price` | text | no | `''` | At most 60. Text, as written: ranges and words ("$4,000 to $6,000", "Free") |
+| `duration` | text | no | `''` | At most 60 |
+| `description` | text | no | `''` | At most 500 |
+| `requestable` | boolean | no | `true` | Customers can request a consultation for it |
+| `created_at` | timestamptz | no | `now()` | |
+
+`replace_services(business, rows jsonb)` replaces a business's rows in one transaction, in the order given (at most 200). Index `(business_id, position)` for the list. RLS on, no anon/authenticated privileges.
+
 ### 3.7 `leads`
 
 A person who shared contact details with the agent.

@@ -2,6 +2,7 @@ import "server-only";
 import { ChatHttpError, requireBusiness, type Business } from "@/lib/chat/turn";
 import { readJsonCapped } from "@/lib/http";
 import { ProfileError } from "./businesses";
+import { ServicesError } from "./services";
 
 // Shared shape of the admin routes: known errors keep their status (a form
 // error also says which fields), anything else is a logged 500.
@@ -13,6 +14,7 @@ export async function respond(label: string, run: () => Promise<Response>) {
     return await run();
   } catch (err) {
     if (err instanceof ProfileError) return Response.json({ error: err.message, fields: err.fields }, { status: err.status });
+    if (err instanceof ServicesError) return Response.json({ error: err.message, rows: err.rows }, { status: err.status });
     if (err instanceof ChatHttpError) return Response.json({ error: err.message }, { status: err.status });
     console.error(`[admin] ${label} failed`, err);
     return Response.json({ error: "Something went wrong. Please try again." }, { status: 500 });

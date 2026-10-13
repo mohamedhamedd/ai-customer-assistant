@@ -43,6 +43,9 @@ export const LIMITS = {
   createBusiness: (): Limit => ({ key: "business:create", windowSeconds: 3600, max: 20 }),
   createBusinessIp: (ip: string): Limit => ({ key: `business:create:ip:${ip}`, windowSeconds: 3600, max: 5 }),
   saveProfile: (businessId: string): Limit => ({ key: `profile:business:${businessId}`, windowSeconds: 600, max: 30 }),
+  saveServices: (businessId: string): Limit => ({ key: `services:save:business:${businessId}`, windowSeconds: 600, max: 30 }),
+  // Each suggestion reads the documents with the model.
+  suggestServices: (businessId: string): Limit => ({ key: `services:suggest:business:${businessId}`, windowSeconds: 600, max: 10 }),
 };
 
 export const TOO_MANY = "You're sending messages quickly. Please wait a moment and try again.";
