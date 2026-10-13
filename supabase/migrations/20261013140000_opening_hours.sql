@@ -3,8 +3,8 @@
 -- closed day has none. Times are the business's local time (its timezone).
 -- A consultation request for a time the business is closed is refused in
 -- code (src/lib/agent/tools.ts), instead of trusting the model to check.
--- Not covered yet: closures on given dates (holidays) and every-other-week
--- days; those stay in the documents.
+-- What the weekly ranges can't say (some Saturdays only, holidays) goes in
+-- the business's hours notes, which the assistant reads with the hours.
 create table public.opening_hours (
   id          uuid primary key default gen_random_uuid(),
   business_id uuid not null references public.businesses(id) on delete cascade,
@@ -25,12 +25,15 @@ alter table public.opening_hours enable row level security;
 -- appointment of the day starts one hour before closing"): a request later
 -- than that is refused like one when the business is closed.
 alter table public.businesses
-  add column last_start_before_close smallint not null default 0 check (last_start_before_close between 0 and 240);
+  add column last_start_before_close smallint not null default 0 check (last_start_before_close between 0 and 240),
+  -- Exceptions in staff's words: "Saturdays: first and third of the month
+  -- only. Closed on major US public holidays."
+  add column hours_notes text not null default '' check (char_length(hours_notes) <= 500);
 
 -- The admin saves the whole week at once: the business's rows are replaced
--- in one transaction, with the last-start setting. Overlaps are refused by
+-- in one transaction, with the last-start setting and the notes. Overlaps are refused by
 -- the app (hours-rows.ts), which explains them per row.
-create or replace function public.replace_opening_hours(p_business_id uuid, p_hours jsonb, p_last_start_before_close int)
+create or replace function public.replace_opening_hours(p_business_id uuid, p_hours jsonb, p_last_start_before_close int, p_notes text)
 returns int
 language plpgsql
 set search_path = ''
@@ -39,7 +42,7 @@ begin
   if jsonb_typeof(p_hours) <> 'array' or jsonb_array_length(p_hours) > 28 then
     raise exception 'invalid_hours' using errcode = 'P0001';
   end if;
-  update public.businesses set last_start_before_close = p_last_start_before_close where id = p_business_id;
+  update public.businesses set last_start_before_close = p_last_start_before_close, hours_notes = btrim(p_notes) where id = p_business_id;
   delete from public.opening_hours where business_id = p_business_id;
   insert into public.opening_hours (business_id, day, opens, closes)
   select p_business_id, (e ->> 'day')::smallint, (e ->> 'opens')::time, (e ->> 'closes')::time
@@ -48,4 +51,4 @@ begin
 end;
 $$;
 
-revoke execute on function public.replace_opening_hours(uuid, jsonb, int) from public, anon, authenticated;
+revoke execute on function public.replace_opening_hours(uuid, jsonb, int, text) from public, anon, authenticated;

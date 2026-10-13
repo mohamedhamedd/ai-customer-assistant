@@ -14,12 +14,16 @@ export interface HoursRow {
   closes: string;
 }
 
-// The week: its ranges, and how long before closing the last appointment
-// starts (minutes; 0 means any time before closing).
+// The week: its ranges, how long before closing the last appointment
+// starts (minutes; 0 means any time before closing), and notes for what the
+// ranges can't say ("Saturdays: first and third of the month only").
 export interface Week {
   hours: HoursRow[];
   lastStartBeforeClose: number;
+  notes: string;
 }
+
+export const NOTES_MAX = 500;
 
 export const LAST_START_CHOICES = [0, 15, 30, 45, 60, 90, 120] as const;
 
@@ -70,14 +74,16 @@ export function validateHours(input: unknown): { ok: true; rows: HoursRow[] } | 
   return { ok: true, rows: rows.map(({ day, opens, closes }) => ({ day, opens, closes })) };
 }
 
-// The week as the admin sends it: the ranges (validateHours) and the
-// last-start setting.
+// The week as the admin sends it: the ranges (validateHours), the
+// last-start setting and the notes.
 export function validateWeek(input: unknown): { ok: true; week: Week } | { ok: false; error: string; errors: HoursRowError[] } {
-  const body = (input && typeof input === "object" ? input : {}) as { hours?: unknown; lastStartBeforeClose?: unknown };
+  const body = (input && typeof input === "object" ? input : {}) as { hours?: unknown; lastStartBeforeClose?: unknown; notes?: unknown };
   const last = body.lastStartBeforeClose ?? 0;
   if (typeof last !== "number" || !Number.isInteger(last) || last < 0 || last > 240) return { ok: false, error: "Choose when the last appointment starts.", errors: [] };
+  const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+  if (notes.length > NOTES_MAX) return { ok: false, error: `Keep the notes under ${NOTES_MAX} characters.`, errors: [] };
   const hours = validateHours(body.hours);
-  return hours.ok ? { ok: true, week: { hours: hours.rows, lastStartBeforeClose: last } } : hours;
+  return hours.ok ? { ok: true, week: { hours: hours.rows, lastStartBeforeClose: last, notes } } : hours;
 }
 
 // "45 minutes", "1 hour", "1 hour 30 minutes".

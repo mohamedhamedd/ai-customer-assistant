@@ -41,8 +41,9 @@ export type ToolOutput =
   | ({ ok: true } & Record<string, unknown>)
   // details: confirm_first only, what would be saved (confirm.ts).
   // options: choose_service and service_not_found, service names to offer.
-  // hours: outside_opening_hours, the week's hours, one line a day.
-  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[] };
+  // hours, notes: outside_opening_hours, the week's hours (one line a day)
+  // and the business's notes on them.
+  | { ok: false; error: string; message: string; details?: Record<string, unknown>; options?: string[]; hours?: string[]; notes?: string };
 
 export interface ToolRunResult {
   output: ToolOutput;
@@ -311,13 +312,14 @@ async function openingHoursFromDb(ctx: ToolContext): Promise<Week> {
   const client = ctx.client ?? db();
   const [hours, business] = await Promise.all([
     client.from("opening_hours").select("day, opens, closes").eq("business_id", ctx.businessId).order("day").order("opens"),
-    client.from("businesses").select("last_start_before_close").eq("id", ctx.businessId).single(),
+    client.from("businesses").select("last_start_before_close, hours_notes").eq("id", ctx.businessId).single(),
   ]);
   if (hours.error || business.error) throw new Error(`Loading the opening hours failed: ${(hours.error ?? business.error)!.message}`);
   return {
     // Postgres returns "09:00:00".
     hours: hours.data.map((r) => ({ day: r.day, opens: r.opens.slice(0, 5), closes: r.closes.slice(0, 5) })),
     lastStartBeforeClose: business.data.last_start_before_close,
+    notes: business.data.hours_notes,
   };
 }
 
@@ -362,8 +364,9 @@ const createConsultationRequest = defineTool({
             output: {
               ok: false,
               error: "outside_opening_hours",
-              message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}; ask which they prefer.`,
+              message: `Nothing is saved: ${why}. Tell the customer, and suggest a time within the opening hours (hours, local time)${start.reason === "too_late" ? `, such as ${formatTime(start.latest)} or earlier` : ""}${week.notes ? ", keeping to the notes" : ""}; ask which they prefer.`,
               hours: describeHours(week.hours),
+              ...(week.notes ? { notes: week.notes } : {}),
             },
           },
         };

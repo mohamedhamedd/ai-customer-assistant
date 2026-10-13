@@ -277,7 +277,7 @@ A business's weekly opening hours, one row per time range: a day with a lunch br
 | `closes` | time | no | | After `opens`, or `00:00` for midnight (`CHECK`) |
 | `created_at` | timestamptz | no | `now()` | |
 
-Unique `(business_id, day, opens)`. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `replace_opening_hours(business, rows jsonb, last_start int)` replaces the week and the setting in one transaction (at most 28 ranges). RLS on, no anon/authenticated privileges. Not covered yet: closures on given dates (holidays) and every-other-week days.
+Unique `(business_id, day, opens)`. Overlapping ranges are refused by the app, which explains them per range. `businesses.last_start_before_close` (smallint, minutes, 0 to 240, default 0) holds when the last appointment starts ("one hour before closing" at 5 PM allows 4:00 PM). `businesses.hours_notes` (text, at most 500, default `''`) holds what the ranges can't say: days that differ by week, holidays. `replace_opening_hours(business, rows jsonb, last_start int, notes text)` replaces the week, the setting and the notes in one transaction (at most 28 ranges). RLS on, no anon/authenticated privileges. Dated closures aren't checked in code.
 
 ### 3.7 `leads`
 

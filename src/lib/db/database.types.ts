@@ -7,14 +7,14 @@ export type Database = {
           Tables: {
             "businesses": {
                   Row: {
-                    "assistant_guidelines": string,"created_at": string,"description": string,"id": string,"last_start_before_close": number,"name": string,"slug": string,"timezone": string
+                    "assistant_guidelines": string,"created_at": string,"description": string,"hours_notes": string,"id": string,"last_start_before_close": number,"name": string,"slug": string,"timezone": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"last_start_before_close"?: number,"name": string,"slug": string,"timezone"?: string
+                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"hours_notes"?: string,"id"?: string,"last_start_before_close"?: number,"name": string,"slug": string,"timezone"?: string
                   }
                   Update: {
-                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"id"?: string,"last_start_before_close"?: number,"name"?: string,"slug"?: string,"timezone"?: string
+                    "assistant_guidelines"?: string,"created_at"?: string,"description"?: string,"hours_notes"?: string,"id"?: string,"last_start_before_close"?: number,"name"?: string,"slug"?: string,"timezone"?: string
                   }
                   Relationships: [
                     
@@ -321,7 +321,7 @@ isOneToOne: false
 { Args: Record<PropertyKey, never>; Returns: number
                            },
 "replace_opening_hours":
-{ Args: { "p_business_id": string,"p_hours": Json,"p_last_start_before_close": number }; Returns: number
+{ Args: { "p_business_id": string,"p_hours": Json,"p_last_start_before_close": number,"p_notes": string }; Returns: number
                            },
 "replace_services":
 { Args: { "p_business_id": string,"p_services": Json }; Returns: number
