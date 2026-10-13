@@ -45,7 +45,7 @@ The server validates its configuration at startup. If anything is missing or inv
 
 ## Database
 
-Schema lives in `supabase/migrations/` as plain SQL; `supabase/seed.sql` inserts the demo business. The design, every constraint and the reasoning behind them are in [docs/database-design.md](docs/database-design.md).
+Schema lives in `supabase/migrations/` as plain SQL; `supabase/seed.sql` inserts the demo business with its services table and opening hours (its documents are ingested separately). The design, every constraint and the reasoning behind them are in [docs/database-design.md](docs/database-design.md).
 
 Eight tables in three groups:
 
@@ -64,7 +64,10 @@ After changing a migration: `npm run db:reset && npm run db:types`.
 ```bash
 npm run ingest -- ./data/sample-clinic            # demo business (DEMO_BUSINESS_SLUG)
 npm run ingest -- ./my-docs --business my-slug
+npm run ingest -- ./data/sample-clinic --replace  # an edited file replaces its document
 ```
+
+**One place per fact.** Service names, prices, durations and opening hours belong in Admin > Services and Admin > Opening hours, not in documents: the assistant answers them from the tables as written, and a second copy in a document would drift from them. Documents hold everything descriptive (what a service involves, FAQs, policies, insurance, location). The Knowledge base page says so above the upload area. The sample clinic follows this: its prices and hours are in `supabase/seed.sql`, and its documents have none.
 
 Supported: `.txt`, `.md`, text-based `.pdf`. Scanned PDFs and images are rejected with a clear error (they would need OCR or a vision model). The pipeline, in `src/lib/rag/`:
 
@@ -314,7 +317,7 @@ src/
     guard/        Answer check (leak marker, invented figures)
   instrumentation.ts  Fails fast at boot on bad configuration
 supabase/         Local Supabase config, migrations, seed
-data/sample-clinic/  Demo business documents and the demo question/answer map
+data/sample-clinic/  Demo business documents (its prices and hours are in the seed) and the demo question/answer map
 scripts/          CLI scripts (document ingestion, retrieval eval)
 docs/             User stories, UI design brief, delivery plan
 ```

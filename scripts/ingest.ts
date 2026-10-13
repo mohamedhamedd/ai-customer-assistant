@@ -2,6 +2,7 @@
 //
 //   npm run ingest -- ./data/sample-clinic            # uses DEMO_BUSINESS_SLUG
 //   npm run ingest -- ./data/sample-clinic --business acme
+//   npm run ingest -- ./data/sample-clinic --replace  # an edited file replaces its document
 //
 // Runs with --conditions=react-server so the server-only modules load outside
 // Next.js, and --env-file-if-exists=.env.local for configuration.
@@ -16,11 +17,14 @@ async function main() {
   const args = process.argv.slice(2);
   const dir = args.find((a) => !a.startsWith("--"));
   if (!dir) {
-    console.error("Usage: npm run ingest -- <folder> [--business <slug>]");
+    console.error("Usage: npm run ingest -- <folder> [--business <slug>] [--replace]");
     process.exit(2);
   }
   const slugFlag = args.indexOf("--business");
   const slug = slugFlag >= 0 ? args[slugFlag + 1] : env().DEMO_BUSINESS_SLUG;
+  // Without it, a changed file whose title is already in the knowledge base
+  // fails (as an upload would ask first); with it, it replaces that document.
+  const replace = args.includes("--replace");
 
   const { data: business, error } = await db().from("businesses").select("id, name").eq("slug", slug).maybeSingle();
   if (error) throw new Error(error.message);
@@ -41,7 +45,9 @@ async function main() {
       continue;
     }
     const started = Date.now();
-    const result = await ingestDocument({ businessId: business.id, filename, data: await readFile(path.join(dir, filename)) });
+    const data = await readFile(path.join(dir, filename));
+    let result = await ingestDocument({ businessId: business.id, filename, data });
+    if (result.status === "title_taken" && replace) result = await ingestDocument({ businessId: business.id, filename, data, replacesDocumentId: result.existingDocumentId });
     const ms = `${Date.now() - started}ms`.padStart(7);
     switch (result.status) {
       case "ready":

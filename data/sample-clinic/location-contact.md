@@ -1,18 +1,4 @@
-# Lakeside Dental Clinic — Hours and Location
-
-## Opening hours
-
-| Day | Hours |
-|---|---|
-| Monday | 8:00 AM to 5:00 PM |
-| Tuesday | 8:00 AM to 5:00 PM |
-| Wednesday | 8:00 AM to 5:00 PM |
-| Thursday | 8:00 AM to 5:00 PM |
-| Friday | 8:00 AM to 2:00 PM |
-| Saturday | 9:00 AM to 1:00 PM (first and third Saturday of the month only) |
-| Sunday | Closed |
-
-All times are Pacific Time. The last appointment of the day starts one hour before closing. We are closed on major US public holidays; holiday closures are posted on our front door and voicemail two weeks in advance.
+# Lakeside Dental Clinic — Location and Contact
 
 ## Contact
 

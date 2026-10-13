@@ -54,7 +54,7 @@ Yes, for larger treatments we offer an in-house plan for orthodontics and CareCr
 ## The clinic
 
 ### Where are you and is there parking?
-We are at 420 Lakeshore Drive in Lake Oswego, with free parking behind the building. See our Hours and Location guide for directions and bus routes.
+We are at 420 Lakeshore Drive in Lake Oswego, with free parking behind the building. See our Location and Contact guide for directions and bus routes.
 
 ### What languages do you speak?
 Our team speaks English and Spanish. Dr. Okafor also speaks French.
