@@ -335,6 +335,19 @@ test("a plain yes to a read-back saves it in code, even when the model doesn't c
   );
 });
 
+test("a plain yes commits only the read-back it answers first: a yes to a later question commits nothing", async () => {
+  const sessionId = session();
+  const phone = uniquePhone();
+  const details = { name: "Itest Mo Late", phone };
+  // Seen live: "Thursday at 11?" got "actually make it Friday", and a yes two
+  // messages later, to another question, committed Thursday.
+  await run(newInput(sessionId, `I'm Mo, ${phone}`), callsTools([{ name: "save_lead", args: details }], `Just to confirm: Mo, ${formatted(phone)}. Is that right?`).deps);
+  await run(newInput(sessionId, "actually wait, which days are you open?"), replies("Monday to Saturday. Would you like to go ahead?"));
+  const { events } = await run(newInput(sessionId, "yes"), replies("Great."));
+  assert.equal((await conversationOf(sessionId)).lead_id, null, "the yes answered another question: nothing saved by the code");
+  assert.deepEqual(actionsOf(events), []);
+});
+
 test("anything but a plain yes goes to the model as before: nothing is saved by the code", async () => {
   const sessionId = session();
   const phone = uniquePhone();

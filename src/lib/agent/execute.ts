@@ -63,6 +63,8 @@ export interface Proposals {
   // What followed it: the read-back and the customer's answer (confirm.ts).
   readBack: { at: Date; delivered: boolean } | null;
   answerAt: Date | null;
+  // Which customer message that answer is.
+  answerId?: number | null;
 }
 
 const NO_PROPOSAL: Proposals = { latest: null, readBack: null, answerAt: null };
@@ -121,7 +123,7 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
 
   const { data: after, error: afterError } = await client
     .from("messages")
-    .select("role, content, created_at, replaced_reason")
+    .select("id, role, content, created_at, replaced_reason")
     .eq("conversation_id", ctx.conversationId)
     // The database's own timestamp string: a Date would drop the microseconds.
     .gt("created_at", proposal.created_at)
@@ -138,6 +140,7 @@ async function proposalsFromDb(ctx: ToolContext, tool: string): Promise<Proposal
         { at: new Date(readBack.created_at), delivered: readBack.replaced_reason === null }
       : null,
     answerAt: answer ? new Date(answer.created_at) : null,
+    answerId: answer?.id ?? null,
   };
 }
 
@@ -153,12 +156,15 @@ const defaultDeps: ExecuteDeps = {
 
 // The read-backs this message answers: for each write tool, its latest call
 // in the conversation, when that was a proposal (confirm_first) whose
-// read-back reached the customer and this is their answer (confirm.ts). In
-// the order they were proposed (contact before request). The chat commits
-// them when the answer is a plain yes (turn.ts), instead of trusting the
-// model to call the tool again: seen live, it said "I have updated your
-// contact details" after the yes without calling anything.
-export async function answeredProposals(ctx: ToolContext, deps: Partial<ExecuteDeps> = {}): Promise<{ name: string; arguments: string }[]> {
+// read-back reached the customer and this message is their first reply to
+// it (confirm.ts). In the order they were proposed (contact before request).
+// The chat commits them when the answer is a plain yes (turn.ts), instead of
+// trusting the model to call the tool again: seen live, it said "I have
+// updated your contact details" after the yes without calling anything.
+// Only the first reply: seen live, "crown Thursday at 11?" got "actually
+// move it to Friday", and a yes two messages later, to another question,
+// committed Thursday.
+export async function answeredProposals(ctx: ToolContext, answerId: number, deps: Partial<ExecuteDeps> = {}): Promise<{ name: string; arguments: string }[]> {
   const d = { ...defaultDeps, ...deps };
   const writes = Object.values(d.tools).filter((t) => t.writes && t.confirm);
   const client = ctx.client ?? db();
@@ -183,7 +189,7 @@ export async function answeredProposals(ctx: ToolContext, deps: Partial<ExecuteD
     const parsed = p.tool.schema.safeParse(p.arguments);
     // Keyed as read back (a change's details hold its whole new state).
     const proposal = parsed.success ? p.tool.confirm?.propose({ ...(parsed.data as Record<string, unknown>), ...p.details }, ctx) : null;
-    if (proposal && (await confirmed(p.tool, proposal.key, ctx, d)).ok) answered.push({ id: p.id, name: p.tool.name, arguments: JSON.stringify(p.arguments) });
+    if (proposal && (await confirmed(p.tool, proposal.key, ctx, d, answerId)).ok) answered.push({ id: p.id, name: p.tool.name, arguments: JSON.stringify(p.arguments) });
   }
   return answered.sort((a, b) => a.id - b.id).map(({ name, arguments: args }) => ({ name, arguments: args }));
 }
@@ -291,8 +297,10 @@ export async function executeTool(name: string, rawArgs: string, ctx: ToolContex
 // keyed like the new call's, as read back: the details it returned (the
 // service by its exact name, from prepare; for a change, the whole new
 // state) over what the model sent.
-async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps): Promise<{ ok: boolean; details: Record<string, unknown> }> {
-  const { latest, readBack, answerAt } = await d.proposals(ctx, tool.name);
+// With answerId: and only if that message is the customer's first reply to the read-back.
+async function confirmed(tool: Tool, key: string, ctx: ToolContext, d: ExecuteDeps, answerId?: number): Promise<{ ok: boolean; details: Record<string, unknown> }> {
+  const { latest, readBack, answerAt, answerId: firstReply } = await d.proposals(ctx, tool.name);
+  if (answerId !== undefined && firstReply !== answerId) return { ok: false, details: {} };
   const parsed = latest ? tool.schema.safeParse(latest.arguments) : null;
   const details = latest?.details && typeof latest.details === "object" ? (latest.details as Record<string, unknown>) : {};
   let proposed = null;

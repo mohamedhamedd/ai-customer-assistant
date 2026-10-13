@@ -156,6 +156,13 @@ test("one request is one visit: services for the same time together, other times
   assert.match(p, /To add a service to a visit, or swap one, send the full new list/);
 });
 
+test("seen in the second stress test: no email after a phone, no second confirmation, next Friday from the calendar", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  assert.match(p, /A phone number alone is enough, and so is an email alone: never ask for the other one/);
+  assert.match(p, /Once it has, say it's done; don't ask "Is that right\?" about it again/);
+  assert.match(p, /"Next Friday" is the day labelled next Friday/);
+});
+
 test("the assistant stays on the business and keeps conditions in short answers", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.match(p, /in scope, even when it sounds general/);

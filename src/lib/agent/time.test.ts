@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatHuman, formatLocal, upcomingDays, zonedLocalToUtc } from "./time";
+import { formatHuman, formatLocal, upcomingDays, weekMismatch, zonedLocalToUtc } from "./time";
 
 const LA = "America/Los_Angeles";
 
@@ -63,4 +63,20 @@ test("upcoming days: today, tomorrow, and no duplicate date across the clock cha
   assert.equal(tuesday[13], "Monday 2026-10-26 (4th and last Monday of October)", "two weeks on: no label");
   // Which of its weekday in the month: for hours like "first and third Saturday only".
   assert.equal(upcomingDays(new Date("2026-10-13T17:00:00Z"), LA, 12)[11], "Saturday 2026-10-24 (next Saturday; 4th Saturday of October)");
+});
+
+test("this or next week: the date must match what the customer said", () => {
+  const tuesday = new Date("2026-10-13T17:00:00Z"); // Tue Oct 13, 10 AM PDT
+  const check = (local: string, said: string[]) => weekMismatch(local, said, tuesday, LA);
+  // Seen live: "next Thursday" sent as this Thursday.
+  assert.deepEqual(check("2026-10-15T11:00", ["porcelain crown next Thursday at 11am"]), { said: "next Thursday", meant: "2026-10-22" });
+  assert.equal(check("2026-10-22T11:00", ["porcelain crown next Thursday at 11am"]), null);
+  assert.deepEqual(check("2026-10-22T11:00", ["this Thursday please"]), { said: "this Thursday", meant: "2026-10-15" });
+  assert.equal(check("2026-10-15T11:00", ["Thursday at 11"]), null, "no week named: either is theirs to confirm");
+  assert.equal(check("2026-10-22T11:00", ["next Thursday", "actually this Thursday is better", "no wait, the 22nd"]), null, "the latest mention of the day decides: no week named");
+  assert.equal(check("2026-10-16T10:00", ["next Thursday at 11"]), null, "another weekday: not this rule's");
+  // On a Sunday no Friday is left this week: "this Friday" is the coming one.
+  const sunday = new Date("2026-10-11T23:30:00Z");
+  assert.equal(weekMismatch("2026-10-16T10:00", ["this Friday at 10"], sunday, LA), null);
+  assert.equal(weekMismatch("2026-10-16T10:00", ["next Friday at 10"], sunday, LA), null);
 });

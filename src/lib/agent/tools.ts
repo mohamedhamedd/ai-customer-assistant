@@ -9,7 +9,7 @@ import { retrieve, type Source } from "@/lib/rag/retrieve";
 import { isPlainYes } from "@/lib/chat/affirm";
 import { loadServices, loadWeek } from "./tables";
 import { chooseService, MAX_LISTED, namedIn, words, type ServiceChoice, type ServiceEvidence } from "./service-choice";
-import { formatHuman, formatLocal, zonedLocalToUtc } from "./time";
+import { formatHuman, formatLocal, weekMismatch, zonedLocalToUtc } from "./time";
 
 // The agent's three tools (design D-02, D-08). One registry serves text chat
 // and voice: same schemas, same validation, same database functions.
@@ -432,6 +432,24 @@ function chooseServices(requested: string[], evidence: ServiceEvidence): { ok: t
   return toChoose.length ? { ok: false, result: chooseRefusal(toChoose) } : { ok: true, services: chosen };
 }
 
+// The customer said "next Thursday" and the date is this Thursday, or the
+// reverse (time.ts weekMismatch): nothing is saved, and the tool says which
+// date they meant. The calendar in the prompt labels both; seen live, the
+// model still sent this week's date for "next Thursday" now and then.
+function weekRefusal(local: string, said: string[], ctx: ToolContext): ToolRunResult | null {
+  const mismatch = weekMismatch(local, said, ctx.now(), ctx.timeZone);
+  if (!mismatch) return null;
+  const meant = zonedLocalToUtc(`${mismatch.meant}T${local.slice(11, 16) || "12:00"}`, ctx.timeZone);
+  const date = meant.ok ? formatHuman(meant.at, ctx.timeZone).replace(/ at .*/, "") : mismatch.meant;
+  return {
+    output: {
+      ok: false,
+      error: "check_date",
+      message: `Nothing is saved: the customer said "${mismatch.said}", which is ${date} (${mismatch.meant}), not ${local.slice(0, 10)}. Call again with that date, keeping the time.`,
+    },
+  };
+}
+
 // No appointment can start at that local time (opening hours, closed dates,
 // the last start): the refusal, with the hours to suggest another time. Null
 // when it can, or when the time itself is invalid or past (run() says what's
@@ -492,6 +510,8 @@ const createConsultationRequest = defineTool({
     const [evidence, week] = await Promise.all([(ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx), weekOf(ctx)]);
     const chosen = chooseServices(args.services, evidence);
     if (!chosen.ok) return { result: chosen.result };
+    const wrongWeek = weekRefusal(args.preferred_datetime, evidence.customerSaid, ctx);
+    if (wrongWeek) return { result: wrongWeek };
     const closed = hoursRefusal(week, args.preferred_datetime, ctx);
     if (closed) return { result: closed };
     return { args: { ...args, services: chosen.services } };
@@ -624,12 +644,17 @@ async function findRequest(local: string, ctx: ToolContext, verb: "changed" | "c
         ok: false,
         error: "request_not_found",
         message: listed.length
-          ? `Nothing is ${verb}: there is no request in this conversation at that time. This customer's requests: ${listed.join("; ")}. Use the current_datetime of the one they mean.`
-          : "Nothing is " + verb + ": this customer has no consultation request in this conversation." + (verb === "changed" ? " To ask for one, use create_consultation_request." : ""),
+          ? `Nothing is ${verb}: there is no request in this conversation at that time. This customer's requests: ${listed.join("; ")}. Use the current_datetime of the one they mean.${verb === "changed" ? UNSAVED : ""}`
+          : "Nothing is " + verb + ": this customer has no consultation request in this conversation." + (verb === "changed" ? ` To ask for one, use create_consultation_request.${UNSAVED}` : ""),
       },
     },
   };
 }
+
+// Seen live: "Thursday at 11?" got "actually make it Friday", and the model
+// tried to change a request that was only read back.
+const UNSAVED =
+  " If the request they mean was only read back and never saved (\"Not saved yet\" under 'Already done in this conversation'), nothing was saved for the old time: call create_consultation_request with the new details instead, and read those back.";
 
 // A request that isn't pending any more: confirmed by the team (theirs now),
 // or already cancelled.
@@ -687,7 +712,10 @@ const changeConsultationRequest = defineTool({
     // instead of the crown" names both, and only the veneer is being chosen).
     const kept = (args.services ?? []).flatMap((s) => request.services.filter((c) => sameName(c, s)));
     const added = (args.services ?? []).filter((s) => !request.services.some((c) => sameName(c, s)));
-    const [evidence, week] = await Promise.all([added.length ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null, args.preferred_datetime ? weekOf(ctx) : null]);
+    const [evidence, week] = await Promise.all([
+      added.length || args.preferred_datetime ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null,
+      args.preferred_datetime ? weekOf(ctx) : null,
+    ]);
     let services = request.services;
     if (args.services) {
       let fresh: string[] = [];
@@ -700,6 +728,10 @@ const changeConsultationRequest = defineTool({
       if (services.length > MAX_SERVICES) return { result: invalid(`at most ${MAX_SERVICES} services in one request: make another request for the rest`) };
     }
     const preferred = args.preferred_datetime ?? formatLocal(request.preferredAt, ctx.timeZone);
+    if (args.preferred_datetime && evidence) {
+      const wrongWeek = weekRefusal(args.preferred_datetime, evidence.customerSaid, ctx);
+      if (wrongWeek) return { result: wrongWeek };
+    }
     if (args.preferred_datetime && week) {
       const closed = hoursRefusal(week, args.preferred_datetime, ctx);
       if (closed) return { result: closed };

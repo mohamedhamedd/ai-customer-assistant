@@ -308,7 +308,7 @@ export async function runChatTurn(
     // and can't say it's saved without it being saved. First, so the state
     // below already shows it.
     const preCalls = [];
-    for (const call of isPlainYes(input.message) ? await answeredProposals(toolCtx) : []) {
+    for (const call of isPlainYes(input.message) ? await answeredProposals(toolCtx, userMessageId) : []) {
       emit({ type: "tool", name: call.name, status: "started" });
       const outcome = await executeTool(call.name, call.arguments, toolCtx);
       emit({ type: "tool", name: call.name, status: "finished", ok: outcome.ok });
