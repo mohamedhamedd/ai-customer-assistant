@@ -1,6 +1,8 @@
+import { after } from "next/server";
 import { z } from "zod";
 import { ChatHttpError } from "@/lib/chat/turn";
 import { listDocuments, uploadDocument } from "@/lib/admin/knowledge";
+import { fillServicesIfEmpty } from "@/lib/admin/services";
 import { withBusiness } from "@/lib/admin/respond";
 import { readFormCapped } from "@/lib/http";
 import { enforce, LIMITS } from "@/lib/rate-limit";
@@ -31,6 +33,10 @@ export function POST(request: Request, ctx: RouteContext<"/api/admin/[slug]/docu
     if (replaces !== null && (typeof replaces !== "string" || !z.uuid().safeParse(replaces).success)) {
       throw new ChatHttpError(400, "Invalid document to replace.");
     }
-    return Response.json(await uploadDocument(business.id, file, replaces ?? undefined));
+    const result = await uploadDocument(business.id, file, replaces ?? undefined);
+    // A business that hasn't listed its services gets them suggested from
+    // its documents, after the response (it's a model call).
+    if (result.status === "ready") after(() => fillServicesIfEmpty(business.id));
+    return Response.json(result);
   });
 }

@@ -163,6 +163,8 @@ test("a business's list of services is shown, and the request must use one of it
   assert.match(p, /# Services customers can request\nA consultation request can only be for one of these, named exactly as written:\n- Routine check-up and cleaning\n- Traditional braces \(full treatment\)/);
   assert.ok(p.indexOf("# Services customers can request") < p.indexOf("# Date and time"), "static: part of the cached prefix");
   assert.match(p, /the service must be one of those, exactly as written/);
+  // Seen live: "a whitening consultation" was mapped to the only listed service containing "consultation".
+  assert.match(p, /Match by what the service is about, not by words like "consultation"/);
   // Without a list: no section, and the service is checked with search instead.
   const none = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.doesNotMatch(none, /# Services customers can request/);

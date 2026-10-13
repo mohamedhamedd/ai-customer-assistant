@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Loader2, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { MAX_SLUG_CHARS } from "@/lib/chat/limits";
 import { parseServices, PROFILE_LIMITS, TIMEZONES, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
 import { useCopy } from "./ui";
@@ -11,17 +12,35 @@ import { useCopy } from "./ui";
 const input =
   "w-full rounded-lg border bg-surface text-[14px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
 
+export type SuggestResult = { ok: true; services: string[] } | { ok: false; error: string };
+
 export function ProfileFields({
   values,
   errors,
   onChange,
   slugHint,
+  onSuggestServices,
 }: {
   values: Profile;
   errors: FieldErrors;
   onChange: (field: ProfileField, value: string) => void;
   slugHint?: string;
+  // Settings only (a new business has no documents yet).
+  onSuggestServices?: () => Promise<SuggestResult>;
 }) {
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestNote, setSuggestNote] = useState<{ text: string; error: boolean } | null>(null);
+  const suggest = async () => {
+    if (!onSuggestServices || suggesting) return;
+    setSuggesting(true);
+    setSuggestNote(null);
+    const result = await onSuggestServices();
+    setSuggesting(false);
+    if (!result.ok) return setSuggestNote({ text: result.error, error: true });
+    if (result.services.length === 0) return setSuggestNote({ text: "No services found in your documents. Add them by hand.", error: false });
+    onChange("services", result.services.join("\n"));
+    setSuggestNote({ text: `${result.services.length} found in your documents. Check them, then save.`, error: false });
+  };
   const border = (f: ProfileField) => (errors[f] ? "border-danger" : "border-border");
   // The business's own zone is kept even if this browser's list lacks it.
   const zones = TIMEZONES.includes(values.timezone) ? TIMEZONES : [values.timezone, ...TIMEZONES];
@@ -118,7 +137,7 @@ export function ProfileFields({
         id="services"
         label="Services customers can request"
         error={errors.services}
-        hint="One per line, named as customers should see them. A consultation request can only be for one of these (the assistant matches what the customer says, e.g. “braces”, to your name for it). Leave empty to accept any service."
+        hint="One per line, named as customers should see them. A consultation request can only be for one of these (the assistant matches what the customer says, e.g. “a trial”, to your name for it). Filled in from your documents when you upload them, if empty. Leave empty to accept any service."
         count={[parseServices(values.services).length, PROFILE_LIMITS.services]}
       >
         <textarea
@@ -131,6 +150,25 @@ export function ProfileFields({
           aria-describedby="services-hint"
           className={`${input} ${border("services")} resize-y p-3 leading-relaxed`}
         />
+        {onSuggestServices && (
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={suggest}
+              disabled={suggesting}
+              aria-busy={suggesting}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[13px] font-medium hover:bg-surface-muted disabled:opacity-50"
+            >
+              {suggesting ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : <Sparkles aria-hidden className="size-3.5" />}
+              {suggesting ? "Reading your documents…" : "Suggest from documents"}
+            </button>
+            {suggestNote && (
+              <p role="status" className={`text-[12px] ${suggestNote.error ? "text-danger" : "text-text-muted"}`}>
+                {suggestNote.text}
+              </p>
+            )}
+          </div>
+        )}
       </Field>
     </div>
   );

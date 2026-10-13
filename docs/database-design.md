@@ -142,6 +142,7 @@ Conventions used in every table:
 | `description` | text | no | `''` | One-paragraph summary used in the system prompt |
 | `timezone` | text | no | `'America/Los_Angeles'` | IANA name. Used to resolve "next Tuesday at 3pm" and to display times |
 | `assistant_guidelines` | text | no | `''` | The business's own rules for its assistant, added to the system prompt after the shared rules (PR-15). Max 2,000 characters |
+| `consultation_services` | text[] | no | `'{}'` | The services customers can request a consultation for, as the business names them. `create_consultation_request` accepts only these (empty: any). Suggested from the business's documents when empty; edited in Settings. At most 50 (`CHECK`), each at most 120 characters (app) |
 | `created_at` | timestamptz | no | `now()` | |
 
 Checks (PR-15): `slug` lowercase words joined by single dashes, at most 64 characters (the chat URL rule); `name` 1–100 characters after trimming; `description` at most 500. The admin form and the server validate the same limits; the checks make sure no other path stores more.

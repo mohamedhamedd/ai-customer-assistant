@@ -242,16 +242,18 @@ test("confirm before write: the PR-16 case only proposes; the customer's yes com
 test("confirm before write: contact and consultation proposed together commit together on the yes", async () => {
   const sessionId = session();
   const business = (await findBusiness(env().DEMO_BUSINESS_SLUG))!;
+  // One of the demo business's services if it lists them (the request must be one of those), any service if not.
+  const service = business.services[0] ?? "teeth whitening";
   const local = `${formatLocal(new Date(Date.now() + 7 * 86_400_000), business.timezone).slice(0, 10)}T15:00`;
   const at = zonedLocalToUtc(local, business.timezone);
   assert.ok(at.ok);
   const email = `chat-itest-${randomUUID().slice(0, 8)}@example.com`;
   const calls = [
     { name: "save_lead", args: { name: "Sara Ali", email } },
-    { name: "create_consultation_request", args: { service: "teeth whitening", preferred_datetime: local } },
+    { name: "create_consultation_request", args: { service, preferred_datetime: local } },
   ];
 
-  const propose = callsTools(calls, `Just to confirm: Sara Ali, ${email}, teeth whitening on ${formatHuman(at.at, business.timezone)}. Is that right?`);
+  const propose = callsTools(calls, `Just to confirm: Sara Ali, ${email}, ${service} on ${formatHuman(at.at, business.timezone)}. Is that right?`);
   await run(newInput(sessionId, `I'm Sara Ali, ${email}, whitening on ${local}`), propose.deps);
   assert.deepEqual(
     propose.toolResults().map((r) => [r.error, r.details.preferred_time]),

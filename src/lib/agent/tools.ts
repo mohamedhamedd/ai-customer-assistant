@@ -360,7 +360,8 @@ function withServiceOptions(parameters: Record<string, unknown>, services: strin
       service: {
         type: "string",
         enum: services,
-        description: "The service the consultation is for: one of these, exactly as written. Match what the customer asked for to one of them.",
+        description:
+          "The service the consultation is for: one of these, exactly as written. Match by what the customer wants (a consultation about X is for the X service), not by the word \"consultation\".",
       },
     },
   };

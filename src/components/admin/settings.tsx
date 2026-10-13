@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { initials } from "@/lib/initials";
 import { fieldErrors, profileSchema, type FieldErrors, type Profile, type ProfileField } from "@/lib/admin/profile";
-import { focusFirstError, ProfileFields, saveProfile } from "./business-form";
+import { focusFirstError, ProfileFields, saveProfile, type SuggestResult } from "./business-form";
 import { AdminHeader } from "./header";
 import { useToast } from "./ui";
 
@@ -27,6 +27,18 @@ export function Settings({ slug, initial }: { slug: string; initial: Profile }) 
   const change = (field: ProfileField, value: string) => {
     setValues((v) => ({ ...v, [field]: value }));
     setErrors((e) => ({ ...e, [field]: undefined }));
+  };
+
+  // A list from the business's documents, into the form (not saved).
+  const suggestServices = async (): Promise<SuggestResult> => {
+    const failed = "Couldn't read your documents just now. Try again.";
+    try {
+      const res = await fetch(`${api}/services`, { method: "POST", signal: AbortSignal.timeout(70_000) });
+      const body = (await res.json().catch(() => ({}))) as { services?: string[]; error?: string };
+      return res.ok && Array.isArray(body.services) ? { ok: true, services: body.services } : { ok: false, error: body.error ?? failed };
+    } catch {
+      return { ok: false, error: failed };
+    }
   };
 
   const save = async (e: React.FormEvent) => {
@@ -72,7 +84,13 @@ export function Settings({ slug, initial }: { slug: string; initial: Profile }) 
               <p className="mt-1 text-[14px] text-text-muted">Changes apply to the next customer message.</p>
             </div>
             <div className="p-6">
-              <ProfileFields values={values} errors={errors} onChange={change} slugHint="Changing it moves the chat to a new link; the old link stops working." />
+              <ProfileFields
+                values={values}
+                errors={errors}
+                onChange={change}
+                onSuggestServices={suggestServices}
+                slugHint="Changing it moves the chat to a new link; the old link stops working."
+              />
             </div>
             <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
               <button
