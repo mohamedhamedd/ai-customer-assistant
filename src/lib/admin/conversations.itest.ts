@@ -85,7 +85,8 @@ after(async () => {
 const notFound = (err: unknown) => err instanceof ChatHttpError && err.status === 404;
 
 test("the list: this business only, newest activity first, with counts, channels, lead and preview", async () => {
-  const list = await listConversations(mine);
+  const { items: list, total } = await listConversations(mine);
+  assert.equal(total, 2, "the total counts what the list shows");
   assert.deepEqual(
     list.map((c) => [c.id, c.lead?.name ?? null, c.messages, c.channels, c.preview]),
     [
@@ -163,12 +164,12 @@ test("issues: a replaced answer and a failed save show in the transcript, the is
   // A failed save in the text conversation: also an issue. A proposal
   // (confirm_first) or invalid input is the conversation working: not one.
   await toolCall(textConv, "save_lead", {}, { ok: false, error: "outcome_unknown", message: "…" }, false);
-  const all = await listConversations(mine);
+  const { items: all } = await listConversations(mine);
   assert.deepEqual(
     Object.fromEntries(all.map((c) => [c.id, c.hasIssue])),
     { [issueConv]: true, [textConv]: true, [voiceConv]: false },
   );
-  const issues = await listConversations(mine, { issuesOnly: true });
+  const { items: issues } = await listConversations(mine, { issuesOnly: true });
   assert.deepEqual(issues.map((c) => c.id).sort(), [issueConv, textConv].sort());
 
   // Also the search outage from the unanswered-questions test above.
@@ -182,4 +183,24 @@ test("issues: a replaced answer and a failed save show in the transcript, the is
       ["tool_failed", textConv, "search_knowledge failed: temporarily unavailable"],
     ].sort(),
   );
+});
+
+test("the list comes in pages of 25, newest first, with the total; a page past the end is empty", async () => {
+  const many = await business("Many");
+  const ids: string[] = [];
+  for (let i = 0; i < 27; i++) {
+    const id = await conversation(many);
+    await message(id, "user", `Question ${i}`);
+    ids.push(id);
+  }
+  const first = await listConversations(many);
+  assert.deepEqual([first.items.length, first.total, first.page, first.pageSize], [25, 27, 1, 25]);
+  assert.equal(first.items[0].id, ids[26], "newest activity first");
+  const second = await listConversations(many, { page: 2 });
+  assert.deepEqual(
+    second.items.map((c) => c.id),
+    [ids[1], ids[0]],
+  );
+  const past = await listConversations(many, { page: 9 });
+  assert.deepEqual([past.items.length, past.total], [0, 27]);
 });

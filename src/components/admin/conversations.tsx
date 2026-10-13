@@ -9,6 +9,7 @@ import { Markdown } from "@/components/chat/markdown";
 import { Sources } from "@/components/chat/sources";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
+import { Pagination } from "./pagination";
 import { LeadDrawer } from "./lead-drawer";
 import { useCopy } from "./ui";
 
@@ -25,6 +26,9 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
   // overview links here with ?issues=1.
   const [issuesOnly, setIssuesOnly] = useState(params.get("issues") === "1");
   const [list, setList] = useState<ConversationRow[] | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
   const [failed, setFailed] = useState(false);
   // Bumped by Refresh: loads the list and the open transcript again.
   const [reloadKey, setReloadKey] = useState(0);
@@ -33,18 +37,29 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
 
   useEffect(() => {
     let live = true;
-    fetch(`${api}/conversations${issuesOnly ? "?issues=1" : ""}`, { cache: "no-store" })
+    fetch(`${api}/conversations?page=${page}${issuesOnly ? "&issues=1" : ""}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((body: { conversations: ConversationRow[] }) => {
+      .then((body: { items: ConversationRow[]; total: number; pageSize: number }) => {
         if (!live) return;
-        setList(body.conversations);
+        // A page left empty (fewer conversations since): the last one there is.
+        if (body.items.length === 0 && page > 1) return setPage(Math.max(1, Math.ceil(body.total / body.pageSize)));
+        setList(body.items);
+        setTotal(body.total);
+        setPageSize(body.pageSize);
         setFailed(false);
       })
       .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
-  }, [api, reloadKey, issuesOnly]);
+  }, [api, reloadKey, issuesOnly, page]);
+
+  // A new page starts at its top.
+  const listRef = useRef<HTMLUListElement>(null);
+  const goTo = (p: number) => {
+    setPage(p);
+    listRef.current?.scrollTo({ top: 0 });
+  };
 
   // Desktop shows the newest conversation until one is picked; on a phone
   // the list comes first and a pick opens the transcript full width.
@@ -73,7 +88,7 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
             <Loader2 aria-hidden className="size-4 animate-spin" /> Loading conversations…
           </p>
         )}
-        {list && list.length === 0 && !selected && !issuesOnly && (
+        {list && list.length === 0 && !selected && !issuesOnly && page === 1 && (
           <section className="flex flex-col items-center rounded-2xl border border-border bg-surface p-12 text-center">
             <span aria-hidden className="mb-4 flex size-12 items-center justify-center rounded-full bg-surface-muted text-text-muted">
               <MessageSquare className="size-6" />
@@ -81,7 +96,7 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
             <p className="max-w-md text-[14px] text-text-muted">Conversations appear here when customers chat with or call the assistant.</p>
           </section>
         )}
-        {list && (list.length > 0 || selected || issuesOnly) && (
+        {list && (list.length > 0 || selected || issuesOnly || page > 1) && (
           <div className="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-border bg-surface">
             <section aria-label="Conversations" className={`min-h-0 w-full flex-col border-border md:flex md:w-[340px] md:shrink-0 md:border-r ${selected ? "hidden" : "flex"}`}>
               <div className="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-surface-muted px-3 text-[13px] font-medium" role="group" aria-label="Show">
@@ -90,22 +105,26 @@ export function Conversations({ slug, businessName, timeZone }: { slug: string; 
                     key={String(issues)}
                     type="button"
                     aria-pressed={issuesOnly === issues}
-                    onClick={() => setIssuesOnly(issues)}
+                    onClick={() => {
+                      setIssuesOnly(issues);
+                      setPage(1);
+                    }}
                     className={`h-8 rounded-md px-2.5 focus-visible:outline-2 focus-visible:outline-accent ${issuesOnly === issues ? "bg-surface shadow-sm" : "text-text-muted hover:text-text"}`}
                   >
                     {issues ? "Issues" : "All"}
-                    {issuesOnly === issues && ` (${list.length})`}
+                    {issuesOnly === issues && ` (${total})`}
                   </button>
                 ))}
               </div>
               {issuesOnly && list.length === 0 && <p className="p-4 text-[14px] text-text-muted">No conversations with issues.</p>}
-              <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
+              <ul ref={listRef} className="min-h-0 flex-1 divide-y divide-border overflow-y-auto">
                 {list.map((c) => (
                   <li key={c.id}>
                     <ConversationItem conversation={c} active={c.id === shown} onOpen={() => open(c.id)} />
                   </li>
                 ))}
               </ul>
+              <Pagination page={page} pageSize={pageSize} total={total} onPage={goTo} label="conversations" compact />
             </section>
             <section aria-label="Transcript" className={`min-h-0 min-w-0 flex-1 flex-col md:flex ${selected ? "flex" : "hidden"}`}>
               {shown ? (

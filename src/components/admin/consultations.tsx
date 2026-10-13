@@ -1,26 +1,45 @@
 "use client";
 
-import { CalendarDays, Clock, Loader2 } from "lucide-react";
+import { CalendarDays, Clock, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { RequestRow, StatusFilter } from "@/lib/admin/crm";
+import type { ConsultationSort, RequestRow, StatusFilter } from "@/lib/admin/crm";
 import { CONSULTATION_STATUSES, type ConsultationStatus } from "@/lib/db/enums";
 import { formatInZone, relativeTime } from "./format";
 import { AdminHeader } from "./header";
 import { LeadDrawer } from "./lead-drawer";
+import { Pagination } from "./pagination";
 import { CONSULTATIONS_CHANGED, STATUS_LABEL, STATUS_TONE, useToast } from "./ui";
 
 // Consultation requests (US-8.2, 8.3). Pending first by default, soonest
-// preferred time first, all times in the business's timezone.
+// preferred time first, all times in the business's timezone. Sorted five
+// ways, filtered by a range of preferred dates, 25 to a page.
 
 const FILTERS: StatusFilter[] = ["pending", "confirmed", "cancelled", "all"];
 const FILTER_LABEL: Record<StatusFilter, string> = { ...STATUS_LABEL, all: "All" };
 
 type Counts = Record<ConsultationStatus, number>;
 
+const SORT_LABEL: Record<ConsultationSort, string> = {
+  upcoming: "Upcoming first",
+  requested_desc: "Newest requests first",
+  requested_asc: "Oldest requests first",
+  date_asc: "Preferred date, earliest first",
+  date_desc: "Preferred date, latest first",
+};
+
+const dateInput =
+  "h-9 rounded-lg border border-border bg-surface px-2.5 text-[13px] text-text focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
+
 export function Consultations({ slug, timeZone }: { slug: string; timeZone: string }) {
   const api = `/api/admin/${encodeURIComponent(slug)}`;
   const [filter, setFilter] = useState<StatusFilter>("pending");
-  const [data, setData] = useState<{ filter: StatusFilter; requests: RequestRow[]; counts: Counts } | null>(null);
+  const [sort, setSort] = useState<ConsultationSort>("upcoming");
+  // Preferred dates, the business's own ("YYYY-MM-DD"), both included.
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(1);
+  const query = new URLSearchParams({ status: filter, sort, page: String(page), ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString();
+  const [data, setData] = useState<{ query: string; requests: RequestRow[]; total: number; pageSize: number; counts: Counts } | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   // Rows with a status change in flight: their select is locked, so a second
@@ -30,22 +49,34 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
   const [reloadKey, setReloadKey] = useState(0);
   const toast = useToast();
 
-  // Only the latest tab's answer is kept: clicking through tabs quickly can
-  // make an older request answer last.
+  // Only the latest query's answer is kept: clicking through tabs or pages
+  // quickly can make an older request answer last.
   useEffect(() => {
     let live = true;
-    fetch(`${api}/consultations?status=${filter}`, { cache: "no-store" })
+    fetch(`${api}/consultations?${query}`, { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((body: { requests: RequestRow[]; counts: Counts }) => {
+      .then((body: { requests: RequestRow[]; total: number; pageSize: number; counts: Counts }) => {
         if (!live) return;
-        setData({ filter, ...body });
+        // A page left empty (its rows changed elsewhere): the last one there is.
+        if (body.requests.length === 0 && page > 1) return setPage(Math.max(1, Math.ceil(body.total / body.pageSize)));
+        setData({ query, ...body });
         setFailed(false);
       })
       .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
-  }, [api, filter, reloadKey]);
+  }, [api, query, page, reloadKey]);
+
+  // Any other filter starts again from page 1.
+  const refilter = (change: () => void) => {
+    change();
+    setPage(1);
+  };
+  const goTo = (p: number) => {
+    setPage(p);
+    window.scrollTo({ top: 0 });
+  };
 
   const setRowSaving = (id: string, on: boolean) =>
     setSaving((s) => {
@@ -103,7 +134,9 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
     }
   };
 
-  const requests = data?.filter === filter ? data.requests : null;
+  const requests = data?.query === query ? data.requests : null;
+
+  const dated = Boolean(from || to);
   return (
     <>
       <AdminHeader title="Consultations" slug={slug} />
@@ -117,7 +150,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
                   type="button"
                   role="tab"
                   aria-selected={filter === f}
-                  onClick={() => setFilter(f)}
+                  onClick={() => refilter(() => setFilter(f))}
                   className={`flex min-h-9 items-center gap-1.5 rounded-md px-3 text-[13px] ${filter === f ? "border border-border bg-surface font-semibold shadow-sm" : "text-text-muted hover:text-text"}`}
                 >
                   {FILTER_LABEL[f]}
@@ -133,6 +166,46 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
             </p>
           </div>
 
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-[12px] font-medium text-text-muted">
+              Sort
+              <select
+                value={sort}
+                onChange={(e) => refilter(() => setSort(e.target.value as ConsultationSort))}
+                className={`${dateInput} pr-8 font-normal`}
+              >
+                {(Object.keys(SORT_LABEL) as ConsultationSort[]).map((s) => (
+                  <option key={s} value={s}>
+                    {SORT_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[12px] font-medium text-text-muted">
+              Preferred from
+              <input type="date" value={from} max={to || undefined} onChange={(e) => refilter(() => setFrom(e.target.value))} className={`${dateInput} font-normal`} />
+            </label>
+            <label className="flex flex-col gap-1 text-[12px] font-medium text-text-muted">
+              to
+              <input type="date" value={to} min={from || undefined} onChange={(e) => refilter(() => setTo(e.target.value))} className={`${dateInput} font-normal`} />
+            </label>
+            {dated && (
+              <button
+                type="button"
+                onClick={() =>
+                  refilter(() => {
+                    setFrom("");
+                    setTo("");
+                  })
+                }
+                className="inline-flex h-9 items-center gap-1 rounded-lg px-2 text-[13px] font-medium text-text-muted hover:bg-surface-muted hover:text-text"
+              >
+                <X aria-hidden className="size-3.5" />
+                Clear dates
+              </button>
+            )}
+          </div>
+
           {failed && <p className="text-[14px] text-danger">Couldn&apos;t load the requests.</p>}
           {!requests && !failed && (
             <p className="flex items-center gap-2 text-[14px] text-text-muted">
@@ -145,9 +218,11 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
                 <CalendarDays className="size-6" />
               </span>
               <p className="max-w-md text-[14px] text-text-muted">
-                {filter === "all" || filter === "pending"
-                  ? "Consultation requests appear here when customers ask the assistant for one."
-                  : `No ${FILTER_LABEL[filter].toLowerCase()} requests.`}
+                {dated
+                  ? `No ${filter === "all" ? "" : `${FILTER_LABEL[filter].toLowerCase()} `}requests for those dates.`
+                  : filter === "all" || filter === "pending"
+                    ? "Consultation requests appear here when customers ask the assistant for one."
+                    : `No ${FILTER_LABEL[filter].toLowerCase()} requests.`}
               </p>
             </section>
           )}
@@ -192,6 +267,7 @@ export function Consultations({ slug, timeZone }: { slug: string; timeZone: stri
                   </tbody>
                 </table>
               </div>
+              {data && <Pagination page={page} pageSize={data.pageSize} total={data.total} onPage={goTo} label="requests" />}
             </section>
           )}
         </div>

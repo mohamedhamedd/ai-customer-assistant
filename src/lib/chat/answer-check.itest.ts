@@ -79,7 +79,7 @@ test("an invented price is replaced on screen and in the transcript, kept for st
   );
   assert.deepEqual(r.saved, { content: safe, replaced_original: "A crown is $999.", replaced_reason: "Not in the documents or the conversation: $999" });
   const { data: business } = await db().from("businesses").select("id").eq("slug", env().DEMO_BUSINESS_SLUG).single();
-  const issues = await listConversations(business!.id, { issuesOnly: true });
+  const { items: issues } = await listConversations(business!.id, { issuesOnly: true });
   assert.ok(issues.some((c) => c.id === r.conversationId && c.hasIssue));
 });
 

@@ -1,5 +1,7 @@
 import "server-only";
+import { zonedLocalToUtc } from "@/lib/agent/time";
 import { db } from "@/lib/db/supabase";
+import type { Database } from "@/lib/db/database.types";
 import type { Channel, ConsultationStatus } from "@/lib/db/enums";
 import { ChatHttpError } from "@/lib/chat/turn";
 import { knowledgeGaps, recentIssues } from "./conversations";
@@ -162,20 +164,57 @@ export async function statusCounts(businessId: string): Promise<Record<Consultat
   return data as unknown as Record<ConsultationStatus, number>;
 }
 
-// Upcoming requests first (soonest first: what staff confirm next), then
-// past ones (most recent first). Each part is capped, so a long history can
-// never push next week's requests off the list.
-export async function listConsultations(businessId: string, filter: StatusFilter) {
-  const now = new Date().toISOString();
-  const part = (upcoming: boolean) => {
-    let query = db().from("consultation_requests").select(REQUEST_COLUMNS).eq("business_id", businessId);
-    if (filter !== "all") query = query.eq("status", filter);
-    query = upcoming ? query.gte("preferred_at", now) : query.lt("preferred_at", now);
-    return query.order("preferred_at", { ascending: upcoming }).limit(LIST_LIMIT);
+export const CONSULTATION_SORTS = ["upcoming", "requested_desc", "requested_asc", "date_asc", "date_desc"] as const;
+export type ConsultationSort = (typeof CONSULTATION_SORTS)[number];
+
+export interface ConsultationQuery {
+  status: StatusFilter;
+  // upcoming: upcoming soonest first, then past most recent first (what staff confirm next).
+  sort?: ConsultationSort;
+  // Preferred date range, the business's local dates ("YYYY-MM-DD"), both included.
+  from?: string;
+  to?: string;
+  // 1-based.
+  page?: number;
+}
+
+export const CONSULTATION_PAGE_SIZE = 25;
+
+// Midnight at the start of a local date, as an instant; the end of `to` is the next midnight.
+function localDayStart(date: string, timeZone: string, nextDay = false): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + (nextDay ? 1 : 0)));
+  const local = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}T00:00`;
+  const at = zonedLocalToUtc(local, timeZone);
+  return at.ok ? at.at.toISOString() : null;
+}
+
+// One page of requests (admin_consultation_list), and the status counts for the tabs.
+export async function listConsultations(businessId: string, timeZone: string, query: ConsultationQuery) {
+  const page = Math.max(1, query.page ?? 1);
+  const [list, counts] = await Promise.all([
+    // The generated types can't say these parameters take null ("no filter"), which the SQL handles.
+    db().rpc("admin_consultation_list", {
+      p_business_id: businessId,
+      p_status: query.status === "all" ? null : query.status,
+      p_from: query.from ? localDayStart(query.from, timeZone) : null,
+      p_to: query.to ? localDayStart(query.to, timeZone, true) : null,
+      p_sort: query.sort ?? "upcoming",
+      p_limit: CONSULTATION_PAGE_SIZE,
+      p_offset: (page - 1) * CONSULTATION_PAGE_SIZE,
+    } as unknown as Database["public"]["Functions"]["admin_consultation_list"]["Args"]),
+    statusCounts(businessId),
+  ]);
+  if (list.error) throw new Error(`Loading requests failed: ${list.error.message}`);
+  const rows = (list.data ?? []) as unknown as (RequestRecord & { total_count: number })[];
+  return {
+    requests: rows.map(toRequestRow),
+    total: rows.length ? Number(rows[0].total_count) : 0,
+    page,
+    pageSize: CONSULTATION_PAGE_SIZE,
+    counts,
   };
-  const [upcoming, past, counts] = await Promise.all([part(true), part(false), statusCounts(businessId)]);
-  for (const r of [upcoming, past]) if (r.error) throw new Error(`Loading requests failed: ${r.error.message}`);
-  return { requests: [...(upcoming.data ?? []), ...(past.data ?? [])].map(toRequestRow), counts };
 }
 
 export async function setConsultationStatus(businessId: string, requestId: string, status: ConsultationStatus): Promise<RequestRow> {
