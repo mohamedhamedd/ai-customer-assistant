@@ -10,7 +10,6 @@ import path from "node:path";
 import { db } from "@/lib/db/supabase";
 import { env } from "@/lib/env";
 import { ingestDocument } from "@/lib/rag/ingest";
-import { fillServicesIfEmpty } from "@/lib/admin/services";
 import { sourceTypeFromFilename } from "@/lib/rag/extract";
 
 async function main() {
@@ -58,10 +57,6 @@ async function main() {
         break;
     }
   }
-  // A business with no services yet gets them suggested from these
-  // documents (one model call); a list someone saved is left alone.
-  const services = await fillServicesIfEmpty(business.id);
-  if (services.length) console.log(`\nServices (suggested from the documents; check them in Admin > Services): ${services.length}`);
   if (failed) {
     console.error(`\n${failed} file(s) failed.`);
     process.exit(1);

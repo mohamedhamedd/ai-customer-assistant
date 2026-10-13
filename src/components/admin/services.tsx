@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Loader2, Plus, Sparkles, Tags, Trash2, Upload } from "lucide-react";
+import { Download, Loader2, Plus, Tags, Trash2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 import { emptyRow, parseServicesCsv, SERVICE_LIMITS, servicesToCsv, type RowError, type ServiceField, type ServiceRow } from "@/lib/admin/service-rows";
 import { AdminHeader } from "./header";
@@ -8,8 +8,7 @@ import { useToast } from "./ui";
 
 // Services: the business's services as a table (name, category, price,
 // duration, description, whether customers can request it). Edited here,
-// imported from the CSV template, or filled from the business's documents;
-// saved at once.
+// or imported from the CSV template; saved at once.
 
 const input =
   "w-full min-w-0 rounded-lg border bg-surface px-2.5 text-[14px] text-text placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
@@ -37,7 +36,6 @@ export function Services({ slug, initial }: { slug: string; initial: ServiceRow[
   const [rows, setRows] = useState(() => keyed(initial));
   const [errors, setErrors] = useState<RowError[]>([]);
   const [saving, setSaving] = useState(false);
-  const [suggesting, setSuggesting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
   const dirty = JSON.stringify(plain(rows)) !== JSON.stringify(saved);
@@ -61,23 +59,6 @@ export function Services({ slug, initial }: { slug: string; initial: ServiceRow[
     setRows((rs) => [...rs, ...keyed([emptyRow()])]);
     // Focus the new row's name once it's rendered.
     setTimeout(() => document.getElementById(`service-${rows.length}-name`)?.focus(), 0);
-  };
-
-  const fill = async () => {
-    if (suggesting) return;
-    setSuggesting(true);
-    setNote(null);
-    try {
-      const res = await fetch(`${api}/suggest`, { method: "POST", signal: AbortSignal.timeout(100_000) });
-      const body = (await res.json().catch(() => ({}))) as { services?: ServiceRow[]; error?: string };
-      if (!res.ok || !Array.isArray(body.services)) return toast.show(body.error ?? "Couldn't read your documents just now. Try again.", "danger");
-      if (body.services.length === 0) return toast.show("No services found in your documents. Add them here or import the template.", "danger");
-      replaceAll(body.services, `${body.services.length} services found in your documents. Check them (prices and names are copied as written), then save.`);
-    } catch {
-      toast.show("Couldn't read your documents just now. Try again.", "danger");
-    } finally {
-      setSuggesting(false);
-    }
   };
 
   const importFile = async (file: File) => {
@@ -157,10 +138,6 @@ export function Services({ slug, initial }: { slug: string; initial: ServiceRow[
             <span className="font-medium text-text">Can request</span>, under the name written here.
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={fill} disabled={suggesting} aria-busy={suggesting} className={tool}>
-              {suggesting ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : <Sparkles aria-hidden className="size-3.5" />}
-              {suggesting ? "Reading your documents…" : "Fill from documents"}
-            </button>
             <button type="button" onClick={() => picker.current?.click()} className={tool}>
               <Upload aria-hidden className="size-3.5" />
               Import CSV
@@ -183,7 +160,7 @@ export function Services({ slug, initial }: { slug: string; initial: ServiceRow[
               </span>
               <h2 className="max-w-md text-[16px] font-semibold leading-snug">List your services so the assistant names them exactly</h2>
               <p className="mt-2 max-w-md text-[14px] text-text-muted">
-                Fill them from the documents you uploaded, import the CSV template from a spreadsheet, or add them one by one.
+                Import the CSV template from a spreadsheet, or add them one by one.
               </p>
             </section>
           ) : (

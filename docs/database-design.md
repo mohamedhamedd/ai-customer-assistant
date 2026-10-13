@@ -247,7 +247,7 @@ PR-16 kept what its guards blocked or replaced in a `flags` table, with embeddin
 
 ### 3.6.2 `services`
 
-A business's services as rows: the structured, exact part of its knowledge (free-text documents hold the rest). Edited in the admin (as a whole table), imported from a CSV template, or suggested from the documents.
+A business's services as rows: the structured, exact part of its knowledge (free-text documents hold the rest). Edited in the admin (as a whole table) or imported from a CSV template.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---|---|---|
