@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { z } from "zod";
 import { ANSWER_WINDOW_MS } from "./confirm";
 import { executeTool, OUTCOME_UNKNOWN, type AuditRow, type ExecuteDeps, type Proposals, UNAVAILABLE } from "./execute";
+import type { ServiceEvidence } from "./service-choice";
 import {
   consultationSchema,
   resolvePreferredTime,
@@ -80,7 +81,8 @@ test("tool definitions match the validation schemas (no drift)", () => {
 // Executor: never throws, always audits
 // ---------------------------------------------------------------------------
 
-const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW };
+// No services table: the service stays as sent (service-choice.ts).
+const ctx: ToolContext = { businessId: "b", conversationId: "c", channel: "text", timeZone: LA, now: () => NOW, serviceEvidence: async () => ({ services: [], customerSaid: [], offered: [] }) };
 
 const t = (ms: number) => new Date(NOW.getTime() + ms);
 
@@ -248,13 +250,27 @@ test("every call leaves one structured log line, without the arguments", async (
 // A conversation in memory, kept like the database keeps it: every call is
 // audited (a confirm_first call is the proposal), and messages are stamped on
 // the same clock. proposals() reads them like execute.ts reads the tables.
-function conversation(opts: { auditFails?: boolean } = {}) {
+// With services, the business has a services table (service-choice.ts), and
+// the evidence is read from the same messages and audits.
+function conversation(opts: { auditFails?: boolean; services?: ServiceEvidence["services"] } = {}) {
   let clock = 0;
   const tick = (ms = 1) => t((clock += ms));
   const audits: (AuditRow & { at: Date })[] = [];
-  const messages: { role: "user" | "assistant"; at: Date; delivered: boolean }[] = [];
+  const messages: { role: "user" | "assistant"; at: Date; delivered: boolean; text?: string }[] = [];
   const rpcs: string[] = [];
-  const client = { rpc: async (fn: string) => (rpcs.push(fn), { data: { request_id: "R1", status: "pending", created: true }, error: null }) } as unknown as NonNullable<ToolContext["client"]>;
+  const written: Record<string, unknown>[] = [];
+  const client = {
+    rpc: async (fn: string, params: Record<string, unknown>) => (rpcs.push(fn), written.push(params), { data: { request_id: "R1", status: "pending", created: true }, error: null }),
+  } as unknown as NonNullable<ToolContext["client"]>;
+  const serviceEvidence = async (): Promise<ServiceEvidence> => {
+    const offer = audits.findLast((a) => a.result.error === "choose_service");
+    const answered = offer && messages.some((m) => m.role === "user" && m.at > offer.at);
+    return {
+      services: opts.services ?? [],
+      customerSaid: messages.flatMap((m) => (m.role === "user" && m.text ? [m.text] : [])),
+      offered: answered ? (offer.result as { options: string[] }).options : [],
+    };
+  };
   const deps: Partial<ExecuteDeps> = {
     ...quiet,
     audit: async (row) => {
@@ -266,15 +282,17 @@ function conversation(opts: { auditFails?: boolean } = {}) {
       if (!latest) return NO_PROPOSAL;
       const readBack = messages.find((m) => m.role === "assistant" && m.at > latest.at);
       const answer = readBack && messages.find((m) => m.role === "user" && m.at > readBack.at);
-      return { latest: { arguments: latest.arguments, at: latest.at }, readBack: readBack ?? null, answerAt: answer?.at ?? null };
+      const details = !latest.result.ok ? latest.result.details : undefined;
+      return { latest: { arguments: latest.arguments, details, at: latest.at }, readBack: readBack ?? null, answerAt: answer?.at ?? null };
     },
   };
   return {
     rpcs,
-    customerSays: (afterMs = 1) => void messages.push({ role: "user", at: tick(afterMs), delivered: true }),
+    written,
+    customerSays: (afterMs = 1, text?: string) => void messages.push({ role: "user", at: tick(afterMs), delivered: true, text }),
     // delivered: false is a read-back an answer check replaced.
     assistantSays: (delivered = true) => void messages.push({ role: "assistant", at: tick(), delivered }),
-    call: async (name: string, args: object) => (await executeTool(name, JSON.stringify(args), { ...ctx, client }, deps)).output,
+    call: async (name: string, args: object) => (await executeTool(name, JSON.stringify(args), { ...ctx, client, serviceEvidence }, deps)).output,
   };
 }
 
@@ -371,6 +389,58 @@ test("only the details that identify the write must match; free text may be word
   const otherTime = await c.call("create_consultation_request", { service: "teeth whitening", preferred_datetime: "2026-10-20T16:00" });
   assert.ok(!otherTime.ok && otherTime.error === "confirm_first" && otherTime.details?.preferred_time === "Tuesday, October 20, 2026 at 4:00 PM PDT");
   assert.deepEqual(c.rpcs, ["save_lead", "create_consultation_request"]);
+});
+
+test("with a services table: the customer chooses the service, and its exact name is read back and saved", async () => {
+  const kit = "Take-home whitening kit (custom trays and gel)";
+  const c = conversation({ services: [{ name: "In-office teeth whitening (single session)", requestable: true }, { name: kit, requestable: true }] });
+  const slot = { preferred_datetime: "2026-10-20T15:00" };
+  c.customerSays(1, "Can I come in for whitening on Tuesday at 3?");
+  const ask = await c.call("create_consultation_request", { service: "teeth whitening", ...slot });
+  assert.deepEqual(ask.ok === false && [ask.error, ask.options], ["choose_service", ["In-office teeth whitening (single session)", kit]]);
+  assert.equal((await c.call("create_consultation_request", { service: kit, ...slot })).error, "choose_service", "the model can't answer for the customer");
+
+  c.assistantSays(); // "In-office whitening, or the take-home kit?"
+  c.customerSays(1, "the second one");
+  const proposal = await c.call("create_consultation_request", { service: kit, ...slot });
+  assert.ok(!proposal.ok && proposal.error === "confirm_first" && proposal.details?.service === kit);
+  c.assistantSays();
+  c.customerSays(1, "yes");
+  assert.equal((await c.call("create_consultation_request", { service: kit, ...slot })).ok, true);
+  assert.deepEqual(c.rpcs, ["create_consultation_request"]);
+  assert.equal(c.written[0].p_service, kit);
+});
+
+test("with a services table: another service in answer to the read-back is a new proposal, read back before it's saved", async () => {
+  const braces = "Traditional braces (full treatment)";
+  const c = conversation({ services: [{ name: braces, requestable: true }, { name: "Porcelain crown", requestable: true }] });
+  const slot = { preferred_datetime: "2026-10-20T15:00" };
+  c.customerSays(1, "braces on Tuesday at 3 please");
+  assert.equal((await c.call("create_consultation_request", { service: "braces", ...slot })).error, "confirm_first");
+  c.assistantSays(); // "Traditional braces (full treatment), Tuesday at 3 PM. Is that right?"
+  c.customerSays(1, "yes");
+  // The model sends the exact name it read back: the same proposal.
+  assert.equal((await c.call("create_consultation_request", { service: braces, ...slot })).ok, true);
+
+  const d = conversation({ services: [{ name: braces, requestable: true }, { name: "Porcelain crown", requestable: true }] });
+  d.customerSays(1, "braces on Tuesday at 3 please");
+  await d.call("create_consultation_request", { service: "braces", ...slot });
+  d.assistantSays();
+  d.customerSays(1, "actually make it a crown");
+  const crown = await d.call("create_consultation_request", { service: "crown", ...slot });
+  assert.ok(!crown.ok && crown.error === "confirm_first" && crown.details?.service === "Porcelain crown");
+  assert.deepEqual(d.rpcs, []);
+});
+
+test("with a services table: a service that isn't offered is refused with what can be requested, and nothing is written", async () => {
+  const c = conversation({ services: [{ name: "Porcelain crown", requestable: true }, { name: "Whitening gel (refill)", requestable: false }] });
+  c.customerSays(1, "I need gum surgery on Friday");
+  const out = await c.call("create_consultation_request", { service: "gum surgery", preferred_datetime: "2026-10-23T10:00" });
+  assert.ok(!out.ok && out.error === "service_not_found" && /"gum surgery" isn't one of the services/.test(out.message));
+  assert.deepEqual(out.options, ["Porcelain crown"]);
+  const gel = await c.call("create_consultation_request", { service: "whitening gel (refill)", preferred_datetime: "2026-10-23T10:00" });
+  assert.ok(!gel.ok && gel.error === "service_not_found" && /can't be requested/.test(gel.message));
+  assert.deepEqual(c.rpcs, []);
 });
 
 test("repeating a committed write later needs no new read-back (the save is idempotent)", async () => {

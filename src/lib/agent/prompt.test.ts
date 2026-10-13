@@ -114,6 +114,10 @@ test("writes are proposed, read back, and repeated after the customer's yes", ()
   assert.match(p, /The first call for a time saves nothing/);
   // The code refuses an unconfirmed write (confirm.ts); the model must ask, not report a failure.
   assert.match(p, /confirm_first means nothing is saved yet.*It is not a failure/);
+  // The service comes from the services table (service-choice.ts): the model asks, never picks.
+  assert.match(p, /never pick a service for the customer/);
+  assert.match(p, /error: choose_service means the customer must choose/);
+  assert.match(p, /error: service_not_found means it isn't something they can request/);
 });
 
 test("the assistant stays on the business and keeps conditions in short answers", () => {

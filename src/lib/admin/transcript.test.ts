@@ -90,6 +90,13 @@ test("a write that only proposed its details (confirm before write) is not a fai
   assert.deepEqual(s, { detail: "{name, phone}", outcome: "proposed, waiting for a yes", tone: "neutral", failed: false });
 });
 
+test("asking which service, or a service that isn't offered, is the conversation working, not a failure", () => {
+  const call = (error: string) =>
+    summarizeToolCall({ name: "create_consultation_request", arguments: { service: "whitening" }, result: { ok: false, error, message: "…", options: ["In-office whitening"] }, ok: false });
+  assert.deepEqual(call("choose_service"), { detail: "whitening", outcome: "asked which service", tone: "neutral", failed: false });
+  assert.deepEqual(call("service_not_found"), { detail: "whitening", outcome: "not on the services list", tone: "warning", failed: false });
+});
+
 test("a consultation request shows the service and time, and a repeat says so", () => {
   const s = summarizeToolCall({
     name: "create_consultation_request",
