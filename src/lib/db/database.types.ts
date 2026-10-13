@@ -183,6 +183,26 @@ isOneToOne: true
                   Relationships: [
                     
                   ]
+                },"services": {
+                  Row: {
+                    "business_id": string,"category": string,"created_at": string,"description": string,"duration": string,"id": string,"name": string,"position": number,"price": string,"requestable": boolean
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "business_id": string,"category"?: string,"created_at"?: string,"description"?: string,"duration"?: string,"id"?: string,"name": string,"position": number,"price"?: string,"requestable"?: boolean
+                  }
+                  Update: {
+                    "business_id"?: string,"category"?: string,"created_at"?: string,"description"?: string,"duration"?: string,"id"?: string,"name"?: string,"position"?: number,"price"?: string,"requestable"?: boolean
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "services_business_id_fkey"
+      columns: ["business_id"]
+isOneToOne: false
+      referencedRelation: "businesses"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"tool_calls": {
                   Row: {
                     "arguments": NonNullable<Json>,"channel": string,"conversation_id": string,"created_at": string,"duration_ms": number,"id": number,"message_id": number | null,"name": string,"ok": boolean,"realtime_call_id": string | null,"result": NonNullable<Json>,"sources": NonNullable<Json>,"voice_call_id": string | null
@@ -279,6 +299,9 @@ isOneToOne: false
                            },
 "prune_rate_limits":
 { Args: Record<PropertyKey, never>; Returns: number
+                           },
+"replace_services":
+{ Args: { "p_business_id": string,"p_services": Json }; Returns: number
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json
