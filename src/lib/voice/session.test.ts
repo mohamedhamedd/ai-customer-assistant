@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { realtimeSession, voiceInstructions } from "./session";
+import { realtimeSession, TRANSCRIPTION_HINT, voiceInstructions } from "./session";
 
 const business = { name: "Lakeside Dental Clinic", description: "A family dental clinic.", timezone: "America/Los_Angeles" };
 const now = new Date("2026-10-12T17:00:00Z");
@@ -42,6 +42,7 @@ test("the session has the same tools, transcription and server turn detection", 
   assert.equal(session.type, "realtime");
   assert.deepEqual(session.tools, [{ type: "function", ...tool }]);
   assert.equal(session.audio?.input?.transcription?.model, "gpt-4o-mini-transcribe");
+  assert.equal(session.audio?.input?.transcription?.prompt, TRANSCRIPTION_HINT, "numbers as digits, in the order spoken");
   assert.deepEqual(session.audio?.input?.turn_detection, { type: "server_vad", create_response: true, interrupt_response: true });
   assert.equal(session.audio?.output?.voice, "alloy");
 });

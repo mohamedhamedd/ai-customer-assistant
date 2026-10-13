@@ -8,7 +8,7 @@ import { runAgentTurn, type Action, type AgentDeps, type HistoryMessage, type Tu
 import { buildSystemPrompt, promptFacts, type BusinessTables, type ConversationState, type CustomerFacts } from "@/lib/agent/prompt";
 import { tableSources } from "@/lib/agent/table-sources";
 import { loadTables } from "@/lib/agent/tables";
-import { formatHuman, formatLocal } from "@/lib/agent/time";
+import { formatHuman, formatLocal, zonedLocalToUtc } from "@/lib/agent/time";
 import { isBusinessSlug } from "@/lib/chat/limits";
 import { ENGLISH_ONLY_REPLY, isClearlyNotEnglish } from "@/lib/chat/language";
 import { toolDefinitions } from "@/lib/agent/tools";
@@ -21,9 +21,27 @@ import { canary } from "@/lib/guard/canary";
 // { sessionId, clientMessageId, message }; history is always loaded here, so
 // a client can't forge assistant turns.
 
-// Working memory: the last N user/assistant messages (design §7). Older turns
-// are not sent, to bound cost; the customer's details survive via facts.
-export const HISTORY_LIMIT = 20;
+// Working memory: the most recent messages that fit HISTORY_CHARS, at most
+// HISTORY_LIMIT of them (design §7). Older turns are not sent, to bound cost;
+// the customer's details survive via facts, and what's done or agreed via
+// the "Already done" section. By size, not count: seen live, a voice call
+// spelling a phone number made ~35 short fragments ("Five.", "14995"), and
+// a count of 20 pushed the request the customer had just agreed out.
+export const HISTORY_LIMIT = 60;
+export const HISTORY_CHARS = 8_000;
+
+// The newest messages (given newest first) that fit the budget, oldest first.
+// The newest one always goes, however long.
+export function fitHistory<T extends { content: string }>(newestFirst: T[], maxChars = HISTORY_CHARS): T[] {
+  const kept: T[] = [];
+  let used = 0;
+  for (const m of newestFirst) {
+    used += m.content.length;
+    if (kept.length > 0 && used > maxChars) break;
+    kept.push(m);
+  }
+  return kept.reverse();
+}
 
 // Messages returned to the UI on load: the most recent ones.
 export const HISTORY_PAGE = 200;
@@ -363,20 +381,46 @@ export async function recentHistory(conversationId: string, beforeMessageId?: nu
   if (beforeMessageId !== undefined) query = query.lt("id", beforeMessageId);
   const { data, error } = await query.order("id", { ascending: false }).limit(beforeMessageId === undefined ? HISTORY_LIMIT : HISTORY_LIMIT - 1);
   if (error) throw new Error(`Loading history failed: ${error.message}`);
-  return (data ?? []).reverse().map((r) => ({ role: r.role as HistoryMessage["role"], content: r.content! }));
+  return fitHistory((data ?? []).map((r) => ({ role: r.role as HistoryMessage["role"], content: r.content! })));
 }
 
 // Live from the database, so a request staff confirmed or cancelled shows its
 // current status.
+// A consultation request read back (confirm_first) or confirmed but waiting
+// for contact details (lead_required), with no request at that time yet.
+function agreedRequest(
+  call: { arguments: Json; result: Json } | null,
+  requests: { preferred_at: string; status: string }[],
+  timeZone: string,
+): ConversationState["agreed"] {
+  const result = (call?.result ?? {}) as { error?: string; details?: { service?: string } };
+  const args = (call?.arguments ?? {}) as { service?: unknown; preferred_datetime?: unknown };
+  if (!call || (result.error !== "confirm_first" && result.error !== "lead_required")) return null;
+  if (typeof args.preferred_datetime !== "string" || typeof args.service !== "string") return null;
+  const at = zonedLocalToUtc(args.preferred_datetime, timeZone);
+  if (!at.ok) return null;
+  if (requests.some((r) => r.status !== "cancelled" && new Date(r.preferred_at).getTime() === at.at.getTime())) return null;
+  return {
+    service: result.details?.service ?? args.service,
+    preferredTime: formatHuman(at.at, timeZone),
+    preferredLocal: formatLocal(at.at, timeZone),
+    waitingFor: result.error === "lead_required" ? "contact" : "yes",
+  };
+}
+
 export async function conversationState(conversation: { id: string; lead_id: string | null }, timeZone: string): Promise<ConversationState> {
-  const [{ data, error }, followUp] = await Promise.all([
+  const [{ data, error }, followUp, proposal] = await Promise.all([
     db().from("consultation_requests").select("service, preferred_at, status").eq("conversation_id", conversation.id).order("created_at"),
     db().from("follow_ups").select("reason").eq("conversation_id", conversation.id).eq("status", "open").maybeSingle(),
+    // The latest attempt to request a consultation: one agreed but not saved
+    // yet must survive however long the conversation gets.
+    db().from("tool_calls").select("arguments, result").eq("conversation_id", conversation.id).eq("name", "create_consultation_request").order("id", { ascending: false }).limit(1).maybeSingle(),
   ]);
-  if (error || followUp.error) throw new Error(`Loading requests failed: ${(error ?? followUp.error)!.message}`);
+  if (error || followUp.error || proposal.error) throw new Error(`Loading requests failed: ${(error ?? followUp.error ?? proposal.error)!.message}`);
   return {
     contactSaved: conversation.lead_id !== null,
     followUp: followUp.data?.reason ?? null,
+    agreed: agreedRequest(proposal.data, data ?? [], timeZone),
     requests: (data ?? []).map((r) => ({
       service: r.service,
       preferredTime: formatHuman(new Date(r.preferred_at), timeZone),
