@@ -41,7 +41,18 @@ test("a text names a service only when nothing else fits as well", () => {
   assert.deepEqual(namedIn("gum surgery", NAMES), { matched: [], named: [] });
   // Seen live: the cleaning had more words in common, so the crown wasn't named.
   assert.deepEqual(only("a porcelain crown Thursday 10am and a routine check-up and cleaning Friday 9am"), ["Routine check-up and cleaning", "Porcelain crown"]);
-  assert.equal(only("a porcelain crown or a porcelain veneer"), null, "two that fit as well: theirs to choose");
+  // Two different services in full are both named, sharing a word or not: the
+  // model sends what the customer meant, and the read-back says it back.
+  assert.deepEqual(only("a porcelain crown and a porcelain veneer"), ["Porcelain crown", "Porcelain veneer (per tooth)"]);
+  // Seen live: "style" in both made neither the customer's.
+  const salon = ["Women's cut and style", "Men's cut", "Blow-dry and style", "Full colour", "Colour consultation (15 minutes)"];
+  assert.deepEqual(namedIn("Women's cut and style, full colour and a blow-dry and style on Saturday", salon).named, ["Women's cut and style", "Blow-dry and style", "Full colour"]);
+  // A consultation by name: the one service that is a consultation.
+  const invisalign = ["Invisalign or orthodontic consultation (20 minutes)", "Invisalign (full treatment)"];
+  assert.deepEqual(namedIn("Invisalign consultation this Sunday at 11am", invisalign).named, [invisalign[0]]);
+  assert.deepEqual(namedIn("I want Invisalign", invisalign).named, [invisalign[1]], "without the word: the treatment, all of whose name they said");
+  assert.deepEqual(namedIn("a colour consultation", salon).named, ["Colour consultation (15 minutes)"]);
+  assert.deepEqual(namedIn("a colour consultation and a full colour", salon).named, ["Full colour", "Colour consultation (15 minutes)"]);
   // Seen live: the exact name tied with "(two or more surfaces)" on "surface".
   const fillings = ["Composite filling (one surface)", "Composite filling (two or more surfaces)", "Fluoride treatment"];
   assert.equal(namedIn("a composite filling (one surface) tomorrow at 9am", fillings).named.join(), "Composite filling (one surface)");

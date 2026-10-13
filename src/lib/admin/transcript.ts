@@ -131,6 +131,7 @@ export function summarizeToolCall(call: Pick<TranscriptToolCall, "name" | "argum
   // A change to a request the team already handled, or to none, or to the same.
   if (!call.ok && result.error === "request_not_pending") return { detail, outcome: "already handled by the team", tone: "warning", failed: false };
   if (!call.ok && result.error === "request_not_found") return { detail, outcome: "no such request", tone: "warning", failed: false };
+  if (!call.ok && result.error === "check_date") return { detail, outcome: "date corrected (this/next week)", tone: "neutral", failed: false };
   if (!call.ok && result.error === "slot_taken") return { detail, outcome: "another request at that time", tone: "warning", failed: false };
   if (!call.ok && result.error === "no_change") return { detail, outcome: "nothing to change", tone: "neutral", failed: false };
   if (!call.ok && result.error === "lead_required") return { detail, outcome: "contact not saved yet", tone: "warning", failed: false };

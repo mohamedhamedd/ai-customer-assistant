@@ -64,6 +64,7 @@ export function words(text: string): string[] {
 }
 
 const ENDINGS = ["s", "es", "ing", "ings", "ed", "er", "ers"];
+const CONSULT = /\bconsult/i;
 
 // Same word, with an ending ("crown", "crowns"; "fill", "filling"), or the
 // same first five letters ("whiter", "whitening").
@@ -92,12 +93,25 @@ export function namedIn(text: string, names: string[]): Named {
   // Every word of the name, brackets too: "composite filling (one surface)".
   const whole = (i: number) => scores[i] === words(names[i]).length;
   const variants = (i: number, j: number) => main[i].join() === main[j].join();
-  // A rival: another service sharing one of its main words that fits as well
-  // (as many words in common; but between variants of one service, only the
-  // whole name wins a tie: "(one surface)" against "(two or more surfaces)").
-  const fitsAsWell = (j: number, i: number) => scores[j] > scores[i] || (scores[j] === scores[i] && !(variants(i, j) && whole(i) && !whole(j)));
+  // A rival: another service sharing one of its main words that fits better
+  // (more words in common: "root canal, the molar"), or a variant of the same
+  // service that fits as well ("root canal": front tooth or molar?; but only
+  // the whole name wins a tie: "(one surface)" against "(two or more
+  // surfaces)"). Two different services both named in full are both named,
+  // even sharing a word: "a women's cut and style and a blow-dry and style".
+  const fitsAsWell = (j: number, i: number) => scores[j] > scores[i] || (scores[j] === scores[i] && variants(i, j) && !(whole(i) && !whole(j)));
   const rivalled = (i: number) => names.some((_, j) => j !== i && main[j].some((w) => main[i].includes(w)) && fitsAsWell(j, i));
-  return { matched, named: names.filter((_, i) => main[i].length > 0 && main[i].every(shares) && !rivalled(i)) };
+  const named = names.filter((_, i) => main[i].length > 0 && main[i].every(shares) && !rivalled(i));
+  // "An Invisalign consultation": of the services its words fit, the one that
+  // is a consultation ("consultation" itself is filler: every request is one).
+  // It replaces any service the customer's words for fit it as well
+  // ("Invisalign (full treatment)"), not one with words of its own ("a colour
+  // consultation and a full colour" keeps the full colour).
+  const consults = matched.filter((n) => CONSULT.test(n));
+  if (!CONSULT.test(text) || consults.length !== 1) return { matched, named };
+  const consult = words(consults[0]);
+  const explained = (i: number) => words(names[i]).filter(shares).every((w) => consult.some((c) => sameWord(c, w)));
+  return { matched, named: names.filter((n, i) => n === consults[0] || (named.includes(n) && !explained(i))) };
 }
 
 const key = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
