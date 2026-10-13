@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarDays, CheckCircle2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CalendarDays, CheckCircle2, PhoneCall, RefreshCw } from "lucide-react";
 import { maskEmail, maskPhone, type Action } from "./thread";
 
 // What the assistant did, from tool results (never from the model's text).
@@ -25,14 +25,24 @@ export function ActionCard({ action, businessName, onTryAgain }: { action: Actio
           <div className="flex items-center gap-2">
             <CalendarDays aria-hidden className="size-4 text-text-muted" />
             <p className="text-[15px] font-semibold">
-              {action.changedFrom ? "Consultation request changed" : action.alreadyRequested ? "Consultation already requested" : "Consultation requested"}
+              {action.cancelled
+                ? "Consultation request cancelled"
+                : action.changedFrom
+                  ? "Consultation request changed"
+                  : action.alreadyRequested
+                    ? "Consultation already requested"
+                    : "Consultation requested"}
             </p>
           </div>
-          <span className="rounded-full bg-warning/10 px-2.5 py-0.5 text-[12px] font-medium text-warning">Pending</span>
+          {action.cancelled ? (
+            <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-[12px] font-medium text-text-muted">Cancelled</span>
+          ) : (
+            <span className="rounded-full bg-warning/10 px-2.5 py-0.5 text-[12px] font-medium text-warning">Pending</span>
+          )}
         </div>
         <div className="flex flex-col gap-1 border-t border-border pt-3 text-[14px]">
           <p className="font-medium break-words">{action.service}</p>
-          <p className="text-text-muted">{action.preferredTime}</p>
+          <p className={`text-text-muted ${action.cancelled ? "line-through" : ""}`}>{action.preferredTime}</p>
           {action.changedFrom && (
             <p className="mt-1 text-[13px] text-text-muted break-words">
               Was: {action.changedFrom.service !== action.service ? `${action.changedFrom.service}, ` : ""}
@@ -40,7 +50,21 @@ export function ActionCard({ action, businessName, onTryAgain }: { action: Actio
             </p>
           )}
         </div>
-        <p className="border-t border-border pt-2.5 text-[13px] text-text-muted">{businessName} will confirm with you.</p>
+        <p className="border-t border-border pt-2.5 text-[13px] text-text-muted">
+          {action.cancelled ? "The time is free again. You can ask for a new request any time." : `${businessName} will confirm with you.`}
+        </p>
+      </div>
+    );
+  }
+
+  if (action.kind === "follow_up_requested") {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-border bg-surface p-4">
+        <PhoneCall aria-hidden className="mt-0.5 size-5 shrink-0 text-info" />
+        <div className="min-w-0">
+          <p className="text-[14px] font-medium">{businessName} will contact you</p>
+          <p className="mt-0.5 text-[13px] text-text-muted break-words">{action.reason}</p>
+        </div>
       </div>
     );
   }

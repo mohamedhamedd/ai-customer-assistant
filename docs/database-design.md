@@ -297,6 +297,25 @@ RLS on, no anon/authenticated privileges.
 
 `change_consultation_request(business, conversation, current_at, service, preferred_at, current_time text)` changes a request the customer made in that conversation: the one at `current_at` (the slot is a request's identity within a conversation). Under a row lock: only while `pending` (`request_not_pending` otherwise), not onto the time of another of its requests (`slot_taken`), and `request_not_found` for any other conversation or time. A retry after it went through finds it at the new time and answers `changed: false`. The previous service and `current_time` (as the customer saw it) are appended to `notes`. Only the server can call it.
 
+### 3.6.6 `cancel_consultation_request()` and `follow_ups`
+
+`cancel_consultation_request(business, conversation, current_at, reason)` cancels the customer's own pending request in that conversation (row lock): `request_not_pending` for a confirmed one, `request_not_found` for any other conversation or time; a retry answers `cancelled: false`. The request stays, with status `cancelled` and "[Cancelled by the customer: <reason>.]" appended to `notes`, and its slot is free again (the dedupe index skips cancelled rows).
+
+`follow_ups`: what a customer asked the team to contact them about.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | uuid | no | `gen_random_uuid()` | PK |
+| `business_id` | uuid | no | | FK → `businesses`, cascade |
+| `lead_id` | uuid | no | | FK → `leads`, cascade: who to contact |
+| `conversation_id` | uuid | yes | | FK → `conversations`, set null |
+| `reason` | text | no | | 1 to 300 characters (`CHECK`), in the customer's terms |
+| `status` | text | no | `'open'` | `open` or `done` (`CHECK`) |
+| `created_at` | timestamptz | no | `now()` | |
+| `done_at` | timestamptz | yes | | Set exactly when done (`CHECK`) |
+
+One open follow-up per conversation (`follow_ups_open_per_conversation_idx`, partial); index `(business_id, status, created_at desc)` for the Overview. `request_follow_up(business, conversation, reason)` needs the conversation's lead (`lead_required`), and inserts or updates the open one. RLS on, no anon/authenticated privileges; only the server calls the functions.
+
 ### 3.7 `leads`
 
 A person who shared contact details with the agent.

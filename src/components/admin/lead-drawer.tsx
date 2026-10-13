@@ -3,15 +3,16 @@
 import { Check, ChevronRight, Copy, Loader2, Mic, MessageSquare, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import type { RequestRow } from "@/lib/admin/crm";
+import type { FollowUpRow, RequestRow } from "@/lib/admin/crm";
 import type { Channel } from "@/lib/db/enums";
 import { formatInZone, relativeTime } from "./format";
-import { StatusBadge, useCopy, useDialog } from "./ui";
+import { Badge, StatusBadge, useCopy, useDialog } from "./ui";
 
 interface LeadDetail {
   lead: { id: string; name: string; email: string | null; phone: string | null; interest: string | null; channel: Channel; capturedAt: string };
   requests: RequestRow[];
   conversations: { id: string; lastActivity: string }[];
+  followUps: FollowUpRow[];
 }
 
 // A lead, its consultation requests and its conversations (US-8.1), opened
@@ -82,6 +83,24 @@ export function LeadDrawer({ slug, leadId, timeZone, onClose }: { slug: string; 
                 <section>
                   <h3 className="text-[12px] font-medium text-text-muted">Interest</h3>
                   <p className="mt-1 text-[14px] break-words">{lead.interest}</p>
+                </section>
+              )}
+              {detail.followUps.length > 0 && (
+                <section>
+                  <h3 className="text-[12px] font-medium text-text-muted">Asked the team to contact them about</h3>
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {detail.followUps.map((f) => (
+                      <li key={f.id} className="flex items-start justify-between gap-3 rounded-xl border border-border p-3 text-[14px]">
+                        <div className="min-w-0">
+                          <p className="break-words">{f.reason}</p>
+                          <p className="mt-0.5 text-[12px] text-text-muted">
+                            <time title={new Date(f.requestedAt).toLocaleString()}>{relativeTime(f.requestedAt)}</time>
+                          </p>
+                        </div>
+                        {f.status === "open" ? <Badge tone="warning">Open</Badge> : <Badge tone="success">Done</Badge>}
+                      </li>
+                    ))}
+                  </ul>
                 </section>
               )}
               <section>

@@ -143,6 +143,38 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"follow_ups": {
+                  Row: {
+                    "business_id": string,"conversation_id": string | null,"created_at": string,"done_at": string | null,"id": string,"lead_id": string,"reason": string,"status": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "business_id": string,"conversation_id"?: string | null,"created_at"?: string,"done_at"?: string | null,"id"?: string,"lead_id": string,"reason": string,"status"?: string
+                  }
+                  Update: {
+                    "business_id"?: string,"conversation_id"?: string | null,"created_at"?: string,"done_at"?: string | null,"id"?: string,"lead_id"?: string,"reason"?: string,"status"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "follow_ups_business_id_fkey"
+      columns: ["business_id"]
+isOneToOne: false
+      referencedRelation: "businesses"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "follow_ups_conversation_id_fkey"
+      columns: ["conversation_id"]
+isOneToOne: false
+      referencedRelation: "conversations"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "follow_ups_lead_id_fkey"
+      columns: ["lead_id"]
+isOneToOne: false
+      referencedRelation: "leads"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"leads": {
                   Row: {
                     "business_id": string,"created_at": string,"email": string | null,"id": string,"interest": string | null,"name": string,"phone": string | null,"source_channel": string,"updated_at": string
@@ -312,6 +344,9 @@ isOneToOne: false
 "begin_user_message":
 { Args: { "p_channel"?: string,"p_client_message_id": string,"p_content": string,"p_conversation_id": string,"p_window_seconds": number }; Returns: Json
                            },
+"cancel_consultation_request":
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_reason": string }; Returns: Json
+                           },
 "change_consultation_request":
 { Args: { "p_business_id": string,"p_conversation_id": string,"p_current_at": string,"p_current_time": string,"p_preferred_at": string,"p_service": string }; Returns: Json
                            },
@@ -348,6 +383,9 @@ isOneToOne: false
                            },
 "replace_services":
 { Args: { "p_business_id": string,"p_services": Json }; Returns: number
+                           },
+"request_follow_up":
+{ Args: { "p_business_id": string,"p_conversation_id": string,"p_reason": string }; Returns: Json
                            },
 "save_lead":
 { Args: { "p_business_id": string,"p_channel": string,"p_conversation_id": string,"p_email"?: string,"p_interest"?: string,"p_name": string,"p_phone"?: string }; Returns: Json

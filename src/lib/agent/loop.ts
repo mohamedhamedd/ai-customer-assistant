@@ -36,7 +36,10 @@ export type Action =
       alreadyRequested: boolean;
       // A change to a request already made: what it was.
       changedFrom?: { service: string; preferredTime: string };
+      // The customer cancelled it.
+      cancelled?: boolean;
     }
+  | { kind: "follow_up_requested"; reason: string; updated: boolean }
   | { kind: "action_failed"; tool: string; message: string };
 
 export type TurnEvent =
@@ -224,6 +227,8 @@ export function repeatsAction(actions: Action[], action: Action): boolean {
 }
 
 // Cards shown in the thread come from tool results, never from model text.
+const WRITE_TOOLS = ["save_lead", "create_consultation_request", "change_consultation_request", "cancel_consultation_request", "request_follow_up"];
+
 export function toAction(outcome: Pick<ToolOutcome, "name" | "output">): Action | null {
   const o = outcome.output as Record<string, unknown>;
   if (outcome.name === "save_lead" && o.ok) {
@@ -251,9 +256,23 @@ export function toAction(outcome: Pick<ToolOutcome, "name" | "output">): Action 
       changedFrom: { service: String(from?.service ?? o.service), preferredTime: String(from?.preferred_time ?? "") },
     };
   }
+  if (outcome.name === "cancel_consultation_request" && o.ok) {
+    return {
+      kind: "consultation_requested",
+      requestId: String(o.request_id ?? ""),
+      service: String(o.service),
+      preferredTime: String(o.preferred_time),
+      status: "cancelled",
+      alreadyRequested: Boolean(o.already_cancelled),
+      cancelled: true,
+    };
+  }
+  if (outcome.name === "request_follow_up" && o.ok) {
+    return { kind: "follow_up_requested", reason: String(o.reason), updated: Boolean(o.updated) };
+  }
   // An outage gets a visible card. Invalid input and an unknown outcome are
   // handled in conversation (the model asks again or retries once).
-  if (["save_lead", "create_consultation_request", "change_consultation_request"].includes(outcome.name) && o.error === "temporarily_unavailable") {
+  if (WRITE_TOOLS.includes(outcome.name) && o.error === "temporarily_unavailable") {
     return { kind: "action_failed", tool: outcome.name, message: "This couldn't be saved just now." };
   }
   return null;

@@ -495,6 +495,46 @@ const currentAt = (local: string, ctx: ToolContext) => {
   return parsed.ok ? parsed.at : null;
 };
 
+// The customer's request in this conversation at that local time (one
+// that isn't cancelled first, as the slot is a request's identity), or the
+// answer to give when there's none.
+async function findRequest(local: string, ctx: ToolContext, verb: "changed" | "cancelled"): Promise<{ request: StoredRequest } | { result: ToolRunResult }> {
+  const at = currentAt(local, ctx);
+  if (!at) return { result: invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm, as listed under 'Already done in this conversation'") };
+  const requests = await (ctx.conversationRequests ?? requestsFromDb)(ctx);
+  const atThatTime = requests.filter((r) => r.preferredAt.getTime() === at.getTime());
+  const request = atThatTime.find((r) => r.status !== "cancelled") ?? atThatTime.at(-1);
+  if (request) return { request };
+  const listed = requests.filter((r) => r.status !== "cancelled").map((r) => `${r.service}, ${formatHuman(r.preferredAt, ctx.timeZone)} (${formatLocal(r.preferredAt, ctx.timeZone)}), ${r.status}`);
+  return {
+    result: {
+      output: {
+        ok: false,
+        error: "request_not_found",
+        message: listed.length
+          ? `Nothing is ${verb}: there is no request in this conversation at that time. This customer's requests: ${listed.join("; ")}. Use the current_datetime of the one they mean.`
+          : "Nothing is " + verb + ": this customer has no consultation request in this conversation." + (verb === "changed" ? " To ask for one, use create_consultation_request." : ""),
+      },
+    },
+  };
+}
+
+// A request that isn't pending any more: confirmed by the team (theirs now),
+// or already cancelled.
+function notPending(request: StoredRequest, ctx: ToolContext, verb: "changed" | "cancelled"): ToolRunResult {
+  const which = `${request.service}, ${formatHuman(request.preferredAt, ctx.timeZone)}`;
+  return {
+    output: {
+      ok: false,
+      error: "request_not_pending",
+      message:
+        request.status === "cancelled"
+          ? `Nothing is ${verb}: this request (${which}) is already cancelled.${verb === "changed" ? " To ask for that service again, use create_consultation_request." : ""}`
+          : `Nothing is ${verb}: the team has already ${request.status} this request (${which}), so it can't be ${verb} here. Tell the customer, and offer to have the team contact them about it (request_follow_up).`,
+    },
+  };
+}
+
 const changeConsultationRequest = defineTool({
   name: "change_consultation_request",
   writes: true,
@@ -518,36 +558,10 @@ const changeConsultationRequest = defineTool({
   // the new service and time, checked like a new request's. The arguments
   // come out complete: the exact service and the time, changed or not.
   async prepare(args, ctx) {
-    const at = currentAt(args.current_datetime, ctx);
-    if (!at) return { result: invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm, as listed under 'Already done in this conversation'") };
-    const requests = await (ctx.conversationRequests ?? requestsFromDb)(ctx);
-    const atThatTime = requests.filter((r) => r.preferredAt.getTime() === at.getTime());
-    const request = atThatTime.find((r) => r.status !== "cancelled") ?? atThatTime[0];
-    if (!request) {
-      const listed = requests.filter((r) => r.status !== "cancelled").map((r) => `${r.service}, ${formatHuman(r.preferredAt, ctx.timeZone)} (${formatLocal(r.preferredAt, ctx.timeZone)}), ${r.status}`);
-      return {
-        result: {
-          output: {
-            ok: false,
-            error: "request_not_found",
-            message: listed.length
-              ? `Nothing is changed: there is no request in this conversation at that time. This customer's requests: ${listed.join("; ")}. Use the current_datetime of the one they mean.`
-              : "Nothing is changed: this customer has no consultation request in this conversation. To ask for one, use create_consultation_request.",
-          },
-        },
-      };
-    }
-    if (request.status !== "pending") {
-      return {
-        result: {
-          output: {
-            ok: false,
-            error: "request_not_pending",
-            message: `Nothing is changed: the team has already ${request.status} this request (${request.service}, ${formatHuman(request.preferredAt, ctx.timeZone)}), so it can't be changed here. Tell the customer, and offer to have the team contact them about it.`,
-          },
-        },
-      };
-    }
+    const found = await findRequest(args.current_datetime, ctx, "changed");
+    if ("result" in found) return found;
+    const { request } = found;
+    if (request.status !== "pending") return { result: notPending(request, ctx, "changed") };
 
     let service = request.service;
     const [evidence, week] = await Promise.all([args.service ? (ctx.serviceEvidence ?? serviceEvidenceFromDb)(ctx) : null, args.preferred_datetime ? weekOf(ctx) : null]);
@@ -634,8 +648,144 @@ const changeConsultationRequest = defineTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// cancel_consultation_request
+// ---------------------------------------------------------------------------
+
+export const cancelConsultationSchema = z.object({
+  current_datetime: z.string().trim(),
+  reason: optional(z.string().trim().max(200, "reason is too long")),
+});
+
+const cancelConsultationRequest = defineTool({
+  name: "cancel_consultation_request",
+  writes: true,
+  description:
+    "Cancel a consultation request the customer made in this conversation. Only pending requests can be cancelled. The first call cancels nothing: it returns the request to read back. Call again with the same details after the customer confirms.",
+  parameters: {
+    type: "object",
+    properties: {
+      current_datetime: {
+        type: "string",
+        description: "The request's date and time, as listed under 'Already done in this conversation', format YYYY-MM-DDTHH:mm.",
+      },
+      reason: { type: "string", description: "Why, in the customer's words, if they said. Optional." },
+    },
+    required: ["current_datetime"],
+    additionalProperties: false,
+  },
+  schema: cancelConsultationSchema,
+  // The request (this conversation's, at that time, still pending). One
+  // already cancelled is simply reported: nothing to do.
+  async prepare(args, ctx) {
+    const found = await findRequest(args.current_datetime, ctx, "cancelled");
+    if ("result" in found) return found;
+    const { request } = found;
+    if (request.status === "cancelled") {
+      return {
+        result: {
+          output: { ok: true, status: "cancelled", already_cancelled: true, service: request.service, preferred_time: formatHuman(request.preferredAt, ctx.timeZone) },
+        },
+      };
+    }
+    if (request.status !== "pending") return { result: notPending(request, ctx, "cancelled") };
+    return { args: { ...args, current_datetime: formatLocal(request.preferredAt, ctx.timeZone) } };
+  },
+  confirm: {
+    // Which request; the reason is free text.
+    propose: (args, ctx) => {
+      const at = currentAt(args.current_datetime, ctx);
+      if (!at) return null;
+      return { key: JSON.stringify(["cancel", at.toISOString()]), details: { cancel_request_at: formatHuman(at, ctx.timeZone), reason: args.reason } };
+    },
+  },
+  async run(args, ctx) {
+    const at = currentAt(args.current_datetime, ctx);
+    if (!at) return invalid("current_datetime must be the request's local time in the format YYYY-MM-DDTHH:mm");
+    const { data, error } = await (ctx.client ?? db()).rpc("cancel_consultation_request", {
+      p_business_id: ctx.businessId,
+      p_conversation_id: ctx.conversationId,
+      p_current_at: at.toISOString(),
+      p_reason: args.reason ?? "",
+    });
+    const refused: Record<string, string> = {
+      // Staff confirmed it between the read-back and the yes.
+      request_not_pending: "Nothing is cancelled: the team has just confirmed this request, so it can't be cancelled here. Tell the customer, and offer to have the team contact them about it (request_follow_up).",
+      request_not_found: "Nothing is cancelled: that request isn't in this conversation any more. Check 'Already done in this conversation'.",
+    };
+    if (error && refused[error.message]) return { output: { ok: false, error: error.message, message: refused[error.message] } };
+    if (error) throw new Error(`cancel_consultation_request failed: ${error.message}`);
+
+    const row = data as { request_id: string; status: string; service: string; cancelled: boolean };
+    return {
+      output: {
+        ok: true,
+        request_id: row.request_id,
+        status: row.status,
+        service: row.service,
+        // The action card shows this string as is.
+        preferred_time: formatHuman(at, ctx.timeZone),
+        already_cancelled: !row.cancelled,
+        note: "The request is cancelled and its time is free. The customer can ask for a new request any time.",
+      },
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// request_follow_up
+// ---------------------------------------------------------------------------
+
+export const followUpSchema = z.object({
+  reason: z.string().trim().min(3, "say what the team should contact them about").max(300, "reason is too long"),
+});
+
+const requestFollowUp = defineTool({
+  name: "request_follow_up",
+  writes: true,
+  description:
+    "Ask the team to contact the customer about something you can't do yourself: change or cancel a request the team already confirmed, a question the documents don't answer, anything they want a person for. Their contact details must already be saved with save_lead. The first call saves nothing: it returns what the team will be asked, to read back. Call again with the same details after the customer confirms.",
+  parameters: {
+    type: "object",
+    properties: {
+      reason: {
+        type: "string",
+        description:
+          "What the team should contact them about: one short sentence with the specifics (which request, which question), and how they'd like to be contacted if they said (phone or email), e.g. 'Cancel the confirmed Invisalign consultation on Wednesday, October 14 at 3:00 PM. Prefers a phone call.'",
+      },
+    },
+    required: ["reason"],
+    additionalProperties: false,
+  },
+  schema: followUpSchema,
+  confirm: {
+    // What it's about, by its words: a rewording keeps the proposal, another topic is a new one.
+    propose: (args) => ({ key: JSON.stringify(["follow_up", words(args.reason).sort()]), details: { reason: args.reason } }),
+  },
+  async run(args, ctx) {
+    const { data, error } = await (ctx.client ?? db()).rpc("request_follow_up", {
+      p_business_id: ctx.businessId,
+      p_conversation_id: ctx.conversationId,
+      p_reason: args.reason,
+    });
+    if (error?.message === "lead_required") {
+      return {
+        output: {
+          ok: false,
+          error: "lead_required",
+          message: "The customer's contact details aren't saved yet. Get their name and email or phone, confirm them, call save_lead, then try again.",
+        },
+      };
+    }
+    if (error) throw new Error(`request_follow_up failed: ${error.message}`);
+    const row = data as { follow_up_id: string; created: boolean };
+    // R1: what the customer asked, nothing read back from stored data.
+    return { output: { ok: true, follow_up_id: row.follow_up_id, reason: args.reason, updated: !row.created, note: "The team will contact the customer about this." } };
+  },
+});
+
 export const TOOLS: Record<string, Tool> = Object.fromEntries(
-  [searchKnowledge, saveLead, createConsultationRequest, changeConsultationRequest].map((t) => [t.name, t]),
+  [searchKnowledge, saveLead, createConsultationRequest, changeConsultationRequest, cancelConsultationRequest, requestFollowUp].map((t) => [t.name, t]),
 );
 
 export function toolDefinitions(tools: Record<string, Tool> = TOOLS): ToolDefinition[] {
