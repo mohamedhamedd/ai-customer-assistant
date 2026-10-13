@@ -131,12 +131,11 @@ The knowledge base of a business is at `/admin/[slug]/knowledge-base` (the busin
 
 ## Admin: services
 
-`/admin/[slug]/services` holds the business's services as a table: name, category, price, duration, a short description, and whether customers can request a consultation for it. This is the structured part of the knowledge: the facts that must be exact. Free-text documents stay for everything else (FAQs, policies, what to bring). Code: `src/components/admin/services.tsx`, `src/lib/admin/services.ts`, `src/lib/admin/service-rows.ts`.
+`/admin/[slug]/services` holds the business's services (a table in the database): name, category, price, duration, a short description, and whether customers can request a consultation for it. This is the structured part of the knowledge: the facts that must be exact. Free-text documents stay for everything else (FAQs, policies, what to bring). Code: `src/components/admin/services.tsx`, `src/lib/admin/services.ts`, `src/lib/admin/service-rows.ts`.
 
-- **Two ways to fill it, for any business:**
-  - **Import CSV:** the template (Download template / Download CSV) has the columns Service, Category, Price, Duration, Description, Customers can request. Columns can be in any order; only Service is required. Any spreadsheet can save it.
-  - **By hand:** Add service, edit in place, remove.
-- **Saved at once:** the whole table is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its row and field, and nothing changes.
+- **Cards, grouped by category:** each card shows the name, the price (large), the duration, the description and a "Can request" badge. A search box filters by name, category or description; each category has its own "+ Add" (the category filled in).
+- **Editing:** a card opens a side panel with every field, a "Customers can request it" switch, and Delete (asks first). **Each change is saved when you press Save** (or Delete), so there's no unsaved state on the page: the list is validated (names unique ignoring case, limits) and replaced in one transaction (`replace_services()`). A problem shows on its field ("Porcelain crown is already listed."), and nothing changes.
+- **Import CSV:** the template (Download template / Download CSV) has the columns Service, Category, Price, Duration, Description, Customers can request. Columns can be in any order; only Service is required. Any spreadsheet can save it. An import replaces the whole list, so it asks first, and the file's problems are listed by the file's own row numbers before anything is sent.
 - Price and duration are text ("$4,000 to $6,000", "Free"): businesses write ranges and words.
 - **Consultation requests take the service from this table** (see Agent: the service of a consultation request).
 - **Answers come from it:** the table is in the assistant's prompt (see Agent: prompt and tools), so "what do you offer?" lists every service and a price is quoted exactly as written here.
