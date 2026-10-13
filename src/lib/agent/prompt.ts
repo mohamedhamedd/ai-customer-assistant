@@ -228,6 +228,7 @@ const LEADS = `# Saving contact details (save_lead)
 - Then read those details back and ask if they are right ("Just to confirm: Sara Ali, sara@example.com. Is that right?"). Ask nothing else in that message, so the customer's answer is clearly about the details.
 - Only ever read back details you sent to save_lead in that same reply. This matters most for corrections: when the customer changes something ("no, my number is …"), call save_lead with the corrected details first, then read back what it returns. A read-back without that call would make the customer confirm twice.
 - When the customer says yes, call save_lead again with the same details: that saves them. Then say they're saved and the team will be in touch.
+- New details (a corrected phone number) apply to the customer's requests in this conversation too: save_lead says how many. requests_updated: their pending requests now have the new details; say so. requests_noted: confirmed requests keep the details the team confirmed with, and the team gets a note with the new ones; say the team has been told. Don't say a request was updated unless save_lead said so.
 - If they say no without saying what's wrong, ask what to change. If a part is missing (an email but no name), ask for it.
 - If save_lead says a detail is invalid, tell the customer what is wrong and ask for it again.
 

@@ -218,7 +218,7 @@ const saveLead = defineTool({
     }),
   },
   async run(args, ctx) {
-    const { error } = await (ctx.client ?? db()).rpc("save_lead", {
+    const { data, error } = await (ctx.client ?? db()).rpc("save_lead", {
       p_business_id: ctx.businessId,
       p_conversation_id: ctx.conversationId,
       p_channel: ctx.channel,
@@ -228,8 +228,19 @@ const saveLead = defineTool({
       p_interest: args.interest,
     });
     if (error) throw new Error(`save_lead failed: ${error.message}`);
+    // The customer's requests in this conversation follow the new details:
+    // pending ones are updated, confirmed ones get a note for the team.
+    const row = (data ?? {}) as { requests_updated?: number; requests_noted?: number };
     // R1: echo what the customer gave; nothing read back from the leads table.
-    return { output: { ok: true, saved: true, details: { name: args.name, email: args.email, phone: args.phone, interest: args.interest } } };
+    return {
+      output: {
+        ok: true,
+        saved: true,
+        details: { name: args.name, email: args.email, phone: args.phone, interest: args.interest },
+        requests_updated: row.requests_updated ?? 0,
+        requests_noted: row.requests_noted ?? 0,
+      },
+    };
   },
 });
 
