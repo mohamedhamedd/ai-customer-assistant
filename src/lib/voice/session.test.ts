@@ -14,6 +14,16 @@ test("voice uses the shared prompt with the spoken style", () => {
   assert.doesNotMatch(instructions, /# Conversation so far/, "nothing to continue");
 });
 
+test("voice gets the business's tables too, so spoken prices and hours come from them", () => {
+  const tables = {
+    services: [{ name: "In-office teeth whitening", category: "", price: "$349", duration: "", description: "", requestable: true }],
+    week: { hours: [{ day: 1, opens: "08:00", closes: "17:00" }], lastStartBeforeClose: 0, notes: "", closed: [] },
+  };
+  const instructions = voiceInstructions({ ...base, tables });
+  assert.ok(instructions.includes("- In-office teeth whitening (price: $349)"));
+  assert.ok(instructions.includes("- Monday: 8:00 AM to 5:00 PM"));
+});
+
 test("the conversation so far is in the instructions, labelled as a transcript", () => {
   const instructions = voiceInstructions({
     ...base,

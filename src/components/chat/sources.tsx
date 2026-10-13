@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, X } from "lucide-react";
+import { Clock, FileText, Tags, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { uniqueSources, type Source } from "./thread";
@@ -9,9 +9,17 @@ const VISIBLE = 3;
 
 const label = (s: Source) => (s.heading ? `${s.title} › ${s.heading}` : s.title);
 
+// A document section, or the business's services or opening hours table.
+const Icon = ({ source, className }: { source: Source; className: string }) => {
+  const Glyph = source.table === "services" ? Tags : source.table === "hours" ? Clock : FileText;
+  return <Glyph aria-hidden className={className} />;
+};
+const origin = (s: Source, businessName: string) =>
+  s.table === "services" ? `From ${businessName}'s list of services` : s.table === "hours" ? `From ${businessName}'s opening hours` : `From ${businessName}'s documents`;
+
 // Source chips under an answer (US-3.2). A chip opens the passage the answer
-// came from: a popover on desktop, a bottom sheet on mobile (same element,
-// positioned by breakpoint).
+// came from (a document section, or the table rows it quoted): a popover on
+// desktop, a bottom sheet on mobile (same element, positioned by breakpoint).
 export function Sources({ sources, businessName }: { sources: Source[]; businessName: string }) {
   const unique = uniqueSources(sources);
   const [expanded, setExpanded] = useState(false);
@@ -72,7 +80,7 @@ export function Sources({ sources, businessName }: { sources: Source[]; business
                 open === i ? "ring-2 ring-accent ring-offset-1 ring-offset-bg" : ""
               }`}
             >
-              <FileText aria-hidden className="size-3.5 shrink-0 text-info" />
+              <Icon source={s} className="size-3.5 shrink-0 text-info" />
               <span className="truncate">{label(s)}</span>
             </button>
           </li>
@@ -104,7 +112,7 @@ export function Sources({ sources, businessName }: { sources: Source[]; business
             <div aria-hidden className="mx-auto mb-4 h-1 w-10 rounded-full bg-border md:hidden" />
             <div className="flex items-start justify-between gap-2 pb-3">
               <div className="flex min-w-0 items-start gap-2.5">
-                <FileText aria-hidden className="mt-0.5 size-4 shrink-0 text-info" />
+                <Icon source={source} className="mt-0.5 size-4 shrink-0 text-info" />
                 <div className="min-w-0">
                   <h3 id={titleId} className="text-[14px] font-semibold leading-snug break-words">
                     {source.title}
@@ -126,7 +134,7 @@ export function Sources({ sources, businessName }: { sources: Source[]; business
             <div className="py-3.5 text-[14px] leading-[1.6] [overflow-wrap:anywhere]">
               <Markdown text={source.excerpt} />
             </div>
-            <p className="border-t border-border pt-2 text-[12px] text-text-muted">From {businessName}&apos;s documents</p>
+            <p className="border-t border-border pt-2 text-[12px] text-text-muted">{origin(source, businessName)}</p>
           </div>
         </>
       )}
