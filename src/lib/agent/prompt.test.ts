@@ -140,6 +140,15 @@ test("writes are proposed, read back, and repeated after the customer's yes", ()
   assert.match(p, /error: outside_opening_hours means no appointment can start at that time/);
 });
 
+test("saving a contact asks the team for nothing; more about a service is a consultation", () => {
+  const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
+  // Seen live: "the team will get in touch about retainers" after only save_lead, as this rule used to say.
+  assert.doesNotMatch(p, /say they're saved and the team will be in touch/);
+  assert.match(p, /Saving them asks the team for nothing/);
+  assert.match(p, /Never say the team will contact them unless one of those returned ok: true/);
+  assert.match(p, /know more about a service the business offers than you can tell them, offer a consultation request for it/);
+});
+
 test("the assistant stays on the business and keeps conditions in short answers", () => {
   const p = buildSystemPrompt({ business, now, channel: "text", customerFacts: {} });
   assert.match(p, /in scope, even when it sounds general/);

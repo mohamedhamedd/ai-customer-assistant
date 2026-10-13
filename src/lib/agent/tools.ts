@@ -162,7 +162,7 @@ const searchKnowledge = defineTool({
           ok: true,
           found: false,
           message:
-            "Nothing in the business's documents covers this. This means unknown, not no: say you don't have that information and offer to have the team contact the customer.",
+            "Nothing in the business's documents covers this. This means unknown, not no: say you don't have that information. If it is about a service the business offers, offer a consultation request for it; otherwise offer to have the team contact the customer (request_follow_up).",
         },
       };
     }
@@ -240,6 +240,9 @@ const saveLead = defineTool({
         details: { name: args.name, email: args.email, phone: args.phone, interest: args.interest },
         requests_updated: row.requests_updated ?? 0,
         requests_noted: row.requests_noted ?? 0,
+        // Seen live: "the team will get in touch about retainers" after only
+        // this, and nothing for staff to act on.
+        note: "Only the contact details are saved: the team hasn't been asked to do anything. If the customer wants something from the team, make the consultation request or call request_follow_up now.",
       },
     };
   },
