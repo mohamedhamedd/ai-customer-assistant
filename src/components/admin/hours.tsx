@@ -1,7 +1,7 @@
 "use client";
 
 import { Copy, Loader2, Plus, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { DAYS, formatMinutes, LAST_START_CHOICES, MAX_RANGES_PER_DAY, minutes, NOTES_MAX, type HoursRow, type HoursRowError, type Week } from "@/lib/admin/hours-rows";
 import { AdminHeader } from "./header";
 import { useToast } from "./ui";
@@ -15,9 +15,11 @@ const timeInput =
   "h-9 w-[7.5rem] rounded-lg border bg-surface px-2.5 text-[14px] text-text focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent";
 
 // Ranges with a key for React, so editing one doesn't remount the others.
+// The key is also in the inputs' ids, so the first render numbers them from
+// 0 on the server and in the browser alike (a shared counter didn't: React
+// reported a hydration mismatch); later ones count on per page.
 type Keyed = HoursRow & { key: number };
-let nextKey = 0;
-const keyed = (rows: HoursRow[]): Keyed[] => rows.map((r) => ({ ...r, key: nextKey++ }));
+const numbered = (rows: HoursRow[], first: number): Keyed[] => rows.map((r, i) => ({ ...r, key: first + i }));
 const plain = (rows: Keyed[]): HoursRow[] => rows.map(({ day, opens, closes }) => ({ day, opens, closes }));
 const sorted = (rows: HoursRow[]) => [...rows].sort((a, b) => a.day - b.day || minutes(a.opens) - minutes(b.opens));
 
@@ -33,7 +35,13 @@ export function OpeningHours({ slug, timeZone, initial }: { slug: string; timeZo
   const api = `/api/admin/${encodeURIComponent(slug)}/hours`;
   const toast = useToast();
   const [saved, setSaved] = useState(initial);
-  const [rows, setRows] = useState(() => keyed(initial.hours));
+  const [rows, setRows] = useState(() => numbered(initial.hours, 0));
+  const nextKey = useRef(initial.hours.length);
+  const keyed = (rs: HoursRow[]): Keyed[] => {
+    const first = nextKey.current;
+    nextKey.current += rs.length;
+    return numbered(rs, first);
+  };
   const [lastStart, setLastStart] = useState(initial.lastStartBeforeClose);
   const [notes, setNotes] = useState(initial.notes);
   // By key: errors stay on their range while others are added or removed.
